@@ -21,7 +21,7 @@ For `main`, the required core is:
 ```text
 repository: franticplant/tailscale
 branch:     tailmesh-android-base
-commit:     c36d08c12ef5a6eb3c057db203fbc6cee982ed5c
+commit:     aa37e5efa176920cae70892996a7ba616c8f3f90
 base:       25877455e79d9e3ebd5e99200ca86fd62bcc0ed9
 ```
 
