@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Gratefully borrowed from Gio UI https://gioui.org/ under MIT license
+//go:build cgo && android
 
 package libtailscale
 

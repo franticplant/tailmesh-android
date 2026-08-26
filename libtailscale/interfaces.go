@@ -150,6 +150,9 @@ type Application interface {
 	// on every new ipn.Notify message. The returned NotificationManager
 	// allows the watcher to stop watching notifications.
 	WatchNotifications(mask int, cb NotificationCallback) NotificationManager
+
+	// UpdateLocalProxyListener starts or stops the local SOCKS5h/HTTP proxy listener.
+	UpdateLocalProxyListener(enabled bool, addr string)
 }
 
 // FileParts is an array of multiple FileParts.
@@ -235,12 +238,14 @@ type ShareFileHelper interface {
 // The below are global callbacks that allow the Java application to notify Go
 // of various state changes.
 
-func RequestVPN(service IPNService) {
+func RequestVPN(service IPNService) bool {
 	onVPNRequested <- service
+	return <-onVPNRequestedAck
 }
 
 func ServiceDisconnect(service IPNService) {
 	onDisconnect <- service
+	<-onDisconnectAck
 }
 
 func SendLog(logstr []byte) {

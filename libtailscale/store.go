@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"iter"
+	"strings"
 
 	"tailscale.com/ipn"
 )
@@ -18,6 +19,43 @@ type stateStore struct {
 	// appCtx is the global Android app context.
 	appCtx AppContext
 }
+
+// namespacedStateStore gives each embedded tsnet server an isolated view of
+// the encrypted Android state store. It prevents tsnet profile-manager keys
+// from colliding with the regular backend.
+type namespacedStateStore struct {
+	base   *stateStore
+	prefix string
+}
+
+func newNamespacedStateStore(appCtx AppContext, prefix string) *namespacedStateStore {
+	return &namespacedStateStore{base: newStateStore(appCtx), prefix: prefix}
+}
+
+func (s *namespacedStateStore) key(id ipn.StateKey) ipn.StateKey {
+	return ipn.StateKey(s.prefix + "/" + string(id))
+}
+
+func (s *namespacedStateStore) ReadState(id ipn.StateKey) ([]byte, error) {
+	return s.base.ReadState(s.key(id))
+}
+
+func (s *namespacedStateStore) WriteState(id ipn.StateKey, bs []byte) error {
+	return s.base.WriteState(s.key(id), bs)
+}
+
+func (s *namespacedStateStore) All() iter.Seq2[ipn.StateKey, []byte] {
+	return func(yield func(ipn.StateKey, []byte) bool) {
+		for key, value := range s.base.All() {
+			logicalKey, ok := strings.CutPrefix(string(key), s.prefix+"/")
+			if ok && !yield(ipn.StateKey(logicalKey), value) {
+				return
+			}
+		}
+	}
+}
+
+var _ ipn.StateStore = (*namespacedStateStore)(nil)
 
 func newStateStore(appCtx AppContext) *stateStore {
 	return &stateStore{

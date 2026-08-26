@@ -73,7 +73,13 @@ func start(dataDir, directFileRoot string, hwAttestationPref bool, appCtx AppCon
 		}
 	}()
 
+	android.mu.Lock()
+	android.appCtx = appCtx
+	android.mu.Unlock()
+
 	initLogging(appCtx)
+	installAndroidControlProxy(appCtx)
+	installAndroidPublicDoH(appCtx)
 	// Set XDG_CACHE_HOME to make os.UserCacheDir work.
 	if _, exists := os.LookupEnv("XDG_CACHE_HOME"); !exists {
 		cachePath := filepath.Join(dataDir, "cache")
@@ -98,6 +104,7 @@ type backend struct {
 	sys        *tsd.System
 	devices    *multiTUN
 	settings   settingsFunc
+	vpn        *VPNFacade
 	lastCfg    *router.Config
 	lastDNSCfg *dns.OSConfig
 	netMon     *netmon.Monitor
@@ -145,6 +152,7 @@ func (a *App) runBackend(ctx context.Context, hardwareAttestation bool) error {
 	if err != nil {
 		return err
 	}
+	setAndroidDNSBackend(b)
 	a.logIDPublicAtomic.Store(&b.logIDPublic)
 	a.logger.Store(b.logger)
 	a.backend = b.backend
@@ -209,57 +217,44 @@ func (a *App) runBackend(ctx context.Context, hardwareAttestation bool) error {
 			configErrs <- b.updateTUN(cfg.rcfg, cfg.dcfg)
 		case s := <-onVPNRequested:
 			if vpnService.service != nil && vpnService.service.ID() == s.ID() {
-				// Still the same VPN instance, do nothing
+				onVPNRequestedAck <- true
 				break
 			}
-			netns.SetAndroidProtectFunc(func(fd int) error {
-				if !s.Protect(int32(fd)) {
-					// TODO(bradfitz): return an error back up to netns if this fails, once
-					// we've had some experience with this and analyzed the logs over a wide
-					// range of Android phones. For now we're being paranoid and conservative
-					// and do the JNI call to protect best effort, only logging if it fails.
-					// The risk of returning an error is that it breaks users on some Android
-					// versions even when they're not using exit nodes. I'd rather the
-					// relatively few number of exit node users file bug reports if Tailscale
-					// doesn't work and then we can look for this log print.
-					log.Printf("[unexpected] VpnService.protect(%d) returned false", fd)
-				}
-				return nil // even on error. see big TODO above.
-			})
-			netns.SetAndroidBindToNetworkFunc(func(fd int) error {
-				if ok := a.appCtx.BindSocketToNetwork(int32(fd)); !ok {
-					log.Printf("[unexpected] IPNService.bindSocketToNetwork(%d) returned false", fd)
-				}
-				return nil
-			})
+			token := "STANDARD-" + s.ID()
+			if !AcquireAndroidNetworkHooks(token, s, a.appCtx) {
+				log.Printf("STANDARD hook acquisition failed, aborting start")
+				onVPNRequestedAck <- false
+				continue
+			}
 			log.Printf("onVPNRequested: rebind required")
-			// TODO(catzkorn): When we start the android application
-			// we bind sockets before we have access to the VpnService.protect()
-			// function which is needed to avoid routing loops. When we activate
-			// the service we get access to the protect, but do not retrospectively
-			// protect the sockets already opened, which breaks connectivity.
-			// As a temporary fix, we rebind and protect the magicsock.Conn on connect
-			// which restores connectivity.
-			// See https://github.com/tailscale/corp/issues/13814
 			b.backend.DebugRebind()
 
 			vpnService.service = s
 
 			if state >= ipn.Starting && b.isConfigNonNilAndDifferent(cfg.rcfg, cfg.dcfg) {
-				if err := b.updateTUN(cfg.rcfg, cfg.dcfg); err != nil {
+				var err error
+				if forceStandardTUNFailureForTest {
+					err = errors.New("simulated TUN failure")
+				} else {
+					err = b.updateTUN(cfg.rcfg, cfg.dcfg)
+				}
+				if err != nil {
 					a.closeVpnService(err, b)
+					onVPNRequestedAck <- false
+					continue
 				}
 			}
+			onVPNRequestedAck <- true
 		case s := <-onDisconnect:
 			if vpnService.service != nil && vpnService.service.ID() == s.ID() {
 				if b.devices.Down() {
 					log.Printf("tunnel brought down on disconnect")
 				}
 				b.CloseTUNs()
-				netns.SetAndroidProtectFunc(nil)
-				netns.SetAndroidBindToNetworkFunc(nil)
+				ReleaseAndroidNetworkHooks("STANDARD-" + s.ID())
 				vpnService.service = nil
 			}
+			onDisconnectAck <- true
 		case i := <-onDNSConfigChanged:
 			// TODO (barnstar): Consider using [dns.Manager.RecompileDNSConfig] here.
 			// NetworkChanged injects a netmon event that has the side effect
@@ -330,6 +325,7 @@ func (a *App) newBackend(dataDir string, appCtx AppContext, store *stateStore,
 		SetBoth:           b.setCfg,
 		GetBaseConfigFunc: b.getDNSBaseConfig,
 	}
+	b.vpn = vf
 	engine, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
 		Tun:            b.devices,
 		Router:         vf,
@@ -339,6 +335,7 @@ func (a *App) newBackend(dataDir string, appCtx AppContext, store *stateStore,
 		SetSubsystem:   sys.Set,
 		NetMon:         b.netMon,
 		HealthTracker:  sys.HealthTracker.Get(),
+		ControlKnobs:   sys.ControlKnobs(),
 		Metrics:        sys.UserMetricsRegistry(),
 		DriveForLocal:  driveimpl.NewFileSystemForLocal(logf),
 		EventBus:       sys.Bus.Get(),
@@ -422,6 +419,84 @@ func (a *App) closeVpnService(err error, b *backend) {
 	}
 	b.CloseTUNs()
 
-	vpnService.service.DisconnectVPN()
-	vpnService.service = nil
+	hookMu.Lock()
+	if len(hookOwner) > 9 && hookOwner[:9] == "STANDARD-" {
+		hookOwner = ""
+		netns.SetAndroidProtectFunc(nil)
+		netns.SetAndroidBindToNetworkFunc(nil)
+	}
+	hookMu.Unlock()
+
+	if s := vpnService.service; s != nil {
+		s.DisconnectVPN()
+		vpnService.service = nil
+	}
 }
+
+var hookOwner string
+var hookMu sync.Mutex
+
+func AcquireAndroidNetworkHooks(mode string, s IPNService, appCtx AppContext) bool {
+	hookMu.Lock()
+	defer hookMu.Unlock()
+	if hookOwner != "" && hookOwner != mode {
+		return false
+	}
+	hookOwner = mode
+
+	if s != nil {
+		netns.SetAndroidProtectFunc(func(fd int) (retErr error) {
+			defer func() {
+				if r := recover(); r != nil {
+					trace := debug.Stack()
+					if len(trace) > 4096 {
+						trace = trace[:4096]
+					}
+					log.Printf("[unexpected] recovered panic in VpnService.protect(%d): %v\n%s", fd, r, trace)
+					retErr = fmt.Errorf("recovered panic in protect: %v", r)
+				}
+			}()
+			if !s.Protect(int32(fd)) {
+				log.Printf("[unexpected] VpnService.protect(%d) returned false", fd)
+			}
+			return nil
+		})
+	}
+	if appCtx != nil {
+		netns.SetAndroidBindToNetworkFunc(func(fd int) (retErr error) {
+			defer func() {
+				if r := recover(); r != nil {
+					trace := debug.Stack()
+					if len(trace) > 4096 {
+						trace = trace[:4096]
+					}
+					log.Printf("[unexpected] recovered panic in BindSocketToNetwork(%d): %v\n%s", fd, r, trace)
+					retErr = fmt.Errorf("recovered panic in bind: %v", r)
+				}
+			}()
+			if ok := appCtx.BindSocketToNetwork(int32(fd)); !ok {
+				log.Printf("[unexpected] BindSocketToNetwork(%d) returned false", fd)
+			}
+			return nil
+		})
+	}
+	return true
+}
+
+func ReleaseAndroidNetworkHooks(mode string) {
+	hookMu.Lock()
+	defer hookMu.Unlock()
+	if hookOwner == mode {
+		netns.SetAndroidProtectFunc(nil)
+		netns.SetAndroidBindToNetworkFunc(nil)
+		hookOwner = ""
+	}
+}
+
+// ForceStandardTUNFailureForTest allows tests to simulate a TUN creation failure
+// after hooks have been acquired.
+func ForceStandardTUNFailureForTest(fail bool) {
+	forceStandardTUNFailureForTest = fail
+}
+
+var forceStandardTUNFailureForTest bool
