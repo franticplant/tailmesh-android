@@ -57,3 +57,5 @@ tailscale.version
 
 # local tmp folder
 .tmp/
+multi-proxy-backend/state-tailnet-*/
+multi-proxy-backend/multiproxy

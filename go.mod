@@ -3,8 +3,10 @@ module github.com/tailscale/tailscale-android
 go 1.26.5
 
 require (
-	github.com/tailscale/wireguard-go v0.0.0-20260730222847-4affce44577c
+	github.com/miekg/dns v1.1.58
+	github.com/tailscale/wireguard-go v0.0.0-20260813211458-aa425f19bcbf
 	golang.org/x/mobile v0.0.0-20240806205939-81131f6468ab
+	gvisor.dev/gvisor v0.0.0-20260224225140-573d5e7127a8
 	tailscale.com v1.103.0-pre.0.20260810100007-25877455e79d
 )
 
@@ -59,7 +61,7 @@ require (
 	github.com/mdlayher/genetlink v1.3.2 // indirect
 	github.com/mdlayher/netlink v1.7.3-0.20250113171957-fbb4dce95f42 // indirect
 	github.com/mdlayher/sdnotify v1.0.0 // indirect
-	github.com/mdlayher/socket v0.5.0 // indirect
+	github.com/mdlayher/socket v0.5.1 // indirect
 	github.com/mitchellh/go-ps v1.0.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.26 // indirect
 	github.com/pires/go-proxyproto v0.8.1 // indirect
@@ -89,5 +91,6 @@ require (
 	golang.org/x/tools v0.47.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	golang.zx2c4.com/wireguard/windows v0.5.3 // indirect
-	gvisor.dev/gvisor v0.0.0-20260224225140-573d5e7127a8 // indirect
 )
+
+replace tailscale.com => ../tailscale

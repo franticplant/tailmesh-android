@@ -10,14 +10,52 @@ fi
 
 tsandroid=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )/.." &> /dev/null && pwd )
 
-# Allow TOOLCHAINDIR to be overridden, as a special case for the fdroid build
-if [[ -z "${TOOLCHAINDIR}" ]]; then
+# This fork intentionally replaces tailscale.com with the sibling ../tailscale
+# working tree. That patched core and this Android wrapper MUST use the same
+# tailscale/go revision. A mismatch still compiles, but tailscale.com's
+# tailscale_go startup assertion will intentionally panic as soon as libgojni.so
+# is loaded on Android. Fail at build time instead of producing such an APK.
+android_toolchain_rev="$(tr -d '[:space:]' < "${tsandroid}/go.toolchain.rev")"
+core_toolchain_file="${tsandroid}/../tailscale/go.toolchain.rev"
+if [[ ! -f "${core_toolchain_file}" ]]; then
+    echo "ERROR: patched Tailscale core is missing at ${tsandroid}/../tailscale." >&2
+    echo "This fork's go.mod intentionally contains: replace tailscale.com => ../tailscale" >&2
+    exit 1
+fi
+
+core_toolchain_rev="$(tr -d '[:space:]' < "${core_toolchain_file}")"
+if [[ "${android_toolchain_rev}" != "${core_toolchain_rev}" ]]; then
+    echo "ERROR: tailscale-android and patched ../tailscale use different Tailscale Go toolchains." >&2
+    echo "  android: ${android_toolchain_rev}" >&2
+    echo "  core:    ${core_toolchain_rev}" >&2
+    echo "Sync go.toolchain.rev before building; refusing to create a runtime-crashing APK." >&2
+    exit 1
+fi
+
+# Do not inherit an unrelated parent go.work. The explicit go.mod replacement
+# remains authoritative for the patched sibling core.
+export GOWORK=off
+
+# An inherited TOOLCHAINDIR is particularly dangerous for this fork. It bypasses
+# the revision selected above and was able to produce an APK that compiled and
+# tested successfully but immediately panicked on Android because libgojni.so
+# had been built by an older Tailscale Go compiler. Normal Tailmesh builds must
+# therefore use the revision-pinned cache below. F-Droid or other deliberate
+# external-toolchain builds must opt in explicitly.
+if [[ -n "${TOOLCHAINDIR:-}" && "${TS_ANDROID_ALLOW_EXTERNAL_TOOLCHAIN:-}" != "1" ]]; then
+    echo "ERROR: TOOLCHAINDIR is set to '${TOOLCHAINDIR}', which would bypass Tailmesh's pinned Tailscale Go toolchain." >&2
+    echo "Unset TOOLCHAINDIR for normal builds." >&2
+    echo "Only intentional external-toolchain builds may set TS_ANDROID_ALLOW_EXTERNAL_TOOLCHAIN=1." >&2
+    exit 1
+fi
+
+if [[ -z "${TOOLCHAINDIR:-}" ]]; then
     toolchain="$HOME/.cache/tailscale-go"
 
     if [[ -d "$toolchain" ]]; then
         # A toolchain exists, but is it recent enough to compile gocross? If not,
         # wipe it out so that the next if block fetches a usable one.
-        want_go_minor=$(grep -E '^go ' "go.mod" | cut -f2 -d'.')
+        want_go_minor=$(grep -E '^go ' "${tsandroid}/go.mod" | cut -f2 -d'.')
         have_go_minor=""
         if [[ -f "$toolchain/VERSION" ]]; then
             have_go_minor=$(head -1 "$toolchain/VERSION" | cut -f2 -d'.')
@@ -32,9 +70,9 @@ if [[ -z "${TOOLCHAINDIR}" ]]; then
         fi
     fi
 
-    REV="$(<${tsandroid}/go.toolchain.rev)"
+    REV="${android_toolchain_rev}"
     EREV=""
-    [[ -f ${toolchain}.extracted ]] && EREV="$(<${toolchain}.extracted)"
+    [[ -f ${toolchain}.extracted ]] && EREV="$(tr -d '[:space:]' < "${toolchain}.extracted")"
 
     if [[ ! -d "$toolchain" || "$EREV" != "$REV" ]]; then
         mkdir -p "$HOME/.cache"
@@ -52,7 +90,6 @@ if [[ -z "${TOOLCHAINDIR}" ]]; then
                 # Go uses the name "arm64".
                 HOST_ARCH="arm64"
             elif [[ "$HOST_ARCH" == "x86_64" ]]; then
-                # Go uses the name "amd64".
                 HOST_ARCH="amd64"
             fi
 
@@ -66,7 +103,8 @@ if [[ -z "${TOOLCHAINDIR}" ]]; then
         esac
     fi
 else
-    # fdroid supplies its own toolchain, rather than using ours.
+    # Deliberate external toolchain (for example F-Droid). The caller has opted
+    # in explicitly via TS_ANDROID_ALLOW_EXTERNAL_TOOLCHAIN=1.
     toolchain="${TOOLCHAINDIR}"
 fi
 

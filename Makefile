@@ -141,7 +141,7 @@ export GOROOT := # Unset
 
 
 .PHONY: debug-unstripped
-debug-unstripped: build-unstripped-aar
+debug-unstripped: $(ABS_UNSTRIPPED_AAR)
 	@echo "Listing contents of $(ABS_UNSTRIPPED_AAR):"
 	unzip -l $(ABS_UNSTRIPPED_AAR)
 
@@ -151,7 +151,7 @@ apk: $(DEBUG_APK)
 .PHONY: tailscale-debug
 tailscale-debug: $(DEBUG_APK)
 
-$(DEBUG_APK): libtailscale debug-symbols version gradle-dependencies build-unstripped-aar
+$(DEBUG_APK): libtailscale debug-symbols version gradle-dependencies $(ABS_UNSTRIPPED_AAR)
 	(cd android && ./gradlew test assembleDebug)
 	install -C android/build/outputs/apk/debug/android-debug.apk $@
 
@@ -215,8 +215,20 @@ $(GOBIN)/gomobile: $(GOBIN)/gobind go.mod go.sum go.toolchain.rev | $(GOBIN)
 $(GOBIN)/gobind: go.mod go.sum go.toolchain.rev
 	./tool/go install golang.org/x/mobile/cmd/gobind
 
-.PHONY: build-unstripped-aar
-build-unstripped-aar: tailscale.version $(GOBIN)/gomobile
+
+# gomobile bind has no visibility into which Go source files it actually
+# read, so Make can't know the AAR is stale from mtimes of the gomobile
+# binary or tailscale.version alone. Without this, editing libtailscale
+# source and re-running `make tailscale-debug.apk` silently reuses the
+# previously-built AAR (and thus SO) unless the AAR happens to already be
+# missing or older than one of its two original prerequisites - go run
+# and gradle build steps proceed against stale native code with no error.
+# This was discovered as a real incident during device-crash debugging:
+# several rebuild/reinstall/retest cycles ran with zero effect because
+# every one of them hit this UP-TO-DATE shortcut and reused old code.
+LIBTAILSCALE_GO_SRCS := $(shell find libtailscale -name '*.go')
+
+$(ABS_UNSTRIPPED_AAR): tailscale.version $(GOBIN)/gomobile $(LIBTAILSCALE_GO_SRCS)
 	@echo "Running gomobile bind to generate unstripped AAR..."
 	@echo "Output file: $(ABS_UNSTRIPPED_AAR)"
 	mkdir -p $(dir $(ABS_UNSTRIPPED_AAR))
@@ -232,9 +244,13 @@ build-unstripped-aar: tailscale.version $(GOBIN)/gomobile
 	fi
 	@echo "Generated unstripped AAR: $(ABS_UNSTRIPPED_AAR)"
 
-$(UNSTRIPPED_AAR): build-unstripped-aar
 
-libgojni.so.unstripped: $(UNSTRIPPED_AAR)
+
+build-unstripped-aar: $(ABS_UNSTRIPPED_AAR)
+
+$(UNSTRIPPED_AAR): $(ABS_UNSTRIPPED_AAR)
+
+libgojni.so.unstripped: $(ABS_UNSTRIPPED_AAR)
 	@echo "Extracting libgojni.so from unstripped AAR..."
 	@if unzip -p $(ABS_UNSTRIPPED_AAR) jni/arm64-v8a/libgojni.so > libgojni.so.unstripped; then \
 	    echo "Found arm64-v8a libgojni.so"; \
