@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="public_doh">Public DNS over HTTPS</string>
+    <string name="public_doh_resolver">Public DoH resolver</string>
+    <string name="public_doh_override_exit_node">Override exit-node DNS</string>
+    <string name="public_doh_override_exit_node_subtitle">Use the selected DoH resolver for public DNS even when an exit node is active. MagicDNS and split DNS remain controlled by Tailscale.</string>
+    <string name="public_doh_route_through_tailscale">Route DoH through Tailscale</string>
+    <string name="public_doh_route_through_tailscale_subtitle">Dial the selected DoH resolver using Tailscale route-aware dialing, so the DoH connection can follow an active exit node when routes allow it.</string>
+    <string name="tailnet_default">Tailnet default</string>
+    <string name="public_doh_off_subtitle">Use the DNS resolvers from Tailscale policy, exit-node DNS, or the underlying system configuration.</string>
+    <string name="public_doh_custom">Custom</string>
+    <string name="public_doh_custom_url_hint">https://resolver.example/dns-query</string>
+    <string name="public_doh_custom_subtitle">A custom endpoint is honored in full by Multi-Tailnet mode. In Standard mode, only known providers from the list above are accepted, since Tailscale needs to reach the resolver without first depending on DNS to do so.</string>
+    <string name="use">Use</string>
+</resources>

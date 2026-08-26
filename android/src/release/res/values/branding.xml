@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name" translatable="false">Tailmesh</string>
+    <string name="tile_name" translatable="false">Tailmesh</string>
+    <string name="about_view_header">About Tailmesh</string>
+    <string name="about_view_title">Tailmesh for Android</string>
+    <string name="about_tailscale">About Tailmesh</string>
+    <string name="welcome_to_tailscale">Welcome to Tailmesh</string>
+    <string name="give_permissions">Set up a VPN connection so you can start using Tailmesh.</string>
+    <string name="about_view_footnotes">Tailmesh is an independent project derived from the open-source Tailscale client and is not affiliated with or endorsed by Tailscale Inc.\n\nTailscale is a trademark of Tailscale Inc.\nWireGuard is a registered trademark of Jason A. Donenfeld.</string>
+    <string name="bug_report_title">Report a Tailmesh bug</string>
+    <string name="bug_report_instructions_prefix">To report a Tailmesh bug,&#160;</string>
+    <string name="bug_report_instructions_linktext">open the project issue tracker&#160;</string>
+    <string name="bug_report_instructions_suffix"> and include the identifier below.</string>
+    <string name="body_open_tailscale">Tap here to open Tailmesh.</string>
+    <string name="title_connection_failed">Tailmesh Connection Failed</string>
+    <string name="tailscale_is_operating_normally">Tailmesh is operating normally.</string>
+    <string name="multiple_vpn_explainer">Before starting Tailmesh, stop any other VPN app currently running on this device.</string>
+    <string name="welcome1">Tailmesh is an independent Android client built on the open-source Tailscale client. It adds a multi-Tailnet proxy mode while retaining compatibility with Tailscale-style Tailnets.</string>
+    <string name="welcome2">When Tailmesh is used with Tailscale\'s hosted service, account and coordination data is handled under Tailscale\'s applicable policies. Tailmesh also stores app and profile state locally. Review the selected service\'s terms and privacy policy before signing in.</string>
+    <string name="request_deletion_nonowner">If this profile uses Tailscale\'s hosted service, account and tailnet deletion requests are handled by Tailscale Support. Use the Contact Tailscale Support button below for hosted-service account requests.</string>
+    <string name="request_deletion_owner_part1">If this profile uses Tailscale\'s hosted service, tailnet owners can reassign ownership or delete the tailnet from the Tailscale admin console. To delete it, go to</string>
+    <string name="request_deletion_owner_part2a">and look for “Delete tailnet”.</string>
+    <string name="request_deletion_owner_part2b">Hosted-service account and tailnet deletion requests are handled by Tailscale Support. Use the button below for those service-specific requests.</string>
+    <string name="contact_support">Contact Tailscale Support</string>
+</resources>

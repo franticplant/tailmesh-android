@@ -37,6 +37,7 @@ android {
     ndkVersion "23.1.7779620"
     compileSdkVersion androidApiLevel
     defaultConfig {
+        applicationId "com.tailscale.ipn.multiproxy"
         minSdkVersion 26
         targetSdkVersion androidApiLevel
 
@@ -57,6 +58,15 @@ android {
         // Set it to false either here or in your local.properties file to
         // disable this behaviour.
         buildConfigField "boolean", "USE_GOOGLE_DNS_FALLBACK", getLocalProperty("tailscale.useGoogleDnsFallback", "true")
+
+        // Opt-in single-ABI filter for local test builds only (e.g. `-PtestAbi=x86_64`
+        // to build/install fast against an x86_64 emulator instead of shipping all
+        // four ABIs' native libs). Unset by default so normal builds are unaffected.
+        if (project.hasProperty("testAbi")) {
+            ndk {
+                abiFilters project.property("testAbi")
+            }
+        }
     }
 
     compileOptions {

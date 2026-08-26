@@ -12,6 +12,7 @@ import android.webkit.MimeTypeMap
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Column
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -65,8 +66,12 @@ class ShareActivity : ComponentActivity() {
                       },
                   )
                 }) { innerPadding ->
-                  Surface(modifier = Modifier.padding(innerPadding)) {
-                    TaildropView(requestedTransfers, (application as App).applicationScope)
+                  Column(modifier = Modifier.padding(innerPadding)) {
+                    TaildropView(
+                        requestedTransfers = requestedTransfers,
+                        applicationScope = lifecycleScope,
+                        autoSendToNodeId = intent?.getStringExtra("destNodeId")
+                    )
                   }
                 }
           }

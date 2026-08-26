@@ -263,6 +263,8 @@
     <string name="taildrop_share_failed">Taildrop failed. Some files were not shared. Please try again.</string>
     <string name="taildrop_sending">Sending</string>
     <string name="taildrop_share_failed_short">Failed</string>
+    <string name="taildrop_send_file">Send File</string>
+    <string name="taildrop_send_file_desc">Send files to this device via Taildrop</string>
 
 
     <!-- Error Dialog Titles -->

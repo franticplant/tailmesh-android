@@ -10,6 +10,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.tailscale.ipn.App
+import com.tailscale.ipn.MultiProxySessionCoordinator
 import com.tailscale.ipn.R
 import com.tailscale.ipn.ui.localapi.Client
 import com.tailscale.ipn.ui.model.Ipn
@@ -24,6 +26,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import libtailscale.Libtailscale
 
 class DNSSettingsViewModelFactory : ViewModelProvider.Factory {
   @Suppress("UNCHECKED_CAST")
@@ -33,11 +36,27 @@ class DNSSettingsViewModelFactory : ViewModelProvider.Factory {
 }
 
 class DNSSettingsViewModel : IpnViewModel() {
+  companion object {
+    const val PUBLIC_DOH_URL_KEY = "publicDoHURL"
+    const val PUBLIC_DOH_OVERRIDE_EXIT_NODE_KEY = "publicDoHOverrideExitNode"
+    const val PUBLIC_DOH_ROUTE_THROUGH_TAILSCALE_KEY = "publicDoHRouteThroughTailscale"
+  }
+
   val enablementState: StateFlow<DNSEnablementState> =
       MutableStateFlow(DNSEnablementState.NOT_RUNNING)
   val dnsConfig: StateFlow<Tailcfg.DNSConfig?> = MutableStateFlow(null)
+  val publicDoHURL: StateFlow<String> = MutableStateFlow("")
+  val publicDoHOverrideExitNode: StateFlow<Boolean> = MutableStateFlow(true)
+  val publicDoHRouteThroughTailscale: StateFlow<Boolean> = MutableStateFlow(false)
 
   init {
+    publicDoHURL.set(App.get().decryptFromPref(PUBLIC_DOH_URL_KEY) ?: "")
+    publicDoHOverrideExitNode.set(
+        App.get().decryptFromPref(PUBLIC_DOH_OVERRIDE_EXIT_NODE_KEY)?.toBooleanStrictOrNull() ?: true)
+    publicDoHRouteThroughTailscale.set(
+        App.get().decryptFromPref(PUBLIC_DOH_ROUTE_THROUGH_TAILSCALE_KEY)?.toBooleanStrictOrNull()
+            ?: false)
+
     viewModelScope.launch {
       Notifier.netmap
           .combine(Notifier.prefs) { netmap, prefs -> Pair(netmap, prefs) }
@@ -67,6 +86,34 @@ class DNSSettingsViewModel : IpnViewModel() {
     val prefsOut = Ipn.MaskedPrefs()
     prefsOut.CorpDNS = !prefs.CorpDNS
     Client(viewModelScope).editPrefs(prefsOut, callback)
+  }
+
+  fun updatePublicDoHURL(url: String) {
+    App.get().encryptToPref(PUBLIC_DOH_URL_KEY, url)
+    publicDoHURL.set(url)
+    applyPublicDoHSettings()
+  }
+
+  fun togglePublicDoHOverrideExitNode() {
+    val next = !publicDoHOverrideExitNode.value
+    App.get().encryptToPref(PUBLIC_DOH_OVERRIDE_EXIT_NODE_KEY, next.toString())
+    publicDoHOverrideExitNode.set(next)
+    applyPublicDoHSettings()
+  }
+
+  fun togglePublicDoHRouteThroughTailscale() {
+    val next = !publicDoHRouteThroughTailscale.value
+    App.get().encryptToPref(PUBLIC_DOH_ROUTE_THROUGH_TAILSCALE_KEY, next.toString())
+    publicDoHRouteThroughTailscale.set(next)
+    applyPublicDoHSettings()
+  }
+
+  private fun applyPublicDoHSettings() {
+    // Standard mode: reads these same prefs via the regular backend's DNS
+    // manager (control_doh.go). Multi-Tailnet mode has its own from-scratch
+    // DNS server with no link to that backend, so it needs its own push.
+    Libtailscale.applyDNSSettings()
+    MultiProxySessionCoordinator.refreshUpstreamDNS()
   }
 }
 

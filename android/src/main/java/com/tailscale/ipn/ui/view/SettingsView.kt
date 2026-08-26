@@ -7,10 +7,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -26,6 +28,7 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
@@ -64,7 +67,13 @@ fun SettingsView(
   val showTailnetLock by MDMSettings.manageTailnetLock.flow.collectAsState()
   val useTailscaleSubnets by MDMSettings.useTailscaleSubnets.flow.collectAsState()
   val isClientRemoteLoggingEnabled by viewModel.isClientRemoteLoggingEnabled.collectAsState()
+  val controlProxyURL by viewModel.controlProxyURL.collectAsState()
+  val debugHTTPProxyLogging by viewModel.debugHTTPProxyLogging.collectAsState()
+  val debugDNSConfigLogging by viewModel.debugDNSConfigLogging.collectAsState()
+  val debugDNSQueryLogging by viewModel.debugDNSQueryLogging.collectAsState()
   var showDisableLoggingDialog by remember { mutableStateOf(false) }
+  var showControlProxyDialog by remember { mutableStateOf(false) }
+  var controlProxyDraft by remember(controlProxyURL) { mutableStateOf(controlProxyURL) }
 
   Scaffold(
       topBar = {
@@ -92,6 +101,86 @@ fun SettingsView(
                         if (it) R.string.using_tailscale_dns else R.string.not_using_tailscale_dns)
                   },
               onClick = settingsNav.onNavigateToDNSSettings)
+
+          Lists.ItemDivider()
+          Setting.Text(
+              title = "Network Diagnostics",
+              subtitle = "Live NAT type, DERP latency, and firewall health",
+              onClick = settingsNav.onNavigateToNetcheck)
+
+          Lists.ItemDivider()
+          Setting.Text(
+              title = "Upstreams (Experimental)",
+              subtitle = "Choose one Standard upstream or enable multiple proxy upstreams",
+              onClick = settingsNav.onNavigateToMultiProxy)
+
+          Lists.ItemDivider()
+          Setting.Switch(
+              title = "Proxy-Only Mode (No VPN)",
+              subtitle = "Connect to Tailnet without intercepting device traffic",
+              isOn = viewModel.userspaceOnlyMode.collectAsState().value,
+              onToggle = { viewModel.toggleUserspaceOnlyMode() })
+
+          Lists.ItemDivider()
+          Setting.Switch(
+              title = "Local Proxy Listener",
+              subtitle = "Serve a SOCKS5/HTTP proxy locally",
+              isOn = viewModel.localProxyEnabled.collectAsState().value,
+              onToggle = { viewModel.toggleLocalProxyListener() })
+
+          if (viewModel.localProxyEnabled.collectAsState().value) {
+            Lists.ItemDivider()
+            var localProxyDraft by remember { mutableStateOf<String>(viewModel.localProxyAddress.value) }
+            var showLocalProxyDialog by remember { mutableStateOf(false) }
+
+            Setting.Text(
+                title = "Local Proxy Address",
+                subtitle = viewModel.localProxyAddress.collectAsState().value,
+                onClick = {
+                    localProxyDraft = viewModel.localProxyAddress.value
+                    showLocalProxyDialog = true
+                })
+
+            if (showLocalProxyDialog) {
+                AlertDialog(
+                    onDismissRequest = { showLocalProxyDialog = false },
+                    title = { Text("Local Proxy Address") },
+                    text = {
+                        Column {
+                            Text("Configure the address and port where the proxy listens (e.g. 127.0.0.1:1055)")
+                            OutlinedTextField(
+                                value = localProxyDraft,
+                                onValueChange = { localProxyDraft = it },
+                                label = { Text("Address") },
+                                singleLine = true
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            viewModel.updateLocalProxyAddress(localProxyDraft)
+                            showLocalProxyDialog = false
+                        }) { Text(stringResource(R.string.save)) }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showLocalProxyDialog = false }) {
+                            Text(stringResource(R.string.cancel))
+                        }
+                    }
+                )
+            }
+          }
+
+          Lists.ItemDivider()
+          Setting.Text(
+              R.string.control_proxy,
+              subtitle =
+                  if (controlProxyURL.isBlank()) stringResource(R.string.disabled)
+                  else controlProxyURL,
+              onClick = {
+                controlProxyDraft = controlProxyURL
+                showControlProxyDialog = true
+              })
 
           Lists.ItemDivider()
           Setting.Text(
@@ -132,6 +221,27 @@ fun SettingsView(
                 }
               })
 
+          Lists.ItemDivider()
+          Setting.Switch(
+              R.string.debug_http_proxy_logging,
+              subtitle = stringResource(R.string.debug_http_proxy_logging_subtitle),
+              isOn = debugHTTPProxyLogging,
+              onToggle = { viewModel.toggleDebugHTTPProxyLogging() })
+
+          Lists.ItemDivider()
+          Setting.Switch(
+              R.string.debug_dns_config_logging,
+              subtitle = stringResource(R.string.debug_dns_config_logging_subtitle),
+              isOn = debugDNSConfigLogging,
+              onToggle = { viewModel.toggleDebugDNSConfigLogging() })
+
+          Lists.ItemDivider()
+          Setting.Switch(
+              R.string.debug_dns_query_logging,
+              subtitle = stringResource(R.string.debug_dns_query_logging_subtitle),
+              isOn = debugDNSQueryLogging,
+              onToggle = { viewModel.toggleDebugDNSQueryLogging() })
+
           if (!AndroidTVUtil.isAndroidTV()) {
             Lists.ItemDivider()
             Setting.Text(R.string.permissions, onClick = settingsNav.onNavigateToPermissions)
@@ -161,6 +271,38 @@ fun SettingsView(
           }
         }
       }
+
+  if (showControlProxyDialog) {
+    AlertDialog(
+        onDismissRequest = { showControlProxyDialog = false },
+        title = { Text(stringResource(R.string.control_proxy)) },
+        text = {
+          Column {
+            Text(stringResource(R.string.control_proxy_explainer))
+            OutlinedTextField(
+                value = controlProxyDraft,
+                onValueChange = { controlProxyDraft = it },
+                label = { Text(stringResource(R.string.control_proxy_url)) },
+                placeholder = { Text(stringResource(R.string.control_proxy_placeholder)) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
+          }
+        },
+        confirmButton = {
+          TextButton(
+              onClick = {
+                viewModel.updateControlProxyURL(controlProxyDraft)
+                showControlProxyDialog = false
+              }) {
+                Text(stringResource(R.string.save))
+              }
+        },
+        dismissButton = {
+          TextButton(onClick = { showControlProxyDialog = false }) {
+            Text(stringResource(R.string.cancel))
+          }
+        })
+  }
 
   if (showDisableLoggingDialog) {
     AlertDialog(
@@ -278,5 +420,5 @@ fun SettingsPreview() {
   vm.tailNetLockEnabled.set(true)
   vm.isAdmin.set(true)
   vm.managedByOrganization.set("Tails and Scales Inc.")
-  SettingsView(SettingsNav({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}), vm)
+  SettingsView(SettingsNav({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}), vm)
 }

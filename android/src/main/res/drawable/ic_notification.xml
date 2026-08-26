@@ -1,38 +1,16 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="100dp"
-    android:height="100dp"
-    android:viewportWidth="100"
-    android:viewportHeight="100">
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
   <path
-      android:pathData="M0,12.5a12.5,12.5 0,1 0,25 0a12.5,12.5 0,1 0,-25 0z"
-      android:fillColor="#000000"
-      android:fillAlpha="0.4"/>
+      android:pathData="M6,6 L18,6 M6,6 L12,12 M18,6 L12,12 M6,18 L12,12 M18,18 L12,12 M6,18 L18,18"
+      android:fillColor="@android:color/transparent"
+      android:strokeColor="#FFFFFFFF"
+      android:strokeWidth="1.6"
+      android:strokeLineCap="round"
+      android:strokeLineJoin="round"/>
   <path
-      android:pathData="M37.5,12.5a12.5,12.5 0,1 0,25 0a12.5,12.5 0,1 0,-25 0z"
-      android:fillColor="#000000"
-      android:fillAlpha="0.4"/>
-  <path
-      android:pathData="M75,12.5a12.5,12.5 0,1 0,25 0a12.5,12.5 0,1 0,-25 0z"
-      android:fillColor="#000000"
-      android:fillAlpha="0.4"/>
-  <path
-      android:pathData="M-0,50a12.5,12.5 0,1 0,25 0a12.5,12.5 0,1 0,-25 0z"
-      android:fillColor="#000000"/>
-  <path
-      android:pathData="M37.5,50a12.5,12.5 0,1 0,25 0a12.5,12.5 0,1 0,-25 0z"
-      android:fillColor="#000000"/>
-  <path
-      android:pathData="M75,50a12.5,12.5 0,1 0,25 0a12.5,12.5 0,1 0,-25 0z"
-      android:fillColor="#000000"/>
-  <path
-      android:pathData="M-0,87.5a12.5,12.5 0,1 0,25 0a12.5,12.5 0,1 0,-25 0z"
-      android:fillColor="#000000"
-      android:fillAlpha="0.4"/>
-  <path
-      android:pathData="M37.5,87.5a12.5,12.5 0,1 0,25 0a12.5,12.5 0,1 0,-25 0z"
-      android:fillColor="#000000"/>
-  <path
-      android:pathData="M75,87.5a12.5,12.5 0,1 0,25 0a12.5,12.5 0,1 0,-25 0z"
-      android:fillColor="#000000"
-      android:fillAlpha="0.4"/>
+      android:pathData="M4.5,6a1.5,1.5 0,1 0,3 0a1.5,1.5 0,1 0,-3 0z M16.5,6a1.5,1.5 0,1 0,3 0a1.5,1.5 0,1 0,-3 0z M10,12a2,2 0,1 0,4 0a2,2 0,1 0,-4 0z M4.5,18a1.5,1.5 0,1 0,3 0a1.5,1.5 0,1 0,-3 0z M16.5,18a1.5,1.5 0,1 0,3 0a1.5,1.5 0,1 0,-3 0z"
+      android:fillColor="#FFFFFFFF"/>
 </vector>

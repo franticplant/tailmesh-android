@@ -59,6 +59,7 @@ import kotlinx.serialization.json.Json
 import libtailscale.Libtailscale
 
 class App : UninitializedApp(), libtailscale.AppContext, ViewModelStoreOwner {
+  val multiProxySession by lazy { MultiProxySession(this) }
   val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
   companion object {
@@ -103,6 +104,10 @@ class App : UninitializedApp(), libtailscale.AppContext, ViewModelStoreOwner {
       initOnce() // Calls the synchronized initialization logic
     }
     return app
+  }
+
+  fun updateLocalProxyListener(enabled: Boolean, addr: String) {
+    app.updateLocalProxyListener(enabled, addr)
   }
 
   override fun onCreate() {
@@ -221,6 +226,10 @@ class App : UninitializedApp(), libtailscale.AppContext, ViewModelStoreOwner {
     Request.setApp(app)
     Notifier.setApp(app)
     Notifier.start(applicationScope)
+
+    val localProxyEnabled = (decryptFromPref("localProxyEnabled") ?: "false").toBoolean()
+    val localProxyAddress = decryptFromPref("localProxyAddress") ?: "127.0.0.1:1055"
+    app.updateLocalProxyListener(localProxyEnabled, localProxyAddress)
   }
 
   private fun initViewModels() {
@@ -603,6 +612,22 @@ open class UninitializedApp : Application() {
     }
   }
 
+  fun startUserspaceOnly() {
+    val intent =
+        Intent(this, IPNService::class.java).apply {
+          action = IPNService.ACTION_START_FOREGROUND_ONLY
+        }
+    val pendingIntent =
+        PendingIntent.getForegroundService(
+            this, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    try {
+      pendingIntent.send()
+      App.get().setWantRunning(true)
+    } catch (e: Exception) {
+      TSLog.e(TAG, "startUserspaceOnly hit exception: $e")
+    }
+  }
+
   fun stopVPN() {
     val intent = Intent(this, IPNService::class.java).apply { action = IPNService.ACTION_STOP_VPN }
     try {
@@ -625,6 +650,7 @@ open class UninitializedApp : Application() {
       TSLog.e(TAG, "restartVPN hit exception in startService(): $e")
     }
   }
+
 
   fun createNotificationChannel(id: String, name: String, description: String, importance: Int) {
     val channel = NotificationChannel(id, name, importance)

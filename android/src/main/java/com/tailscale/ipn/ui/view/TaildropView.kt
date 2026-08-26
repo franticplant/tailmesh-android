@@ -48,6 +48,7 @@ fun TaildropView(
     applicationScope: CoroutineScope,
     viewModel: TaildropViewModel =
         viewModel(factory = TaildropViewModelFactory(requestedTransfers, applicationScope)),
+    autoSendToNodeId: String? = null
 ) {
   val TAG = "TaildropView"
   val focusRequester = remember { FocusRequester() }
@@ -58,6 +59,18 @@ fun TaildropView(
       focusRequester.requestFocus()
     } catch (e: Exception) {
       TSLog.w(TAG, "Focus request failed: ${e.message}")
+    }
+  }
+
+  val myPeers by viewModel.myPeers.collectAsState()
+  val context = LocalContext.current
+  LaunchedEffect(myPeers, autoSendToNodeId) {
+    if (autoSendToNodeId != null && myPeers.isNotEmpty()) {
+      val targetNode = myPeers.find { it.StableID == autoSendToNodeId }
+      if (targetNode != null) {
+        TSLog.d(TAG, "Auto-sending to node ${targetNode.Name}")
+        viewModel.share(context, targetNode)
+      }
     }
   }
 

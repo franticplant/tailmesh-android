@@ -310,6 +310,8 @@ class MainActivity : ComponentActivity() {
                           onNavigateToManagedBy = { navController.navigate("managedBy") },
                           onNavigateToUserSwitcher = { navController.navigate("userSwitcher") },
                           onNavigateToPermissions = { navController.navigate("permissions") },
+                          onNavigateToNetcheck = { navController.navigate("netcheck") },
+                          onNavigateToMultiProxy = { navController.navigate("multiProxy") },
                           onBackToSettings = backTo("settings"),
                           onNavigateBackHome = backTo("main"))
                   val exitNodePickerNav =
@@ -372,6 +374,17 @@ class MainActivity : ComponentActivity() {
                       }
                   composable("bugReport") { BugReportView(backTo("settings")) }
                   composable("dnsSettings") { DNSSettingsView(backTo("settings")) }
+                  composable("netcheck") { com.tailscale.ipn.ui.view.NetcheckView(onBack = backTo("settings")) }
+                  composable("multiProxy") { 
+                    val mpViewModel = androidx.lifecycle.viewmodel.compose.viewModel<com.tailscale.ipn.ui.viewModel.MultiProxyViewModel>()
+                    mpViewModel.setSession(com.tailscale.ipn.App.get().multiProxySession)
+                    com.tailscale.ipn.ui.view.MultiProxyView(
+                        mpViewModel,
+                        onNavigateBack = backTo("settings"),
+                        onAddAccount = { navController.navigate("userSwitcher") },
+                        onAddAuthKey = { navController.navigate("loginWithAuthKey") },
+                    )
+                  }
                   composable("splitTunneling") { SplitTunnelAppPickerView(backTo("settings")) }
                   composable("tailnetLock") { TailnetLockSetupView(backTo("settings")) }
                   composable("subnetRouting") { SubnetRoutingView(backTo("settings")) }

@@ -1,1 +1,1 @@
-Mesh VPN based on WireGuard
+Tailmesh: independent multi-Tailnet Android client

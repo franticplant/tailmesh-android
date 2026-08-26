@@ -32,10 +32,18 @@ object NetworkChangeCallback {
   // Cached info for the chosen default network.
   @Volatile private var cachedDefaultNetworkInfo: NetworkInfo? = null
 
+
   // Convenience: cached interface name for logging.
   @Volatile
   var cachedDefaultInterfaceName: String? = null
     private set
+
+  // MULTIPROXY EXTENSION
+  @Volatile
+  var currentDnsServerStr: String? = null
+    private set
+  fun currentUnderlyingDnsServer(): String? = currentDnsServerStr
+
 
   // monitorDnsChanges sets up a network callback to monitor changes to the
   // system's network state and update the DNS configuration when interfaces
@@ -175,6 +183,8 @@ object NetworkChangeCallback {
     val defaultNetwork = cachedDefaultNetwork
     if (defaultNetwork == null) {
       TSLog.d(TAG, "$why: no default network available; not updating DNS")
+      currentDnsServerStr = null
+      IPNService.onUnderlyingDnsChanged("")
       return
     }
 
@@ -182,6 +192,13 @@ object NetworkChangeCallback {
     if (info == null) {
       Log.w(TAG, "$why: no info for default network; not updating DNS")
       return
+    }
+
+    // MULTIPROXY EXTENSION: Check if the raw IP list changed, if so, notify IPNService.
+    val newDnsStr = info.linkProps.dnsServers.firstOrNull()?.hostAddress
+    if (currentDnsServerStr != newDnsStr) {
+        currentDnsServerStr = newDnsStr
+        IPNService.onUnderlyingDnsChanged(newDnsStr ?: "")
     }
 
     val sb = StringBuilder()

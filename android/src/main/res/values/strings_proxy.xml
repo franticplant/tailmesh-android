@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="save">Save</string>
+    <string name="control_proxy">HTTP proxy</string>
+    <string name="control_proxy_url">Proxy URL</string>
+    <string name="control_proxy_placeholder" translatable="false">http://proxy.example.com:8080</string>
+    <string name="control_proxy_explainer">Use an HTTP or HTTPS proxy for Tailscale login, control-plane, and relay connections. Peer-to-peer WireGuard traffic is not sent through this proxy. Leave empty to disable.</string>
+    <string name="debug_http_proxy_logging">HTTP proxy debug logs</string>
+    <string name="debug_http_proxy_logging_subtitle">Log control-plane, relay, and telemetry HTTP proxy decisions. May include proxy URLs and destination URLs.</string>
+    <string name="debug_dns_config_logging">DNS config debug logs</string>
+    <string name="debug_dns_config_logging_subtitle">Log selected resolver, exit-node override, route-aware dialing, and DNS apply results.</string>
+    <string name="debug_dns_query_logging">DNS query debug logs</string>
+    <string name="debug_dns_query_logging_subtitle">Log per-query resolver path, names, types, latency, and DoH errors. This can reveal visited domains.</string>
+</resources>

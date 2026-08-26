@@ -26,12 +26,13 @@ import kotlinx.coroutines.flow.StateFlow
 // DotsMatrix represents the state of the progress indicator.
 typealias DotsMatrix = List<List<Boolean>>
 
-// The initial DotsMatrix that represents the Tailscale logo (T-shaped).
+// Independent Tailmesh mesh mark: four endpoints around a central routing node.
+// This intentionally does not reproduce the upstream Tailscale T-shaped dot mark.
 val logoDotsMatrix: DotsMatrix =
     listOf(
-        listOf(false, false, false),
-        listOf(true, true, true),
+        listOf(true, false, true),
         listOf(false, true, false),
+        listOf(true, false, true),
     )
 
 @Composable
@@ -99,56 +100,29 @@ fun TailscaleLogoView(
   }
 }
 
+// Animation frames are deliberately generic mesh/activity patterns rather than the upstream logo.
 val gameOfLife: List<DotsMatrix> =
     listOf(
+        logoDotsMatrix,
         listOf(
-            listOf(false, true, true),
-            listOf(true, false, true),
-            listOf(false, false, true),
-        ),
-        listOf(
+            listOf(true, true, false),
             listOf(false, true, true),
             listOf(false, false, true),
-            listOf(false, true, false),
         ),
         listOf(
             listOf(false, true, true),
-            listOf(false, false, false),
-            listOf(false, false, true),
-        ),
-        listOf(
-            listOf(false, false, true),
-            listOf(false, true, false),
-            listOf(false, false, false),
-        ),
-        listOf(
-            listOf(false, true, false),
-            listOf(false, false, false),
-            listOf(false, false, false),
-        ),
-        listOf(
-            listOf(false, false, false),
-            listOf(false, false, true),
-            listOf(false, false, false),
-        ),
-        listOf(
-            listOf(false, false, false),
-            listOf(false, false, false),
-            listOf(false, false, false),
-        ),
-        listOf(
-            listOf(false, false, true),
-            listOf(false, false, false),
-            listOf(false, false, false),
-        ),
-        listOf(
-            listOf(false, false, false),
-            listOf(false, false, false),
+            listOf(true, true, false),
             listOf(true, false, false),
         ),
-        listOf(listOf(false, false, false), listOf(false, false, false), listOf(true, true, false)),
-        listOf(listOf(false, false, false), listOf(true, false, false), listOf(true, true, false)),
-        listOf(listOf(false, false, false), listOf(true, true, false), listOf(false, true, false)),
-        listOf(listOf(false, false, false), listOf(true, true, false), listOf(false, true, true)),
-        listOf(listOf(false, false, false), listOf(true, true, true), listOf(false, false, true)),
-        listOf(listOf(false, true, false), listOf(true, true, true), listOf(true, false, true)))
+        listOf(
+            listOf(true, false, false),
+            listOf(true, true, true),
+            listOf(false, false, true),
+        ),
+        listOf(
+            listOf(false, false, true),
+            listOf(true, true, true),
+            listOf(true, false, false),
+        ),
+        logoDotsMatrix,
+    )

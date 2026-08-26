@@ -64,7 +64,7 @@ fun contactText(): AnnotatedString {
       append(stringResource(id = R.string.bug_report_instructions_prefix))
     }
 
-    pushLink(LinkAnnotation.Url(Links.SUPPORT_URL))
+    pushLink(LinkAnnotation.Url(Links.PROJECT_ISSUES_URL))
     withStyle(
         style =
             SpanStyle(

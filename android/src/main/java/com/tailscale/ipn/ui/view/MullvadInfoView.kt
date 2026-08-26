@@ -3,7 +3,6 @@
 
 package com.tailscale.ipn.ui.view
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
@@ -14,7 +13,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -33,10 +31,15 @@ fun MullvadInfoView(nav: ExitNodePickerNav) {
             verticalArrangement = Arrangement.spacedBy(20.dp),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 48.dp),
             modifier = Modifier.padding(innerPadding)) {
+              // The upstream client displays the Mullvad logo here. Tailmesh deliberately avoids
+              // redistributing that brand asset until independent-fork trademark permission is
+              // established. Descriptive service text remains because it identifies the service.
               item {
-                Image(
-                    painter = painterResource(id = R.drawable.mullvad_logo),
-                    contentDescription = stringResource(R.string.the_mullvad_vpn_logo))
+                Text(
+                    stringResource(R.string.mullvad_exit_nodes),
+                    fontFamily = MaterialTheme.typography.titleLarge.fontFamily,
+                    fontSize = MaterialTheme.typography.titleLarge.fontSize,
+                    fontWeight = FontWeight.SemiBold)
               }
               item {
                 Text(

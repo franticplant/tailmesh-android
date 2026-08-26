@@ -3,7 +3,9 @@
 
 package com.tailscale.ipn.ui.viewModel
 
+import com.tailscale.ipn.ui.localapi.Client
 import com.tailscale.ipn.ui.util.set
+import androidx.lifecycle.viewModelScope
 import com.tailscale.ipn.ui.view.ErrorDialogType
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,9 +24,15 @@ class LoginWithAuthKeyViewModel : CustomLoginViewModel() {
       errorDialog.set(ErrorDialogType.INVALID_AUTH_KEY)
       return
     }
-    loginWithAuthKey(authKey) {
-      it.onFailure { errorDialog.set(ErrorDialogType.ADD_PROFILE_FAILED) }
-      it.onSuccess { onSuccess() }
+    Client(viewModelScope).addProfile { addResult ->
+      addResult
+          .onFailure { errorDialog.set(ErrorDialogType.ADD_PROFILE_FAILED) }
+          .onSuccess {
+            loginWithAuthKey(authKey) {
+              it.onFailure { errorDialog.set(ErrorDialogType.ADD_PROFILE_FAILED) }
+              it.onSuccess { onSuccess() }
+            }
+          }
     }
   }
 }
