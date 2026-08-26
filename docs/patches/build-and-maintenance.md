@@ -21,21 +21,26 @@ For `main`, the required core is:
 ```text
 repository: franticplant/tailscale
 branch:     tailmesh-android-base
-commit:     391f6b9995d65dad2f7e8304932d3baf52721b55
+commit:     c36d08c12ef5a6eb3c057db203fbc6cee982ed5c
 base:       25877455e79d9e3ebd5e99200ca86fd62bcc0ed9
 ```
 
 Do not build this Android branch against `franticplant/tailscale:main`. The custom
 `main` had advanced 47 upstream commits beyond the Android client's intended core
 revision. `tailmesh-android-base` instead starts at the exact Tailscale revision
-expected by this Android source tree and carries only the three required DNS
-patches:
+expected by this Android source tree and carries only the required patches:
 
 ```text
-net/dns/config.go
-net/dns/manager.go
-net/dns/resolver/forwarder.go
+net/dns/config.go              # DNS config mutation hook
+net/dns/manager.go             # DNS config mutation hook
+net/dns/resolver/forwarder.go  # selectable DoH fallback resolvers
+feature/taildrop/ext.go        # don't call the nil newFileOps hook on Android
 ```
+
+The Taildrop patch is a crash fix rather than a feature hook: `fileops_fs.go`
+is `//go:build !android`, so `newFileOps` is nil on Android and calling it
+panics whenever a profile change reaches that path with no SAF `FileOps`
+installed.
 
 The compatibility core and Android wrapper both use Tailscale Go toolchain:
 
