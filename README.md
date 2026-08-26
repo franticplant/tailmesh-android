@@ -1,182 +1,112 @@
-# Tailscale Android Client
+## 1. Tailmesh
 
-https://tailscale.com
+Tailmesh is an independent Android networking client focused on using multiple Tailnet identities concurrently behind one Android `VpnService`.
 
-Private WireGuard® networks made easy
+It is derived from the BSD-3-Clause [Tailscale Android client](https://github.com/tailscale/tailscale-android) and builds against a separately maintained, patched checkout of the BSD-3-Clause [`tailscale.com` core](https://github.com/tailscale/tailscale).
 
-## Overview
+**Tailmesh is not affiliated with, sponsored by, or endorsed by Tailscale Inc.** Tailscale is a trademark of Tailscale Inc.
 
-This repository contains the open source Tailscale Android client.
+## 2. What this fork adds
 
-## Using
+The main fork-specific mode is the multi-Tailnet proxy:
 
-#### Tailscale Packages
-
-The latest stable release APK can be obtained from the [Tailscale Packages Stable Track](https://pkgs.tailscale.com/stable/#android).
-
-Unstable releases can be obtained from the [Tailscale Packages Unstable Track](https://pkgs.tailscale.com/unstable/#android).
-
-These APKs include all supported platforms and architectures.  For installing compact APKs, Android TV, or if you want automatic updates, visit the [Google Play Store](https://play.google.com/store/apps/details?id=com.tailscale.ipn).
-
-#### Google Playstore
-
-[<img src="https://play.google.com/intl/en_us/badges/images/generic/en-play-badge.png"
-     alt="Get it on Google Play"
-     height="80">](https://play.google.com/store/apps/details?id=com.tailscale.ipn)
-
-Help us test new features and bug-fixes before they ship to all users! A [beta testing track](https://play.google.com/apps/testing/com.tailscale.ipn) is available on the Play Store. 
-
-#### Amazon Appstore
-
-The app can be downloaded from the [Amazon Appstore](https://www.amazon.com/dp/B0D38TRB3N) for Amazon Fire tablets and Fire TV devices.
-
-#### F-Droid
-
-The [F-Droid](https://f-droid.org/packages/com.tailscale.ipn/) project builds the source code in this repository and maintains independently-built APKs. Note that F-Droid builds are not released, updated, or verified by the Tailscale team.
-
-## Preparing a build environment
-
-There are several options for setting up a build environment. The Android Studio
-path is the most useful path for longer term development.
-
-In all cases you will need:
-
-- Go runtime
-- Android SDK
-- Android SDK components (`make androidsdk` will install them)
-
-### Android Studio
-
-1. Install a Go runtime (https://go.dev/dl/).
-2. Install Android Studio (https://developer.android.com/studio).
-3. Start Android Studio, from the Welcome screen select "More Actions" and "SDK Manager".
-4. In the SDK manager, select the "SDK Tools" tab and install the "Android SDK Command-line Tools (latest)".
-3. Run `make androidsdk` to install the necessary SDK components.
-
-If you would prefer to avoid Android Studio, you can also install an Android
-SDK. The makefile detects common paths, so `sudo apt install android-sdk` is
-sufficient on Debian / Ubuntu systems. To use an Android SDK installed in a
-non-standard location, set the `ANDROID_SDK_ROOT` environment variable to the
-path to the SDK.
-
-If you installed Android Studio the tools may not be in your path. To get the
-correct tool path, run `make androidpath` and export the provided path in your
-shell.
-
-#### Code Formatting
-
-The ktmft plugin on the default setting should be used to autoformat all Java, Kotlin
-and XML files in Android Studio.  Enable "Format on Save".
-
-### Docker
-
-If you wish to avoid installing software on your host system, a Docker based development strategy is available, you can build and start a shell with:
-
-```sh
-make docker-shell
+```text
+one Android VpnService / TUN
+        |
+one synthetic IPv6 /48
+        |
+one gVisor userspace stack
+        |
+synthetic target lookup + DNS
+        |
+one required profile / upstream
+        |
+multiple independent tsnet.Server runtimes
 ```
 
-Several other makefile recipes are available for setting up the proper build environment and running builds.
+The implementation includes one Android VPN/TUN, deterministic synthetic IPv6 peer identity, collision-safe DNS/target mapping, TCP/UDP userspace proxying, multiple independent `tsnet.Server` runtimes, persistent Android profiles, runtime reconstruction, and the patched-core DNS integration used by this fork.
 
-Note that the docker makefile recipes s will preserve the image and remove container on completion.
-If changes are made to the build environment or toolchain, cached docker images may need to be rebuilt.
-The docker build image name is parameterized in the makefile and changing it provides a simple means to do this.
+The canonical engineering documentation starts at [`docs/multi_tailnet_proxy_app/README.md`](docs/multi_tailnet_proxy_app/README.md).
 
-### Nix
+## 3. Repository pair and pinned core
 
-If you have Nix 2.4 or later installed, a Nix development environment can
-be set up with:
+This Android tree intentionally builds with a sibling checkout:
 
-```sh
-alias nix='nix --extra-experimental-features "nix-command flakes"'
-nix develop
+```text
+parent/
+|-- tailscale-android/   # this repository
+`-- tailscale/           # patched Tailscale core
 ```
 
-The flake provides host tools such as Java, `make`, `curl`, and `git`, and
-points the build at a repo-local Android SDK in `./android-sdk`. The SDK
-directory is ignored by Git and is reused across builds.
+`go.mod` contains:
 
-On first use, install the Android SDK components:
+```go
+replace tailscale.com => ../tailscale
+```
+
+For `main`, the exact compatibility core and Tailscale Go toolchain are documented in [`docs/patches/build-and-maintenance.md`](docs/patches/build-and-maintenance.md). Do not silently substitute `franticplant/tailscale:main`; the Android wrapper, patched core, and Tailscale Go toolchain form one compatibility unit.
+
+## 4. Building
+
+In a correctly paired two-tree checkout, normal development paths include:
 
 ```sh
 make androidsdk
+make build-unstripped-aar
+make libtailscale
+make tailscale-debug.apk
 ```
 
-Then build normally:
+The build targets, Kotlin source namespace, module path, and some internal identifiers still retain inherited Tailscale names. Internal compatibility naming is different from the public Tailmesh product identity.
 
-```sh
-make tailscale-debug
+There is currently no official Tailmesh Play Store, F-Droid, Amazon Appstore, or other binary distribution channel. Official Tailscale package/store links are not Tailmesh download links.
+
+## 5. Android application identity
+
+**Current code:** the installed application ID is still:
+
+```text
+com.tailscale.ipn.multiproxy
 ```
 
-The debug APK is written to `./tailscale-debug.apk`.
+**Planned OSS action:** migrate it to an independent ID such as:
 
-For one-shot commands without entering an interactive shell:
-
-```sh
-nix develop --command make androidsdk
-nix develop --command make tailscale-debug
+```text
+io.github.franticplant.tailmesh
 ```
 
-For faster Kotlin-only iteration while avoiding the `gomobile bind` step:
+That migration is intentionally tracked separately because the application ID is part of Android state and test tooling, not merely a display string. It must update ADB/emulator integration paths and be validated as one unit. The Kotlin source namespace can remain `com.tailscale.ipn` initially; moving all Kotlin packages, source directories, `R`, and `BuildConfig` references is a larger optional refactor.
 
-```sh
-nix develop --command bash -lc 'cd android && ./gradlew ktfmtCheck compileDebugKotlin'
-```
+Changing the application ID will make Android treat the result as a different application. Existing development installs will not upgrade in place, and the new ID gets separate app data and VPN authorization.
 
-## Building
+## 6. Tailscale-hosted services
 
-```sh
-make apk
-make install
-```
+The code license and the hosted Tailscale service are separate things.
 
-## Building a release
+Unless an alternate control server is configured, inherited behavior can use Tailscale-operated control/login infrastructure, DERP, documentation/support, and diagnostic/logging infrastructure. Use of those services is governed separately by applicable Tailscale terms and policies. The BSD-3-Clause code license is not itself a grant to use Tailscale trademarks or hosted services.
 
-Use `make tag_release` to stamp the Play Store version code, update the version
-name, and tag the current commit. The version code is derived from wall-clock
-time (minutes since the Unix epoch) at release time and committed into
-`android/build.gradle`, so it increases monotonically across all builds and
-branches while staying fixed for any given commit.
+Before wide binary distribution, the hosted-service/Terms-of-Service questions in [`docs/oss-readiness.md`](docs/oss-readiness.md) must be resolved.
 
-We only guarantee to support the latest Go release and any Go beta or
-release candidate builds (currently Go 1.14) in module mode. It might
-work in earlier Go versions or in GOPATH mode, but we're making no
-effort to keep those working.
+## 7. Licensing and notices
 
-## Developing on a Fire Stick TV
+The inherited Android code is BSD-3-Clause. The root [`LICENSE`](LICENSE) is retained unchanged. The repository also contains the upstream [`PATENTS`](PATENTS) grant; its application to third-party modifications is an explicit legal-review item rather than something Tailmesh assumes.
 
-On the Fire Stick:
+A pre-release dependency/attribution inventory is in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). It does not replace generating and reviewing exact notices from the resolved Go and Gradle release graphs before distributing binaries.
 
-* Settings > My Fire TV > Developer Options > ADB Debugging > ON
+Inherited source keeps upstream copyright/SPDX notices. The owner still needs a consistent copyright-header policy for wholly fork-authored files.
 
-Then some useful commands:
-```
-adb connect 10.2.200.213:5555
-adb install -r tailscale-fdroid.apk
-adb shell am start -n com.tailscale.ipn/com.tailscale.ipn.MainActivity
-adb shell pm uninstall com.tailscale.ipn
-```
+## 8. Support and issues
 
-## Bugs
+Tailmesh project bugs belong in this repository's issue tracker:
 
-Please file any issues about this code or the hosted service on
-[the tailscale issue tracker](https://github.com/tailscale/tailscale/issues).
+https://github.com/franticplant/tailmesh-android/issues
 
-## Contributing
+Questions about a user's Tailscale-hosted account, billing, hosted service, or account deletion remain matters for Tailscale's own service/support channels.
 
-`under_construction.gif`
+## 9. Publication status
 
-PRs welcome, but we are still working out our contribution process and
-tooling.
+This repository is undergoing OSS-readiness work. See [`docs/oss-readiness.md`](docs/oss-readiness.md) for the evidence ledger and release gates.
 
-We require [Developer Certificate of
-Origin](https://en.wikipedia.org/wiki/Developer_Certificate_of_Origin)
-`Signed-off-by` lines in commits.
-
-## About Us
-
-We are [Tailscale](https://tailscale.com). See
-https://tailscale.com/company for more about us and what we're
-building.
+A public source push or binary release should not be treated as cleared until the full-history secret scan, public/reproducible patched-core dependency, exact dependency-license generation, remaining brand-asset cleanup, application-ID migration, post-change build/device validation, hosted-service review, trademark review, and patent-scope review are complete.
 
 WireGuard is a registered trademark of Jason A. Donenfeld.
