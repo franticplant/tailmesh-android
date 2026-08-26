@@ -1,0 +1,31 @@
+--- libtailscale/multiproxy/api.go
++++ libtailscale/multiproxy/api.go
+@@ -213,6 +213,8 @@
+ 		e.mu.Unlock()
+ 		return errors.New("tailnet not found")
+ 	}
++
++	delete(e.tailnets, identifier)
+ 
+ 	if cancel, ok := e.tailnetCancels[identifier]; ok {
+ 		cancel()
+@@ -220,18 +222,17 @@
+ 	}
+ 	wg := e.tailnetWGs[identifier]
++	delete(e.tailnetWGs, identifier)
+ 	e.mu.Unlock()
+ 
+ 	// Wait for watcher to exit synchronously (outside lock)
+ 	if wg != nil {
+ 		wg.Wait()
+ 	}
+ 
+-	e.mu.Lock()
+-	delete(e.tailnetWGs, identifier)
+ 	err := srv.Close()
+-	delete(e.tailnets, identifier)
+ 	
++	e.mu.Lock()
+ 	filtered := e.subnets[:0]
+ 	for _, sr := range e.subnets {
+ 		if sr.TailnetID != identifier {
