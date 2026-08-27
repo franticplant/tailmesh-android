@@ -3,12 +3,9 @@ package multiproxy
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"sort"
 	"sync"
-
-	"tailscale.com/tsnet"
 )
 
 // UpstreamKind names the transport an upstream provides. The datapath never
@@ -65,46 +62,27 @@ type Provider interface {
 	Close() error
 }
 
-// ---------------------------------------------------------------------------
-// tailnet provider
-// ---------------------------------------------------------------------------
+// ChainedProvider is a Provider whose own transport runs over another upstream
+// rather than straight off the device - a SOCKS5 proxy reached through a
+// WireGuard tunnel, say, or a WireGuard tunnel whose handshakes leave through
+// an Xray SOCKS5 listener.
+//
+// Providers that can only ever dial from the device simply do not implement it.
+// The registry uses Via to keep the chain graph acyclic; see chain.go.
+type ChainedProvider interface {
+	Provider
 
-// tailnetProvider adapts a tsnet.Server to Provider. It holds the Engine and an
-// id rather than the server itself, so that enabling, disabling or replacing a
-// tailnet at runtime is observed on the next dial instead of being captured at
-// registration time.
-type tailnetProvider struct {
-	engine *Engine
-	id     UpstreamID
+	// Via reports the upstream this provider's own connections are made
+	// through. An empty ID means "from the device".
+	Via() UpstreamID
 }
 
-func (p *tailnetProvider) ID() UpstreamID     { return p.id }
-func (p *tailnetProvider) Kind() UpstreamKind { return UpstreamKindTailnet }
-func (p *tailnetProvider) Close() error       { return nil }
-
-func (p *tailnetProvider) server() (*tsnet.Server, bool) {
-	return p.engine.activeTailnetServer(p.id)
-}
-
-func (p *tailnetProvider) Ready() bool {
-	_, ok := p.server()
-	return ok
-}
-
-func (p *tailnetProvider) Dial(ctx context.Context, network, address string) (net.Conn, error) {
-	srv, ok := p.server()
-	if !ok {
-		return nil, fmt.Errorf("%w: tailnet %q", ErrUpstreamNotReady, p.id)
+// providerVia reports p's chain parent, or "" if it has none.
+func providerVia(p Provider) UpstreamID {
+	if c, ok := p.(ChainedProvider); ok {
+		return c.Via()
 	}
-	return srv.Dial(ctx, network, address)
-}
-
-func (p *tailnetProvider) PeerPathInfo(ctx context.Context, destIP string) string {
-	srv, ok := p.server()
-	if !ok {
-		return "unknown"
-	}
-	return (&tsnetUpstream{srv: srv}).PeerPathInfo(ctx, destIP)
+	return ""
 }
 
 // ---------------------------------------------------------------------------
@@ -139,20 +117,47 @@ func (p *directProvider) PeerPathInfo(context.Context, string) string { return "
 // registry
 // ---------------------------------------------------------------------------
 
-// upstreamRegistry holds every non-tailnet provider. Tailnets are not stored
-// here: they live in Engine.tailnets with their own lifecycle, and are exposed
-// as providers on demand by lookupProvider. Keeping one source of truth per
-// upstream kind avoids the two going out of sync when a tailnet is added or
-// forgotten.
+// providerSource supplies providers the registry does not own.
+//
+// Upstreams whose lifecycle belongs to something else - tailnets, above all,
+// which are created, enabled and torn down by the tailnet machinery and merely
+// happen to also be dialable - plug in here instead of being special-cased at
+// every lookup. Everything downstream of the registry then sees one uniform set
+// of upstreams, and adding a new kind of upstream that owns its own lifecycle
+// costs one source rather than a branch in each of Get, List and Snapshot.
+type providerSource interface {
+	// Get resolves an ID this source is responsible for.
+	Get(id UpstreamID) (Provider, bool)
+	// List returns every provider this source currently offers, in any order.
+	List() []Provider
+}
+
+// upstreamRegistry is the single lookup path for every upstream, whatever owns
+// it. Providers registered directly (SOCKS5, WireGuard, the built-in direct
+// upstream) live in providers and are closed by the registry; providers reached
+// through a source are owned by that source and are never closed here.
 type upstreamRegistry struct {
 	mu        sync.RWMutex
 	providers map[UpstreamID]Provider
+	sources   []providerSource
 }
 
 func newUpstreamRegistry() *upstreamRegistry {
 	r := &upstreamRegistry{providers: make(map[UpstreamID]Provider)}
 	r.providers[DirectUpstreamID] = &directProvider{}
 	return r
+}
+
+// AddSource plugs in a provider source. Sources are consulted after the
+// registry's own providers, so a directly-registered upstream always wins a
+// name collision and no source can shadow the direct upstream.
+func (r *upstreamRegistry) AddSource(s providerSource) {
+	if s == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sources = append(r.sources, s)
 }
 
 // Register adds or replaces a provider. Replacing closes the old one, so a
@@ -167,6 +172,9 @@ func (r *upstreamRegistry) Register(p Provider) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := r.checkChainLocked(p); err != nil {
+		return err
+	}
 	if old, exists := r.providers[id]; exists && old != p {
 		_ = old.Close()
 	}
@@ -191,21 +199,46 @@ func (r *upstreamRegistry) Unregister(id UpstreamID) error {
 }
 
 func (r *upstreamRegistry) Get(id UpstreamID) (Provider, bool) {
+	if id == "" {
+		return nil, false
+	}
 	r.mu.RLock()
-	defer r.mu.RUnlock()
 	p, ok := r.providers[id]
-	return p, ok
+	sources := r.sources
+	r.mu.RUnlock()
+	if ok {
+		return p, true
+	}
+	for _, s := range sources {
+		if p, ok := s.Get(id); ok {
+			return p, true
+		}
+	}
+	return nil, false
 }
 
-// List returns every registered provider, ordered by ID so callers and tests
-// see a stable sequence.
+// List returns every provider from the registry and its sources, ordered by ID
+// so callers and tests see a stable sequence.
 func (r *upstreamRegistry) List() []Provider {
 	r.mu.RLock()
 	out := make([]Provider, 0, len(r.providers))
-	for _, p := range r.providers {
+	seen := make(map[UpstreamID]bool, len(r.providers))
+	for id, p := range r.providers {
 		out = append(out, p)
+		seen[id] = true
 	}
+	sources := r.sources
 	r.mu.RUnlock()
+
+	for _, s := range sources {
+		for _, p := range s.List() {
+			if p == nil || seen[p.ID()] {
+				continue
+			}
+			seen[p.ID()] = true
+			out = append(out, p)
+		}
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID() < out[j].ID() })
 	return out
 }
@@ -230,26 +263,15 @@ func (r *upstreamRegistry) CloseAll() {
 // Engine integration
 // ---------------------------------------------------------------------------
 
-// lookupProvider resolves an UpstreamID to a Provider, checking the registry
-// first and then the tailnet runtimes. A tailnet is only returned when it is
-// enabled and running, so a disabled tailnet reads as "exists but not ready"
-// rather than being absent.
+// lookupProvider resolves an UpstreamID to a Provider. Tailnets reach this
+// through the registry's tailnet source like any other upstream; a configured
+// but disabled tailnet resolves and reports Ready() == false, so it reads as
+// "exists but not usable" rather than as absent.
 func (e *Engine) lookupProvider(id UpstreamID) (Provider, bool) {
-	if id == "" {
+	if e.upstreams == nil {
 		return nil, false
 	}
-	if e.upstreams != nil {
-		if p, ok := e.upstreams.Get(id); ok {
-			return p, true
-		}
-	}
-	e.mu.RLock()
-	_, isTailnet := e.tailnets[id]
-	e.mu.RUnlock()
-	if isTailnet {
-		return &tailnetProvider{engine: e, id: id}, true
-	}
-	return nil, false
+	return e.upstreams.Get(id)
 }
 
 // readyProvider resolves id and requires it to be usable now. Callers that must
@@ -287,27 +309,25 @@ type UpstreamInfo struct {
 	ID    string `json:"id"`
 	Kind  string `json:"kind"`
 	Ready bool   `json:"ready"`
+	// Via names this upstream's chain parent, empty when it dials from the
+	// device. The UI renders a chain from these.
+	Via string `json:"via,omitempty"`
 }
 
 // UpstreamSnapshot lists every upstream the policy layer can route to, tailnets
 // included, ordered by ID.
 func (e *Engine) UpstreamSnapshot() []UpstreamInfo {
+	if e.upstreams == nil {
+		return nil
+	}
 	var out []UpstreamInfo
-	if e.upstreams != nil {
-		for _, p := range e.upstreams.List() {
-			out = append(out, UpstreamInfo{ID: string(p.ID()), Kind: string(p.Kind()), Ready: p.Ready()})
-		}
+	for _, p := range e.upstreams.List() {
+		out = append(out, UpstreamInfo{
+			ID:    string(p.ID()),
+			Kind:  string(p.Kind()),
+			Ready: p.Ready(),
+			Via:   string(providerVia(p)),
+		})
 	}
-	e.mu.RLock()
-	ids := make([]UpstreamID, 0, len(e.tailnets))
-	for id := range e.tailnets {
-		ids = append(ids, id)
-	}
-	e.mu.RUnlock()
-	for _, id := range ids {
-		p := &tailnetProvider{engine: e, id: id}
-		out = append(out, UpstreamInfo{ID: string(id), Kind: string(p.Kind()), Ready: p.Ready()})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }

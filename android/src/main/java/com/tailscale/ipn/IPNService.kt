@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 package com.tailscale.ipn
 import com.tailscale.ipn.multiproxy.db.ProfileRepository
+import com.tailscale.ipn.multiproxy.AppUidResolver
 import com.tailscale.ipn.multiproxy.CredentialStore
 import com.tailscale.ipn.multiproxy.db.TailnetProfile
 import com.tailscale.ipn.multiproxy.db.UpstreamOwner
@@ -379,6 +380,10 @@ open class IPNService : VpnService(), libtailscale.IPNService {
           session.activeFd = pfd.detachFd()
           
           try {
+              // Install per-flow app attribution before the datapath can carry a flow.
+              // getConnectionOwnerUid only answers for the app holding the VPN, which is
+              // us from establish() onwards, so this is the earliest correct point.
+              engine.setUIDResolver(AppUidResolver(this))
               engine.startVPN(session.activeFd, 1280)
               return true
           } catch (e: Exception) {

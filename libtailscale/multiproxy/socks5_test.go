@@ -207,6 +207,24 @@ func (s *testSOCKS5Server) handleUDPAssociate(conn net.Conn) {
 		return
 	}
 
+	// One persistent socket per target, kept for the life of the association.
+	// A relay that opened a fresh socket per datagram and read a single reply
+	// would pass a request/response test and fail anything long-lived - a
+	// WireGuard tunnel above all, where the handshake response comes back later
+	// and the source port has to stay put.
+	var (
+		mu      sync.Mutex
+		targets = map[string]net.Conn{}
+		client  net.Addr
+	)
+	defer func() {
+		mu.Lock()
+		for _, c := range targets {
+			_ = c.Close()
+		}
+		mu.Unlock()
+	}()
+
 	go func() {
 		buf := make([]byte, 65535)
 		for {
@@ -225,27 +243,46 @@ func (s *testSOCKS5Server) handleUDPAssociate(conn net.Conn) {
 			if err != nil {
 				continue
 			}
+			dst := net.JoinHostPort(host, itoa(port))
 
-			target, err := net.Dial("udp", net.JoinHostPort(host, itoa(port)))
-			if err != nil {
-				continue
+			mu.Lock()
+			client = clientAddr
+			target, ok := targets[dst]
+			if !ok {
+				target, err = net.Dial("udp", dst)
+				if err != nil {
+					mu.Unlock()
+					continue
+				}
+				targets[dst] = target
+
+				go func(target net.Conn, host string, port uint16) {
+					hdr, err := encodeAddr(host, port)
+					if err != nil {
+						return
+					}
+					resp := make([]byte, 65535)
+					for {
+						rn, err := target.Read(resp)
+						if rn > 0 {
+							out := append([]byte{0, 0, 0}, hdr...)
+							out = append(out, resp[:rn]...)
+							mu.Lock()
+							to := client
+							mu.Unlock()
+							if to != nil {
+								_, _ = pc.WriteTo(out, to)
+							}
+						}
+						if err != nil {
+							return
+						}
+					}
+				}(target, host, port)
 			}
+			mu.Unlock()
+
 			_, _ = target.Write(payload)
-			_ = target.SetReadDeadline(time.Now().Add(2 * time.Second))
-			resp := make([]byte, 65535)
-			rn, err := target.Read(resp)
-			target.Close()
-			if err != nil {
-				continue
-			}
-
-			hdr, err := encodeAddr(host, port)
-			if err != nil {
-				continue
-			}
-			out := append([]byte{0, 0, 0}, hdr...)
-			out = append(out, resp[:rn]...)
-			_, _ = pc.WriteTo(out, clientAddr)
 		}
 	}()
 

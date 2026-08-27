@@ -77,6 +77,9 @@ type SOCKS5Config struct {
 	// Username and Password enable RFC 1929 auth when Username is non-empty.
 	Username string
 	Password string
+	// Via names another upstream to reach the proxy through, chaining this one
+	// behind it. Empty means the proxy is reached from the device. See chain.go.
+	Via UpstreamID
 }
 
 type socks5Provider struct {
@@ -84,7 +87,7 @@ type socks5Provider struct {
 	// dial reaches the proxy itself. It is a field so tests can substitute one,
 	// and so the Android side can supply a protected dialer that does not loop
 	// back into the TUN.
-	dial func(ctx context.Context, network, address string) (net.Conn, error)
+	dial UpstreamDialer
 
 	mu     sync.Mutex
 	closed bool
@@ -94,7 +97,10 @@ type socks5Provider struct {
 // itself and may be nil for a plain net.Dialer; on Android it should be a
 // VpnService-protected dialer so traffic to a remote proxy does not re-enter the
 // TUN it came from.
-func NewSOCKS5Upstream(cfg SOCKS5Config, proxyDial func(ctx context.Context, network, address string) (net.Conn, error)) (Provider, error) {
+//
+// To chain this upstream behind another, set cfg.Via and build the provider
+// with Engine.NewSOCKS5Upstream, which resolves the parent at dial time.
+func NewSOCKS5Upstream(cfg SOCKS5Config, proxyDial UpstreamDialer) (Provider, error) {
 	if cfg.ID == "" {
 		return nil, errors.New("socks5: upstream needs an id")
 	}
@@ -116,6 +122,7 @@ func NewSOCKS5Upstream(cfg SOCKS5Config, proxyDial func(ctx context.Context, net
 
 func (p *socks5Provider) ID() UpstreamID     { return p.cfg.ID }
 func (p *socks5Provider) Kind() UpstreamKind { return UpstreamKindSOCKS5 }
+func (p *socks5Provider) Via() UpstreamID    { return p.cfg.Via }
 
 func (p *socks5Provider) Ready() bool {
 	p.mu.Lock()

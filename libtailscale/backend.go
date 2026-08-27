@@ -319,6 +319,14 @@ func (a *App) newBackend(dataDir string, appCtx AppContext, store *stateStore,
 		log.Printf("netmon.New: %v", err)
 	}
 	b.netMon = netMon
+	if netMon != nil {
+		// Publish a protected dialer for multiproxy's non-tailnet upstreams. They
+		// need the same Android protect hook the tailnet upstreams get, or a
+		// connection to a remote proxy would route back into the TUN it is meant
+		// to carry traffic out of. netns.NewDialer needs a netmon, and this is
+		// where the one netmon is built.
+		setUpstreamProtectedDialer(netns.NewDialer(logf, netMon))
+	}
 	b.setupLogs(dataDir, logID, logf, sys.HealthTracker.Get(), a.isClientLoggingEnabled())
 	dialer := new(tsdial.Dialer)
 	vf := &VPNFacade{

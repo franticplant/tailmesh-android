@@ -218,6 +218,11 @@ func NewEngineWithStateStore(dataDir string, cb EngineCallback, stateStoreFor fu
 		policy:    &policyStore{},
 	}
 
+	// Tailnets are dialable upstreams too, but their lifecycle belongs to the
+	// tailnet machinery rather than the registry, so they plug in as a source
+	// instead of being registered. See upstream_tailnet.go.
+	e.upstreams.AddSource(&tailnetSource{engine: e})
+
 	e.eventsWg.Add(1)
 	go e.dispatchEvents()
 
