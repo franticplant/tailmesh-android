@@ -128,6 +128,20 @@ type Engine struct {
 
 	tailnets map[UpstreamID]*TailnetRuntime
 
+	// upstreams holds every non-tailnet upstream (SOCKS5, WireGuard, direct).
+	// Tailnets stay in the map above with their own lifecycle; lookupProvider
+	// presents both behind one interface.
+	upstreams *upstreamRegistry
+
+	// policy is the ordered rule list consulted for flows that synthetic
+	// addressing has not already bound to a specific upstream.
+	policy *policyStore
+
+	// uidResolver attributes a flow to an application, or nil when the platform
+	// has not installed one. Guarded by uidMu.
+	uidMu       sync.RWMutex
+	uidResolver UIDResolver
+
 	dataDir         string
 	stateStoreFor   func(string) ipn.StateStore
 	callback        EngineCallback
@@ -199,6 +213,9 @@ func NewEngineWithStateStore(dataDir string, cb EngineCallback, stateStoreFor fu
 		baseDnsTableV4:   make(map[string][]netip.Addr),
 		baseDnsTable:     make(map[string][]netip.Addr),
 		realIPIndex:      make(map[netip.Addr][]TargetRecord),
+
+		upstreams: newUpstreamRegistry(),
+		policy:    &policyStore{},
 	}
 
 	e.eventsWg.Add(1)

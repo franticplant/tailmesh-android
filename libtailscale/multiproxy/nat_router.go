@@ -46,7 +46,34 @@ func (e *Engine) activeTailnetServer(id UpstreamID) (*tsnet.Server, bool) {
 	return nil, false
 }
 
+// resolveRoute resolves a destination with no flow context. Equivalent to
+// resolveFlow for an unattributed flow, so UID-scoped rules cannot match.
 func (e *Engine) resolveRoute(targetIP netip.Addr) (RouteDecision, bool) {
+	return e.resolveFlow(FlowInfo{
+		Dst:    netip.AddrPortFrom(targetIP, 0),
+		AppUID: UnknownAppUID,
+	})
+}
+
+// resolveFlow decides where a flow goes.
+//
+// The order is deliberate:
+//
+//  1. A synthetic destination is identity-bound - the address itself encodes
+//     which upstream minted it - so no rule may re-point it somewhere the
+//     address is meaningless. Policy is still consulted, but only to block.
+//  2. Everything else (a peer's real Tailscale address, a LAN address, the
+//     public internet) is policy's to decide.
+//  3. With no matching rule, the pre-policy behaviour applies unchanged:
+//     real-IP resolution, then advertised subnet routes, then the exit-node
+//     tailnet. An empty policy therefore routes exactly as it did before the
+//     policy layer existed.
+func (e *Engine) resolveFlow(f FlowInfo) (RouteDecision, bool) {
+	targetIP := f.Dst.Addr().Unmap()
+	if !targetIP.IsValid() {
+		return RouteDecision{}, false
+	}
+
 	e.targetMutex.RLock()
 	rec, found := e.targets[targetIP]
 	if !found {
@@ -55,6 +82,12 @@ func (e *Engine) resolveRoute(targetIP netip.Addr) (RouteDecision, bool) {
 	e.targetMutex.RUnlock()
 
 	if found {
+		// A block rule still applies: refusing to send traffic is always a
+		// safe thing to honour, even for an identity-bound destination.
+		if rule, _, ok := e.matchPolicy(f); ok && rule.Action == ActionBlock {
+			return RouteDecision{}, false
+		}
+
 		destIP := rec.CurrentIPv6
 		if rec.CurrentIPv4.IsValid() {
 			destIP = rec.CurrentIPv4
@@ -63,9 +96,9 @@ func (e *Engine) resolveRoute(targetIP netip.Addr) (RouteDecision, bool) {
 			return RouteDecision{}, false
 		}
 
-		if srv, active := e.activeTailnetServer(rec.RequiredUpstream); active {
+		if p, ready := e.readyProvider(rec.RequiredUpstream); ready {
 			return RouteDecision{
-				Upstream:    &tsnetUpstream{srv: srv},
+				Upstream:    p,
 				UpstreamID:  rec.RequiredUpstream,
 				Destination: destIP.String(),
 			}, true
@@ -92,6 +125,16 @@ func (e *Engine) resolveRoute(targetIP netip.Addr) (RouteDecision, bool) {
 	// it happened, so a real-IP destination that used to be silently
 	// unreachable at least has a chance of working, with the tradeoff
 	// visible instead of hidden.
+
+	// Policy first for everything outside the synthetic namespace. This is where
+	// per-app binding, a selected exit upstream for ordinary internet traffic,
+	// and firewall rules all take effect. A matching rule is final - it does not
+	// fall through to the legacy chain below - so a rule naming an upstream that
+	// is down fails closed rather than quietly using a different one.
+	if decision, matched, ok := e.applyPolicy(f, targetIP); matched {
+		return decision, ok
+	}
+
 	if decision, ok := e.resolveRealIPRoute(targetIP); ok {
 		return decision, true
 	}
@@ -113,9 +156,9 @@ func (e *Engine) resolveRoute(targetIP netip.Addr) (RouteDecision, bool) {
 
 	if maxBits >= 0 {
 		uid := UpstreamID(longestMatch.TailnetID)
-		if srv, active := e.activeTailnetServer(uid); active {
+		if p, ready := e.readyProvider(uid); ready {
 			return RouteDecision{
-				Upstream:    &tsnetUpstream{srv: srv},
+				Upstream:    p,
 				UpstreamID:  uid,
 				Destination: targetIP.String(),
 			}, true
@@ -125,9 +168,9 @@ func (e *Engine) resolveRoute(targetIP netip.Addr) (RouteDecision, bool) {
 
 	if exitNode != "" {
 		uid := UpstreamID(exitNode)
-		if srv, active := e.activeTailnetServer(uid); active {
+		if p, ready := e.readyProvider(uid); ready {
 			return RouteDecision{
-				Upstream:    &tsnetUpstream{srv: srv},
+				Upstream:    p,
 				UpstreamID:  uid,
 				Destination: targetIP.String(),
 			}, true
@@ -135,6 +178,61 @@ func (e *Engine) resolveRoute(targetIP netip.Addr) (RouteDecision, bool) {
 	}
 
 	return RouteDecision{}, false
+}
+
+// matchPolicy evaluates the active policy against a flow.
+func (e *Engine) matchPolicy(f FlowInfo) (Rule, int, bool) {
+	if e.policy == nil {
+		return Rule{}, -1, false
+	}
+	return e.policy.Match(f)
+}
+
+// applyPolicy evaluates the policy and, when a rule matches, turns it into a
+// decision.
+//
+// The second return value says whether a rule matched at all; the third says
+// whether that produced a usable route. The two are distinct on purpose: a
+// matched rule is always final, so "matched but not routable" must deny rather
+// than fall through to the legacy chain and reach an upstream the rule did not
+// name.
+func (e *Engine) applyPolicy(f FlowInfo, targetIP netip.Addr) (RouteDecision, bool, bool) {
+	rule, _, ok := e.matchPolicy(f)
+	if !ok {
+		return RouteDecision{}, false, false
+	}
+
+	switch rule.Action {
+	case ActionBlock:
+		return RouteDecision{}, true, false
+
+	case ActionDirect:
+		p, ready := e.readyProvider(DirectUpstreamID)
+		if !ready {
+			return RouteDecision{}, true, false
+		}
+		return RouteDecision{
+			Upstream:    p,
+			UpstreamID:  DirectUpstreamID,
+			Destination: targetIP.String(),
+		}, true, true
+
+	case ActionRoute:
+		p, ready := e.readyProvider(rule.Upstream)
+		if !ready {
+			return RouteDecision{}, true, false
+		}
+		// Note this also disambiguates a real Tailscale address that several
+		// tailnets claim: the rule names which upstream to use, so
+		// resolveRealIPRoute's deterministic guess is never reached.
+		return RouteDecision{
+			Upstream:    p,
+			UpstreamID:  rule.Upstream,
+			Destination: targetIP.String(),
+		}, true, true
+	}
+
+	return RouteDecision{}, true, false
 }
 
 // resolveRealIPRoute looks up targetIP (a real, non-synthetic Tailscale IP)
@@ -163,12 +261,12 @@ func (e *Engine) resolveRealIPRoute(targetIP netip.Addr) (RouteDecision, bool) {
 		e.enqueueAddressCrossover(targetIP.String(), ids, chosen.RequiredUpstream)
 	}
 
-	srv, active := e.activeTailnetServer(chosen.RequiredUpstream)
-	if !active {
+	p, ready := e.readyProvider(chosen.RequiredUpstream)
+	if !ready {
 		return RouteDecision{}, false
 	}
 	return RouteDecision{
-		Upstream:    &tsnetUpstream{srv: srv},
+		Upstream:    p,
 		UpstreamID:  chosen.RequiredUpstream,
 		Destination: targetIP.String(),
 	}, true
@@ -197,7 +295,7 @@ func (e *Engine) handleTCPConnection(r *tcp.ForwarderRequest) {
 	var decision RouteDecision
 	if !isDNS {
 		var ok bool
-		decision, ok = e.resolveRoute(targetIP)
+		decision, ok = e.resolveFlow(e.flowFromEndpointID("tcp", id))
 		if !ok {
 			log.Printf("[flow-%d] TCP %v -> %v (synthetic): reject (no route)", flowID, remoteAddr, targetIP)
 			r.Complete(true)
@@ -361,7 +459,7 @@ func (e *Engine) handleUDPConnection(r *udp.ForwarderRequest) bool {
 		return true
 	}
 
-	decision, ok := e.resolveRoute(targetIP)
+	decision, ok := e.resolveFlow(e.flowFromEndpointID("udp", r.ID()))
 	if !ok {
 		return false
 	}
