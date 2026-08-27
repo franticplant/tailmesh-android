@@ -259,3 +259,50 @@ func TestSetPolicyJSONRejectsGarbage(t *testing.T) {
 		t.Fatal("expected a parse error")
 	}
 }
+
+// Regression guard for the exact bug class this package already caught once
+// (Phase 1's UDP DNS wrapper): a "keep LAN traffic direct" rule must never
+// swallow Tailscale's own real address space, or real Tailscale traffic would
+// silently misroute direct instead of through the tailnet.
+func TestDefaultLANPrefixesExcludeRealTailscaleSpace(t *testing.T) {
+	for _, pfx := range DefaultLANPrefixes() {
+		if pfx.Overlaps(RealTailscaleIPv6Prefix) {
+			t.Fatalf("LAN prefix %v overlaps real Tailscale ULA space %v", pfx, RealTailscaleIPv6Prefix)
+		}
+		if pfx.Overlaps(RealTailscaleIPv4Prefix) {
+			t.Fatalf("LAN prefix %v overlaps real Tailscale CGNAT space %v", pfx, RealTailscaleIPv4Prefix)
+		}
+	}
+}
+
+// A LAN-exclusion rule placed ahead of app-binding rules in the policy must
+// win regardless of how an app is otherwise routed - this is the ordering
+// UpstreamPolicyApplier/BuildAppBindingPolicyJSON relies on.
+func TestLANExclusionRuleWinsOverLaterAppBinding(t *testing.T) {
+	e := NewEngine(t.TempDir(), &MockCallback{})
+	p := Policy{
+		Rules: []Rule{
+			{
+				Name:     "LAN traffic stays direct",
+				Selector: Selector{DstPrefixes: DefaultLANPrefixes()},
+				Action:   ActionDirect,
+			},
+			{
+				Name:     "app binding",
+				Selector: Selector{AppUIDs: []int32{1000}},
+				Action:   ActionRoute,
+				Upstream: "proxy",
+			},
+		},
+	}
+	if err := e.SetPolicy(p); err != nil {
+		t.Fatalf("SetPolicy: %v", err)
+	}
+	rule, _, ok := e.matchPolicy(flow("tcp", "192.168.1.5:443", 1000))
+	if !ok {
+		t.Fatal("expected the LAN rule to match")
+	}
+	if rule.Action != ActionDirect {
+		t.Fatalf("action = %q, want direct (LAN rule should win over the later app binding)", rule.Action)
+	}
+}

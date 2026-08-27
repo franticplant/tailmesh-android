@@ -283,7 +283,15 @@ func (e *MultiProxyEngine) SetUIDResolver(r MultiProxyUIDResolver) {
 // for ordinary non-tailnet traffic. Pass the direct upstream's id to have
 // unbound apps bypass the VPN, or leave it empty to keep today's behaviour of
 // falling through to subnet routes and the exit-node tailnet.
-func BuildAppBindingPolicyJSON(bindingsJSON, defaultUpstream string) (string, error) {
+// excludeLAN, when true, prepends a rule sending traffic to well-known local/
+// private destinations (multiproxy.DefaultLANPrefixes) direct, ahead of every
+// binding below - so LAN reachability (a printer, a NAS, a dev server on the
+// same network) survives an app being routed through a proxy or tunnel,
+// unless that app is explicitly bound to something else that itself names a
+// LAN destination (which cannot happen through this builder, since bindings
+// here are per-app, not per-destination - a future per-app "still tunnel LAN
+// traffic" override would need its own rule ahead of this one).
+func BuildAppBindingPolicyJSON(bindingsJSON, defaultUpstream string, excludeLAN bool) (string, error) {
 	var bindings []struct {
 		AppUID   int32  `json:"appUid"`
 		Upstream string `json:"upstream"`
@@ -295,6 +303,13 @@ func BuildAppBindingPolicyJSON(bindingsJSON, defaultUpstream string) (string, er
 	}
 
 	policy := multiproxy.Policy{}
+	if excludeLAN {
+		policy.Rules = append(policy.Rules, multiproxy.Rule{
+			Name:     "LAN traffic stays direct",
+			Selector: multiproxy.Selector{DstPrefixes: multiproxy.DefaultLANPrefixes()},
+			Action:   multiproxy.ActionDirect,
+		})
+	}
 	for _, b := range bindings {
 		if b.Upstream == "" {
 			continue

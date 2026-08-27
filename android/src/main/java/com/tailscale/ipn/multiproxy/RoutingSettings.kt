@@ -44,9 +44,25 @@ class RoutingSettings(context: Context) {
       prefs.edit().putBoolean(KEY_BROAD_CAPTURE, value).apply()
     }
 
+  /**
+   * Whether traffic to well-known local/private destinations (a printer, a NAS, a dev server on
+   * the same network) stays direct instead of following an app's or the default route.
+   *
+   * On by default: LAN reachability breaking because an app got routed through a remote proxy is
+   * the more surprising failure mode. This is a single global choice today - there is no per-app
+   * override yet to deliberately tunnel LAN traffic for one app (e.g. to reach a remote LAN
+   * through a WireGuard upstream); turning this off entirely is the only way to get that today.
+   */
+  var lanExclusionEnabled: Boolean
+    get() = prefs.getBoolean(KEY_LAN_EXCLUSION, true)
+    set(value) {
+      prefs.edit().putBoolean(KEY_LAN_EXCLUSION, value).apply()
+    }
+
   companion object {
     private const val PREFS_NAME = "unencrypted"
     private const val KEY_DEFAULT_UPSTREAM = "multiproxyDefaultUpstream"
     private const val KEY_BROAD_CAPTURE = "multiproxyBroadCapture"
+    private const val KEY_LAN_EXCLUSION = "multiproxyLanExclusion"
   }
 }

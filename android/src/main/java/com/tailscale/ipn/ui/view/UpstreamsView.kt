@@ -63,6 +63,7 @@ fun UpstreamsView(
   val defaultUpstreamId by model.defaultUpstreamId.collectAsState()
   val errorMessage by model.errorMessage.collectAsState()
   val broadCaptureEnabled by model.broadCaptureEnabled.collectAsState()
+  val lanExclusionEnabled by model.lanExclusionEnabled.collectAsState()
   val liveStats by MultiProxySessionCoordinator.upstreamStats.collectAsState()
 
   var editing by remember { mutableStateOf<Upstream?>(null) }
@@ -148,6 +149,21 @@ fun UpstreamsView(
               Switch(
                   checked = broadCaptureEnabled,
                   onCheckedChange = { model.setBroadCaptureEnabled(it) },
+              )
+            },
+        )
+        Lists.ItemDivider()
+      }
+
+      item("lanExclusion") {
+        ListItem(
+            modifier = Modifier.fillMaxWidth(),
+            headlineContent = { Text(stringResource(R.string.lan_exclusion_title)) },
+            supportingContent = { Text(stringResource(R.string.lan_exclusion_explanation)) },
+            trailingContent = {
+              Switch(
+                  checked = lanExclusionEnabled,
+                  onCheckedChange = { model.setLanExclusionEnabled(it) },
               )
             },
         )

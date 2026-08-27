@@ -143,7 +143,8 @@ class UpstreamPolicyApplier(
 
     val policy =
         try {
-          Libtailscale.buildAppBindingPolicyJSON(entries.toString(), defaultUpstream)
+          Libtailscale.buildAppBindingPolicyJSON(
+              entries.toString(), defaultUpstream, settings.lanExclusionEnabled)
         } catch (e: Exception) {
           TSLog.e(TAG, "could not build routing policy: $e")
           return

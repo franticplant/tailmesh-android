@@ -63,6 +63,9 @@ class UpstreamRoutingViewModel : ViewModel() {
   /** Whether the Multi-Tailnet VPN captures ordinary internet and LAN traffic. Off by default. */
   val broadCaptureEnabled: MutableStateFlow<Boolean> = MutableStateFlow(settings.broadCaptureEnabled)
 
+  /** Whether LAN-destination traffic stays direct regardless of routing. On by default. */
+  val lanExclusionEnabled: MutableStateFlow<Boolean> = MutableStateFlow(settings.lanExclusionEnabled)
+
   /** Surfaces a failed save to the screen that asked for it. */
   val errorMessage: MutableStateFlow<String?> = MutableStateFlow(null)
 
@@ -253,6 +256,18 @@ class UpstreamRoutingViewModel : ViewModel() {
           .setAction(com.tailscale.ipn.IPNService.ACTION_RESTART_VPN)
       session.app.startService(intent)
     }
+  }
+
+  /**
+   * Turns the LAN-stays-direct default rule on or off.
+   *
+   * Unlike [setBroadCaptureEnabled], this is a policy change the live engine picks up immediately
+   * via [applyNow] - it does not touch what the TUN captures, only where captured LAN traffic goes.
+   */
+  fun setLanExclusionEnabled(enabled: Boolean) {
+    settings.lanExclusionEnabled = enabled
+    lanExclusionEnabled.value = enabled
+    viewModelScope.launch { applyNow() }
   }
 
   fun bindApp(packageName: String, upstreamId: String) {

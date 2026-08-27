@@ -290,3 +290,27 @@ func (e *Engine) PolicyJSON() string {
 	}
 	return string(b)
 }
+
+// DefaultLANPrefixes lists the well-known local/private destination ranges a
+// "keep LAN traffic off the tunnel" rule should match: RFC 1918 private space,
+// loopback, link-local, and multicast, for both address families.
+//
+// This deliberately does not include the whole IPv6 ULA block (fc00::/7):
+// Tailscale's own real address space (RealTailscaleIPv6Prefix,
+// fd7a:115c:a1e0::/48) lives inside it, and a rule that excluded all of ULA
+// would silently misroute real Tailscale traffic along with genuine LAN
+// traffic. Only the specific ranges below are "local" in the sense this rule
+// means.
+func DefaultLANPrefixes() []netip.Prefix {
+	return []netip.Prefix{
+		netip.MustParsePrefix("10.0.0.0/8"),
+		netip.MustParsePrefix("172.16.0.0/12"),
+		netip.MustParsePrefix("192.168.0.0/16"),
+		netip.MustParsePrefix("127.0.0.0/8"),
+		netip.MustParsePrefix("169.254.0.0/16"),
+		netip.MustParsePrefix("224.0.0.0/4"),
+		netip.MustParsePrefix("::1/128"),
+		netip.MustParsePrefix("fe80::/10"),
+		netip.MustParsePrefix("ff00::/8"),
+	}
+}

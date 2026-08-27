@@ -793,8 +793,8 @@ correctness bug, not a behaviour change.
    `UpstreamPolicyApplier` defaulting unbound apps to the direct upstream
    when it is on, so turning it on never by itself changes what an unbound
    app can reach. `INSTRUMENTATION-OR-EMULATOR-TESTED`. LAN-destination
-   default-exclusion behaviour under broad capture is separate, not-yet-built
-   work (Phase 3 of `eventual-humming-beacon.md`).
+   default-exclusion behaviour under broad capture is now closed - see gap 9
+   below.
 8. ~~`Provider.Ready()` was a bare bool with no per-upstream stats or
    history; a degraded upstream failed silently from the user's point of
    view.~~ **Closed** - see `validation_and_gaps.md` §52. Every real dial
@@ -808,3 +808,20 @@ correctness bug, not a behaviour change.
    closed port went from "Ready" to a live "N succeeded, M failed" with the
    real dial error, on-device. Byte counts currently cover TCP flows only,
    not DNS forwards or UDP associations.
+9. ~~With broad capture on, LAN destinations (a printer, a NAS, a dev
+   server) would follow whatever route an app or the default route pointed
+   at, same as any other destination - there was no way to keep LAN
+   reachability working while routing general internet traffic
+   elsewhere.~~ **Closed, partially** - see `validation_and_gaps.md` §54.
+   `RoutingSettings.lanExclusionEnabled` (on by default) prepends an
+   `ActionDirect` rule over `multiproxy.DefaultLANPrefixes()` ahead of every
+   per-app binding, via a "Keep LAN traffic direct" switch on the Proxies &
+   tunnels screen; a policy-only change, applied live with no VPN restart.
+   `UNIT-TESTED` (rule-ordering and the ULA/real-Tailscale non-overlap
+   guard) and `ANDROID-BUILT`; the toggle itself is
+   `INSTRUMENTATION-OR-EMULATOR-TESTED` (renders correctly, correct
+   defaults), but a live device trace of the rule winning over a
+   *configured, non-Direct* default upstream was not done. Still only a
+   **global** on/off, not the per-app override ("still tunnel LAN traffic
+   for this one app") the original plan described - that needs a schema
+   change to `AppBinding` and was scoped out of this pass.

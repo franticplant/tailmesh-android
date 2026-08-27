@@ -2091,6 +2091,86 @@ immediately after and the route table was unaffected - read as emulator
 resource pressure from a long debugging session, not a capture-related
 regression, but noted here rather than silently discarded.
 
+## 54. Added: LAN/local traffic exclusion, toggleable (2026-08-27)
+
+**BEFORE:** §53's broad capture had no exception for local/private
+destinations - once `0.0.0.0/0`/`::/0` were captured, a printer, a NAS, or a
+dev server on the same network would follow whatever route an app or the
+default route pointed at (a remote SOCKS5/WireGuard upstream, potentially),
+exactly like any other destination. There was no way to keep LAN
+reachability working while still routing general internet traffic elsewhere.
+
+**NEW:** `multiproxy.DefaultLANPrefixes()` (`policy.go`, new) lists the
+well-known private/local ranges - `10.0.0.0/8`, `172.16.0.0/12`,
+`192.168.0.0/16`, `127.0.0.0/8`, `169.254.0.0/16` (link-local),
+`224.0.0.0/4` (multicast) for v4; `::1/128`, `fe80::/10`, `ff00::/8` for v6.
+Deliberately *not* the whole IPv6 ULA block (`fc00::/7`): Tailscale's own
+real address space (`RealTailscaleIPv6Prefix`, `fd7a:115c:a1e0::/48`) lives
+inside ULA, and excluding all of it would silently misroute real Tailscale
+traffic as "local" - the exact bug class §52's UDP-wrapping regression
+already taught this codebase to watch for, so it is now also a standing Go
+test (`TestDefaultLANPrefixesExcludeRealTailscaleSpace`, asserts no LAN
+prefix overlaps either `RealTailscaleIPv6Prefix` or `RealTailscaleIPv4Prefix`).
+
+`BuildAppBindingPolicyJSON` (`multiproxy_policy_facade.go`) gained an
+`excludeLAN bool` parameter; when true it prepends an `ActionDirect` rule
+matching `DefaultLANPrefixes()` ahead of every per-app binding rule, so it
+wins regardless of how an app is otherwise routed (`TestLANExclusionRuleWinsOverLaterAppBinding`
+proves the ordering, not just the prefix list). `RoutingSettings.lanExclusionEnabled`
+(new, **on by default** - unlike broad capture, the safer default here is to
+preserve LAN reachability) drives it via a new "Keep LAN traffic direct"
+switch on the Proxies & tunnels screen. Unlike broad capture, this is a
+policy-only change (`UpstreamRoutingViewModel.setLanExclusionEnabled` calls
+`applyNow()`), not a route-table change, so it takes effect on the live
+engine immediately with no VPN restart.
+
+**Known limitation, deliberate:** this phase implements only a **global**
+on/off toggle, not the plan's full per-app override ("still tunnel LAN
+traffic for this one app," e.g. to reach a remote LAN through a WireGuard
+upstream). That needs a schema change to `AppBinding` to carry a per-app
+override flag; scoped out here as added complexity beyond what was asked
+for this pass. Turning the global toggle off is the only way to get
+LAN traffic tunneled today, for every app at once.
+
+**WHY:** LAN reachability breaking because an app got routed through a
+remote proxy is a much more surprising failure mode than the reverse, so
+this defaults on and ships in the same pass as broad capture rather than
+after it - broad capture alone would otherwise have no safety net for the
+in-between period before this landed.
+
+**Evidence (`ANDROID-BUILT`, `UNIT-TESTED`):**
+- `go build`/`go vet` for `GOOS=android GOARCH=arm64` and
+  `go test ./libtailscale/multiproxy/...` (excluding this package's two
+  pre-existing tests that hang in this sandboxed environment regardless of
+  this change - `TestWireGuardTunnelCarriesTCP`,
+  `TestWireGuardChainedOverSOCKS5`, `TestResolveRouteConcurrency`; confirmed
+  via `git stash -u` that the same three hang identically on the
+  pre-Phase-3 baseline, so this is environmental, not a regression) all
+  pass, including the two new tests above.
+- Built clean from `make libtailscale && make apk`, installed on the
+  `sdk_gphone64_x86_64` emulator. Screenshots confirm both the §53 broad
+  capture switch and the new "Keep LAN traffic direct" switch render
+  correctly on the Proxies & tunnels screen, with LAN exclusion correctly
+  on by default and broad capture correctly off by default; toggling broad
+  capture on worked without a crash and triggered the expected VPN restart.
+- The originally-attempted test note file at
+  `libtailscale/multiproxy_policy_facade_test.go` was removed: package
+  `libtailscale` cannot be built or tested on this host at all (it imports
+  Android-only symbols like `netns.SetAndroidProtectFunc`; the project's own
+  `make go-test` target already excludes this exact package for that
+  reason). The equivalent, host-testable coverage was written directly
+  against `multiproxy.Policy`/`multiproxy.DefaultLANPrefixes` instead.
+
+**Not verified here:** a real device trace of the LAN rule actually winning
+over a *configured, non-Direct* default upstream (e.g., confirming a LAN
+destination stays direct while general traffic tunnels through a live
+SOCKS5 upstream) - standing up a local SOCKS5 listener for this device pass
+was declined by this session's own tooling as an unreviewed open network
+listener, and was not pursued further given the ordering is already proven
+at the policy-engine level by `TestLANExclusionRuleWinsOverLaterAppBinding`.
+The per-app override described above as a known limitation is also,
+consequently, not built or tested at all.
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.
