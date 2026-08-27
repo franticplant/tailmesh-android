@@ -575,6 +575,14 @@ If Android blocks non-VPN traffic under lockdown, that can conflict with synthet
 
 Do not add default routes merely to make the lockdown test green. Establish/document compatibility semantics explicitly.
 
+### Update (§53/§54, 2026-08-27)
+
+This gap's premise is now only half true. §53 added an opt-in broad-capture toggle (`0.0.0.0/0`/`::/0` routes) with Direct-by-default for unbound apps, and §54 added LAN/local exclusion on top of it. With broad capture **on**, every app's traffic is captured into the tun — including traffic that resolves to `ActionDirect` — so lockdown's requirement ("no traffic leaves except through the active VPN") is satisfied: `ActionDirect` dials out from our own engine process using the same `VpnService.protect()` mechanism tailnet sockets use, and Android exempts the active VPN app's own protected sockets from lockdown enforcement (only *other* apps' unprotected sockets are blocked). The app itself never bypasses the tun; only our engine's internal upstream connections do, and that's allowed.
+
+With broad capture **off** (still the default), the original gap stands unchanged: ordinary Internet traffic never reaches our tun at all, so under lockdown Android blocks it outright, since from the system's point of view it's genuine non-VPN traffic. This is not something to route around by silently forcing broad capture on — that's the user's toggle to flip, not ours to override.
+
+**Remaining work:** this reasoning is not yet device-verified. No lockdown test has been run this session in either capture mode. Recommended before closing this gap for good: enable lockdown on the emulator/device, confirm (a) broad-capture-on lets an app's ordinary browsing work normally and our own upstream dials aren't blocked, and (b) broad-capture-off correctly shows Android blocking ordinary Internet traffic (expected, not a bug) while synthetic/tailnet traffic through the tun still works.
+
 ## 18. Gap: internal subnet/exit APIs exceed Android capture surface
 
 Go implements:
