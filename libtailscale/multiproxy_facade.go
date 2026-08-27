@@ -21,6 +21,14 @@ type MultiProxyCallback interface {
 	// comma-separated list of every tailnet identifier that claimed the
 	// address; chosenTailnetID is the one that was used.
 	OnAddressCrossover(ip, candidateTailnetIDsCSV, chosenTailnetID string)
+
+	// OnUpstreamHealthChanged fires when an upstream's dial-level readiness
+	// changes: the first failure after a run of successes, or the first
+	// success/ready result after a run of failures. reason is the triggering
+	// dial's error string, or empty on a recovery. Best-effort - GetUpstreamStatsJSON
+	// (multiproxy_policy_facade.go) is the reliable source of truth for
+	// anything this drops.
+	OnUpstreamHealthChanged(upstreamID string, ready bool, reason string)
 }
 
 type MultiProxyEngine struct {

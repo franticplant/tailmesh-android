@@ -107,6 +107,26 @@ func (e *MultiProxyEngine) GetUpstreamsJSON() string {
 	return string(b)
 }
 
+// GetUpstreamStatsJSON reports live per-upstream dial and byte counters, as
+// [{"id","kind","ready","via","dialAttempts","dialSuccesses","dialFailures",
+//   "notReadyCount","bytesIn","bytesOut","lastLatencyMs","lastError",
+//   "lastErrorAtMillis","lastSuccessAtMillis","lastAttemptAtMillis"}...]
+// ordered by id. Every count is a real observation from an actual dial or
+// readiness check, not a sample or an estimate - see stats.go. An upstream
+// that has never been dialed appears with every counter at zero, not absent,
+// so the UI does not need to distinguish "no data yet" from "not present".
+func (e *MultiProxyEngine) GetUpstreamStatsJSON() string {
+	infos := e.inner.UpstreamStatsSnapshot()
+	if infos == nil {
+		infos = []multiproxy.UpstreamStatsInfo{}
+	}
+	b, err := json.Marshal(infos)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
+}
+
 // AddSOCKS5Upstream registers a SOCKS5 proxy as an upstream, replacing any
 // existing upstream with the same id.
 //

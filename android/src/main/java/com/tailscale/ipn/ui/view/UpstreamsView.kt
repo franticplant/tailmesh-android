@@ -37,6 +37,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.tailscale.ipn.MultiProxySessionCoordinator
+import com.tailscale.ipn.UpstreamStatSnapshot
 import com.tailscale.ipn.R
 import com.tailscale.ipn.multiproxy.db.Upstream
 import com.tailscale.ipn.multiproxy.db.UpstreamKind
@@ -60,6 +62,7 @@ fun UpstreamsView(
   val routable by model.routableUpstreams.collectAsState()
   val defaultUpstreamId by model.defaultUpstreamId.collectAsState()
   val errorMessage by model.errorMessage.collectAsState()
+  val liveStats by MultiProxySessionCoordinator.upstreamStats.collectAsState()
 
   var editing by remember { mutableStateOf<Upstream?>(null) }
   var creating by remember { mutableStateOf(false) }
@@ -157,6 +160,7 @@ fun UpstreamsView(
       } else {
         items(upstreams, key = { it.id }) { upstream ->
           val viaLabel = routable.firstOrNull { it.id == upstream.via }?.label
+          val stats = liveStats[upstream.id]
           ListItem(
               modifier = Modifier.fillMaxWidth(),
               headlineContent = { Text(upstream.label, fontWeight = FontWeight.SemiBold) },
@@ -174,6 +178,7 @@ fun UpstreamsView(
                         fontSize = MaterialTheme.typography.bodySmall.fontSize,
                     )
                   }
+                  UpstreamHealthLine(upstream.enabled, stats)
                 }
               },
               trailingContent = {
@@ -192,6 +197,38 @@ fun UpstreamsView(
           Lists.ItemDivider()
         }
       }
+    }
+  }
+}
+
+/**
+ * One line of live status under an upstream row: ready/degraded plus its dial counts and last
+ * error, from the engine's real-time per-upstream stats (see stats.go). A switched-off upstream
+ * shows nothing here - there is nothing live to report - and one that has never been dialed shows
+ * only "Ready", since zero attempts is not itself a problem worth surfacing.
+ */
+@Composable
+private fun UpstreamHealthLine(enabled: Boolean, stats: UpstreamStatSnapshot?) {
+  if (!enabled || stats == null) return
+  val fontSize = MaterialTheme.typography.bodySmall.fontSize
+  val degraded = !stats.ready || stats.dialFailures > 0
+  val color = if (degraded) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondary
+
+  Column {
+    val summary =
+        if (stats.dialAttempts == 0L) {
+          if (stats.ready) stringResource(R.string.upstream_status_ready)
+          else stringResource(R.string.upstream_status_not_ready)
+        } else {
+          stringResource(
+              R.string.upstream_status_counts,
+              stats.dialSuccesses,
+              stats.dialFailures,
+          )
+        }
+    Text(summary, color = color, fontSize = fontSize)
+    if (degraded && stats.lastError.isNotEmpty()) {
+      Text(stats.lastError, color = color, fontSize = fontSize)
     }
   }
 }

@@ -376,18 +376,21 @@ func (e *Engine) handleTCPConnection(r *tcp.ForwarderRequest) {
 		gonetConn := gonet.NewTCPConn(wq, ep)
 		defer gonetConn.Close()
 
+		stats := e.statsFor(decision.UpstreamID)
 		var wg sync.WaitGroup
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			io.Copy(conn, gonetConn)
+			n, _ := io.Copy(conn, gonetConn)
+			stats.addBytesOut(n)
 			if cw, ok := conn.(interface{ CloseWrite() error }); ok {
 				cw.CloseWrite()
 			}
 		}()
 		go func() {
 			defer wg.Done()
-			io.Copy(gonetConn, conn)
+			n, _ := io.Copy(gonetConn, conn)
+			stats.addBytesIn(n)
 			gonetConn.CloseRead()
 		}()
 		wg.Wait()

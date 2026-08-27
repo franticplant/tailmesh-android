@@ -42,6 +42,15 @@ type EngineCallback interface {
 	// error, but the user should be able to see it happened - a silent wrong
 	// choice here is a worse failure mode than a visible one.
 	OnAddressCrossover(ip, candidateTailnetIDsCSV, chosenTailnetID string)
+
+	// OnUpstreamHealthChanged fires when an upstream's dial-level readiness
+	// changes: the first failure after a run of successes, or the first
+	// success (or first ready result) after a run of failures/not-ready
+	// observations. reason is the triggering dial's error string, or empty on
+	// a recovery. This is a best-effort, near-real-time notification (see
+	// events below) - UpstreamStatsSnapshot (stats.go) is the reliable source
+	// of truth for anything this channel drops.
+	OnUpstreamHealthChanged(upstreamID string, ready bool, reason string)
 }
 
 type subnetRoute struct {
@@ -55,6 +64,7 @@ const (
 	eventPeerDiscovered engineEventKind = iota
 	eventTailnetStateChange
 	eventAddressCrossover
+	eventUpstreamHealthChanged
 )
 
 type engineEvent struct {
@@ -69,6 +79,11 @@ type engineEvent struct {
 	crossoverIP         string
 	crossoverCandidates string
 	crossoverChosen     string
+
+	// used by eventUpstreamHealthChanged only
+	healthUpstreamID string
+	healthReady      bool
+	healthReason     string
 }
 
 type tsnetUpstream struct {
@@ -132,6 +147,10 @@ type Engine struct {
 	// Tailnets stay in the map above with their own lifecycle; lookupProvider
 	// presents both behind one interface.
 	upstreams *upstreamRegistry
+
+	// stats holds live per-upstream dial/byte counters, recorded by every real
+	// dial regardless of call site. See stats.go.
+	stats *statsRegistry
 
 	// policy is the ordered rule list consulted for flows that synthetic
 	// addressing has not already bound to a specific upstream.
@@ -220,6 +239,7 @@ func NewEngineWithStateStore(dataDir string, cb EngineCallback, stateStoreFor fu
 		realIPIndex:      make(map[netip.Addr][]TargetRecord),
 
 		upstreams: newUpstreamRegistry(),
+		stats:     newStatsRegistry(),
 		policy:    &policyStore{},
 	}
 
@@ -263,6 +283,8 @@ func (e *Engine) dispatchOneEvent(cb EngineCallback, ev engineEvent) {
 		cb.OnPeerDiscovered(ev.hostname, ev.ipv4, ev.ipv6, ev.tailnetID)
 	case eventAddressCrossover:
 		cb.OnAddressCrossover(ev.crossoverIP, ev.crossoverCandidates, ev.crossoverChosen)
+	case eventUpstreamHealthChanged:
+		cb.OnUpstreamHealthChanged(ev.healthUpstreamID, ev.healthReady, ev.healthReason)
 	default:
 		cb.OnTailnetStateChange(ev.tailnetID, ev.stateStr)
 	}
@@ -324,6 +346,26 @@ func (e *Engine) enqueueAddressCrossover(ip string, candidates []UpstreamID, cho
 		crossoverIP:         ip,
 		crossoverCandidates: strings.Join(strs, ","),
 		crossoverChosen:     string(chosen),
+	}:
+	default:
+	}
+}
+
+// enqueueUpstreamHealthEvent records that an upstream's readiness changed.
+// See UpstreamStats.setReady (stats.go): callers only reach here on an actual
+// transition, so this does not need its own throttling.
+func (e *Engine) enqueueUpstreamHealthEvent(id UpstreamID, ready bool, reason string) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.state != StateOpen {
+		return
+	}
+	select {
+	case e.events <- engineEvent{
+		kind:             eventUpstreamHealthChanged,
+		healthUpstreamID: string(id),
+		healthReady:      ready,
+		healthReason:     reason,
 	}:
 	default:
 	}

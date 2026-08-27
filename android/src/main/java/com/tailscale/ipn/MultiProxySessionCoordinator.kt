@@ -23,6 +23,31 @@ private data class TailnetRuntimeSnapshot(
     val machineName: String = "",
 )
 
+/**
+ * Live per-upstream dial/byte counters, decoded from `Engine.GetUpstreamStatsJSON()`.
+ *
+ * Every count here is a real observation from an actual dial or readiness check made by the
+ * running engine - not a sample or an estimate. See libtailscale/multiproxy/stats.go.
+ */
+@Serializable
+data class UpstreamStatSnapshot(
+    val id: String,
+    val kind: String = "",
+    val ready: Boolean = false,
+    val via: String = "",
+    val dialAttempts: Long = 0,
+    val dialSuccesses: Long = 0,
+    val dialFailures: Long = 0,
+    val notReadyCount: Long = 0,
+    val bytesIn: Long = 0,
+    val bytesOut: Long = 0,
+    val lastLatencyMs: Long = 0,
+    val lastError: String = "",
+    val lastErrorAtMillis: Long = 0,
+    val lastSuccessAtMillis: Long = 0,
+    val lastAttemptAtMillis: Long = 0,
+)
+
 object MultiProxySessionCoordinator {
     private val mutationMutex = Mutex()
     private val json = Json { ignoreUnknownKeys = true }
@@ -44,6 +69,21 @@ object MultiProxySessionCoordinator {
     private val _addressCrossovers = MutableStateFlow<List<AddressCrossover>>(emptyList())
     val addressCrossovers: StateFlow<List<AddressCrossover>> = _addressCrossovers.asStateFlow()
 
+    // Live per-upstream stats, keyed by upstream id. Polled on the same 1s
+    // cadence as runtime state, since GetUpstreamStatsJSON is a cheap
+    // snapshot read (see stats.go) - no push mechanism is relied on as the
+    // source of truth, only as a near-real-time nudge (see
+    // recordUpstreamHealthChange below).
+    private val _upstreamStats = MutableStateFlow<Map<String, UpstreamStatSnapshot>>(emptyMap())
+    val upstreamStats: StateFlow<Map<String, UpstreamStatSnapshot>> = _upstreamStats.asStateFlow()
+
+    // Upstream health transitions: a best-effort, near-real-time log of when an
+    // upstream's dial-level readiness flipped, alongside the polled stats above
+    // which are the reliable source of truth. Same accumulating-log shape as
+    // addressCrossovers, for the same reason: more than one is worth seeing.
+    private val _upstreamHealthEvents = MutableStateFlow<List<UpstreamHealthEvent>>(emptyList())
+    val upstreamHealthEvents: StateFlow<List<UpstreamHealthEvent>> = _upstreamHealthEvents.asStateFlow()
+
     private var boundSession: MultiProxySession? = null
     private var pollJob: Job? = null
 
@@ -63,6 +103,7 @@ object MultiProxySessionCoordinator {
         pollJob = session.app.applicationScope.launch {
             while (true) {
                 refreshRuntimeState(session)
+                refreshUpstreamStats(session)
                 delay(1000)
             }
         }
@@ -265,6 +306,39 @@ object MultiProxySessionCoordinator {
         }
     }
 
+    private fun refreshUpstreamStats(session: MultiProxySession) {
+        val engine = session.engine
+        if (engine == null) {
+            _upstreamStats.value = emptyMap()
+            return
+        }
+        try {
+            val snapshots = json.decodeFromString<List<UpstreamStatSnapshot>>(engine.upstreamStatsJSON)
+            _upstreamStats.value = snapshots.associateBy { it.id }
+        } catch (e: Exception) {
+            TSLog.e("MultiProxySession", "Failed to decode upstream stats: ${e.message}")
+        }
+    }
+
+    private const val maxUpstreamHealthEvents = 50
+
+    /** Called from the engine's OnUpstreamHealthChanged callback (IPNService.kt). */
+    fun recordUpstreamHealthChange(upstreamId: String, ready: Boolean, reason: String) {
+        val message = if (ready) {
+            "Upstream $upstreamId is reachable again"
+        } else {
+            "Upstream $upstreamId became unreachable${if (reason.isNotEmpty()) ": $reason" else ""}"
+        }
+        TSLog.w("MultiProxySession", message)
+        _upstreamHealthEvents.value =
+            (_upstreamHealthEvents.value + UpstreamHealthEvent(
+                upstreamId = upstreamId,
+                ready = ready,
+                reason = reason,
+                timestampMillis = System.currentTimeMillis(),
+            )).takeLast(maxUpstreamHealthEvents)
+    }
+
     private suspend fun failProvisioning(session: MultiProxySession, id: String, message: String) {
         val current = session.profileRepository.getProfileImmediate(id) ?: return
         try {
@@ -315,5 +389,12 @@ data class AddressCrossover(
     val ip: String,
     val candidateTailnetIDs: List<String>,
     val chosenTailnetID: String,
+    val timestampMillis: Long,
+)
+
+data class UpstreamHealthEvent(
+    val upstreamId: String,
+    val ready: Boolean,
+    val reason: String,
     val timestampMillis: Long,
 )

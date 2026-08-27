@@ -14,12 +14,19 @@ import (
 )
 
 type MockCallback struct {
-	mu         sync.Mutex
-	crossovers []crossoverCall
+	mu           sync.Mutex
+	crossovers   []crossoverCall
+	healthEvents []healthCall
 }
 
 type crossoverCall struct {
 	ip, candidates, chosen string
+}
+
+type healthCall struct {
+	upstreamID string
+	ready      bool
+	reason     string
 }
 
 func (m *MockCallback) OnPeerDiscovered(h, v4, v6, t string) {}
@@ -30,10 +37,22 @@ func (m *MockCallback) OnAddressCrossover(ip, candidates, chosen string) {
 	m.crossovers = append(m.crossovers, crossoverCall{ip, candidates, chosen})
 }
 
+func (m *MockCallback) OnUpstreamHealthChanged(upstreamID string, ready bool, reason string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.healthEvents = append(m.healthEvents, healthCall{upstreamID, ready, reason})
+}
+
 func (m *MockCallback) crossoverCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.crossovers)
+}
+
+func (m *MockCallback) healthEventCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.healthEvents)
 }
 
 // waitForCrossoverCount polls up to a second for the async event-dispatch

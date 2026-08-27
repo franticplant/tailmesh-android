@@ -1892,6 +1892,124 @@ probe and rendered `NAT Connection Type: Relay Only`, `IPv4 Active` /
 report shape `NetcheckReportJSON` defines, populated with real data, not an
 `error` field.
 
+## 52. Added: real per-upstream observability (2026-08-27)
+
+**BEFORE:** `Provider.Ready() bool` was a bare boolean with no reason; nothing
+in `libtailscale/multiproxy` counted dial attempts, successes, failures, or
+bytes per upstream. The only observability was unstructured
+`log.Printf("[flow-%d] ...")` lines in `nat_router.go`, not queryable by the
+UI. A degraded upstream (wrong address, dead proxy) failed silently from the
+user's point of view - policy would fail closed, but nothing said why or
+which upstream was at fault.
+
+**NEW:** `libtailscale/multiproxy/stats.go` adds a `statsRegistry` (one
+`UpstreamStats` per upstream ID, atomic counters + a mutex-guarded
+last-error/timestamps block) and a `statsProvider` decorator. `readyProvider`
+(`upstream.go`) - the single funnel every real dial passes through, whether
+from the flow router, DNS forwarding, or a chained upstream's own transport -
+now wraps the `Provider` it returns in `statsProvider`, so every dial is
+recorded at one place regardless of call site, and a rule naming an upstream
+that exists but is not ready is recorded too (`recordNotReady`), distinctly
+from an attempted-and-failed dial.
+
+Byte counters are **not** done via a `net.Conn` wrapper - that was tried
+first and reverted (see "what broke" below) - they are instead fed from
+`nat_router.go`'s existing TCP pump loop, which already knows exactly how
+many bytes crossed in each direction from `io.Copy`'s own return value,
+without needing to touch the dialed conn's type at all. This currently
+covers TCP flows only; DNS forwards and UDP associations are not
+byte-counted yet.
+
+A new best-effort event, `OnUpstreamHealthChanged(upstreamID, ready, reason)`,
+fires through the existing `EngineCallback`/`e.events` channel (buffered
+1024, drop-on-full) on a genuine readiness *transition* only - not on every
+dial, which would be noise. `UpstreamStats.ready` has three states
+(`healthUnknown`/`healthReady`/`healthNotReady`), not two: the zero value had
+to be distinct from both outcomes, or an upstream whose very first dial
+failed would coincide with the zero value and never fire "became
+unreachable" (caught by a failing test - see below).
+
+The reliable source of truth is a new pull method,
+`Engine.UpstreamStatsSnapshot()` / `MultiProxyEngine.GetUpstreamStatsJSON()`
+(`multiproxy_policy_facade.go`), following the same JSON-snapshot convention
+as `GetUpstreamsJSON`/`GetTargetsJSON`. It lists every upstream currently
+known, including one that has since been removed but still has recorded
+stats (so its last-known state does not vanish along with the row that
+explained it), with every counter at zero rather than the row being absent
+when nothing has been dialed yet.
+
+On the Kotlin side: `IPNService.kt`'s `MultiProxyCallback` implementation
+gained `onUpstreamHealthChanged`, forwarding to a new
+`MultiProxySessionCoordinator.recordUpstreamHealthChange` (an accumulating
+log, same shape as the existing `addressCrossovers`). The existing 1s poll
+loop (`MultiProxySessionCoordinator.bind`) now also polls
+`engine.upstreamStatsJSON` into a new `upstreamStats` `StateFlow`.
+`UpstreamsView.kt` (Proxies & tunnels) renders it: each upstream row now
+shows "Ready" / "N succeeded, M failed" plus the last error, in the error
+color when degraded (`dialFailures > 0` or `!ready`), matching the app's
+existing degraded-state convention (`MaterialTheme.colorScheme.error`).
+
+**WHY:** This is the most-requested piece of this session's whole
+initiative - "I want good observability... currently network diagnostics
+tab don't even work at all" - and the plan
+(`eventual-humming-beacon.md`) deliberately sequenced it before the
+broad-capture routing change (Phase 2) rather than after: instruments should
+exist before the risky maneuver, not be bolted on afterward once something
+has already gone wrong silently. Feeding byte counters from the TCP pump
+loop instead of a `Dial`-return wrapper is not a style preference; it is the
+fix for a real regression (below) and the safer general pattern, since
+wrapping `net.Conn` risks breaking any downstream code that type-asserts the
+concrete connection type.
+
+**What broke, and what that proves:** wrapping the `net.Conn` returned from
+`Provider.Dial` (to count bytes generically at one place, mirroring the dial
+wrapper) broke `TestForwardedQueryFollowsTheAppsRoute` deterministically -
+plain UDP DNS forwarding started failing with real dial errors. Root cause:
+`github.com/miekg/dns`'s `Conn` type decides datagram- vs. stream-framing by
+type-asserting the underlying `net.Conn` against `*net.UDPConn`; a generic
+wrapper struct is never that concrete type, so the assertion silently failed
+and the library tried to speak length-prefixed TCP framing over a real UDP
+socket. `nat_router.go`'s own TCP pump has an analogous
+`conn.(interface{ CloseWrite() error })` assertion that a wrapper would also
+have broken. The fix was to not wrap `net.Conn` at all - `Dial` returns the
+provider's own conn unchanged - and to compute byte counts from the pump
+loop's own `io.Copy` return value instead. Caught before landing, by running
+the full existing suite rather than only the new tests; recorded here as a
+concrete instance of why "wrap the standard interface generically" is not
+automatically safe when other code already depends on a wrapped value's
+concrete type.
+
+**Evidence:**
+- `UNIT-OR-RACE-TESTED`: `libtailscale/multiproxy/stats_test.go` (new) -
+  dial success/failure/not-ready counters, and the health-changed event
+  firing exactly once per transition (not per dial) across three identical
+  failures followed by a recovery. Full existing suite
+  (`go test ./libtailscale/multiproxy/...`, ~170s, real WireGuard/tsnet
+  tests included) passes clean.
+- `INSTRUMENTATION-OR-EMULATOR-TESTED`: built a debug APK from a clean
+  `make libtailscale && make apk`, installed on the `sdk_gphone64_x86_64`
+  emulator with both tailnets from §50 running in Multi-Tailnet mode. Added
+  a SOCKS5 upstream ("TestProxy") pointed at `127.0.0.1:1` (nothing
+  listening), confirmed the Proxies & tunnels row showed "Ready" with zero
+  attempts before use. Set it as the default route; the engine's own
+  background DoH lookups (the same mechanism proven in §50.2) began dialing
+  it and failing. Within ~7 seconds the row live-updated to "0 succeeded, 31
+  failed" in the app's error color, with the exact real dial error
+  (`socks5: dialing proxy 127.0.0.1:1: dial tcp 127.0.0.1:1: connect:
+  connection refused`) shown underneath - all via the 1s poll of
+  `GetUpstreamStatsJSON`, no manual refresh. Cleared the default route back
+  to "Unchanged"; the row correctly stopped updating and kept showing the
+  last-known 31 failures rather than resetting, confirming stats persist
+  for a since-idled upstream as designed. Deleted the test upstream to leave
+  the device clean.
+- Not verified here: byte counters (no real TCP flow was driven through the
+  test upstream this session, since broad VPN capture - the thing that would
+  let an ordinary app's TCP traffic reach a non-tailnet upstream - is
+  Phase 2, not yet built); the `OnUpstreamHealthChanged` push event's device
+  behavior specifically (the polled JSON path was what was actually observed
+  above; the event is a best-effort nudge, and `UpstreamHealthEvent`'s
+  Kotlin-side accumulating log exists but has no UI surface yet).
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.

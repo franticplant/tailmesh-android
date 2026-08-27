@@ -246,6 +246,13 @@ open class IPNService : VpnService(), libtailscale.IPNService {
                     chosenTailnetID ?: "",
                 )
             }
+            override fun onUpstreamHealthChanged(upstreamID: String?, ready: Boolean, reason: String?) {
+                MultiProxySessionCoordinator.recordUpstreamHealthChange(
+                    upstreamID ?: return,
+                    ready,
+                    reason ?: "",
+                )
+            }
           })
       }
       

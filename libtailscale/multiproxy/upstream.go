@@ -276,12 +276,21 @@ func (e *Engine) lookupProvider(id UpstreamID) (Provider, bool) {
 
 // readyProvider resolves id and requires it to be usable now. Callers that must
 // not silently fall through to a different upstream use this.
+//
+// The Provider it returns is wrapped for stats (stats.go): every real dial
+// through it, from whichever call site, is recorded transparently, so
+// instrumentation lives in one place rather than at each of the several sites
+// that call this.
 func (e *Engine) readyProvider(id UpstreamID) (Provider, bool) {
 	p, ok := e.lookupProvider(id)
-	if !ok || !p.Ready() {
+	if !ok {
 		return nil, false
 	}
-	return p, true
+	if !p.Ready() {
+		e.recordNotReady(id)
+		return nil, false
+	}
+	return e.wrapWithStats(p), true
 }
 
 // RegisterUpstream adds a non-tailnet upstream. Tailnets are added through the
