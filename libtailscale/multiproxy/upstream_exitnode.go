@@ -11,6 +11,7 @@ import (
 	"os"
 	"runtime/debug"
 	"sort"
+	"sync"
 	"time"
 
 	"tailscale.com/ipn"
@@ -48,11 +49,19 @@ type ExitNodeConfig struct {
 }
 
 // ExitNodeRuntime is the live state of one exit-node upstream, mirroring
-// TailnetRuntime.
+// TailnetRuntime - including Wg, which exists for the same reason it does
+// there: tsnet.Server.LocalClient() calls s.Start() internally, so the
+// background goroutine below racing a concurrent disable/forget could call
+// LocalClient() on a *tsnet.Server just after it was Close()'d, restarting
+// it out from under state that is about to be (or already was) deleted.
+// Cancel bounds that window (EditPrefs returns quickly once its context is
+// cancelled) but does not close it; only waiting on Wg before Close()/
+// os.RemoveAll does.
 type ExitNodeRuntime struct {
 	Config  ExitNodeConfig
 	Srv     *tsnet.Server
 	Cancel  context.CancelFunc
+	Wg      *sync.WaitGroup
 	Enabled bool
 }
 
@@ -156,11 +165,19 @@ func (e *Engine) setExitNodeEnabledLocked(identifier string, enabled bool) error
 			rt.Cancel()
 			rt.Cancel = nil
 		}
+		wg := rt.Wg
+		rt.Wg = nil
 		srv := rt.Srv
 		rt.Srv = nil
 		rt.Enabled = false
 		e.mu.Unlock()
 
+		// Cancel already told the EditPrefs goroutine to stop; wait for it to
+		// actually observe that before closing, so it cannot call
+		// LocalClient() (which restarts a closed Server) after Close() ran.
+		if wg != nil {
+			wg.Wait()
+		}
 		if srv != nil {
 			srv.Close()
 		}
@@ -206,6 +223,9 @@ func (e *Engine) setExitNodeEnabledLocked(identifier string, enabled bool) error
 	rt.Enabled = true
 	ctx, cancel := context.WithCancel(context.Background())
 	rt.Cancel = cancel
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+	rt.Wg = wg
 	srv := rt.Srv
 	peerAddr := rt.Config.PeerAddr
 	e.mu.Unlock()
@@ -216,6 +236,7 @@ func (e *Engine) setExitNodeEnabledLocked(identifier string, enabled bool) error
 	// state store, e.g.), so it is bounded and its failure is reported
 	// rather than left to surface later as an unexplained "not ready".
 	go func() {
+		defer wg.Done()
 		editCtx, editCancel := context.WithTimeout(ctx, 10*time.Second)
 		defer editCancel()
 		lc, err := srv.LocalClient()
@@ -265,12 +286,22 @@ func (e *Engine) ForgetExitNodeUpstream(identifier string) error {
 	if rt.Cancel != nil {
 		rt.Cancel()
 	}
-	if rt.Srv != nil {
-		rt.Srv.Close()
-	}
+	wg := rt.Wg
+	srv := rt.Srv
 	delete(e.exitNodes, uid)
 	stateDir := rt.Config.StateDir
 	e.mu.Unlock()
+
+	// See ExitNodeRuntime's Wg doc comment: must wait for the EditPrefs
+	// goroutine to actually stop before Close() (which would otherwise race
+	// its LocalClient() call) and before deleting the state directory out
+	// from under a Server that may still be shutting down.
+	if wg != nil {
+		wg.Wait()
+	}
+	if srv != nil {
+		srv.Close()
+	}
 
 	return os.RemoveAll(stateDir)
 }

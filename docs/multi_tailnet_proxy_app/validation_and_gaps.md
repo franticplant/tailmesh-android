@@ -2665,6 +2665,48 @@ the UI rendering path only (§59.1's screenshots); the actual
 `NeedsMachineAuth` detection path itself is not yet device-verified against
 a real second identity, for the same credential-availability reason as §59.
 
+**§59.3 - two more real bugs found by re-reading this session's own code
+critically, both fixed:**
+
+1. **A main-thread ANR risk.** Both exit-node peer pickers (the tailnet
+   card's "Exit node" dialog in `MultiProxyView.kt`, and the Add-upstream
+   dialog's peer picker in `UpstreamsView.kt`) called
+   `fetchExitNodeCandidates` directly inside `remember{}` during Compose
+   composition. That function crosses the JNI boundary and calls
+   `LocalClient().Status()` with a 5s timeout in Go - a genuine blocking call
+   on the main thread, unlike the plain Kotlin state most `remember{}` reads.
+   Opening either dialog, or switching the selected tailnet, could stall the
+   UI or trip the ANR watchdog. Fixed by moving both to `LaunchedEffect` +
+   `Dispatchers.IO`, matching how `MultiProxySessionCoordinator`'s own
+   equivalent poll loop already runs off the main thread
+   (`applicationScope` is `Dispatchers.Default`, not `Main`).
+2. **A use-after-close race.** `tsnet.Server.LocalClient()` calls `s.Start()`
+   internally - "will start the server if it has not been started yet." The
+   background goroutine `setExitNodeEnabledLocked` spawns to call `EditPrefs`
+   was not tracked by any `WaitGroup`, unlike the equivalent tailnet startup
+   goroutine (`pollTailnetStatus`, tracked via `TailnetRuntime.Wg`). A
+   `ForgetExitNodeUpstream` or disable racing that goroutine could call
+   `srv.Close()` and `os.RemoveAll(stateDir)` while the goroutine was still
+   about to call `srv.LocalClient()` - which would then *restart* the
+   already-closed (and possibly already-deleted-on-disk) server. `Cancel`
+   bounds the race window (`EditPrefs` returns promptly once its context is
+   cancelled) but does not close it, since `Cancel` is called before the
+   goroutine necessarily reaches its first `ctx`-aware call. Added
+   `ExitNodeRuntime.Wg`, mirroring `TailnetRuntime.Wg` exactly: both
+   `setExitNodeEnabledLocked`'s disable path and `ForgetExitNodeUpstream` now
+   wait on it before `Close()`/`RemoveAll`, and `Engine.Close()`'s exit-node
+   teardown loop (which previously had a comment claiming this wait was
+   unnecessary - it was written before Wg existed) now does the same.
+
+**Evidence:** new regression test
+`TestForgetExitNodeUpstreamRacesEnableSafely` - enables a real (if
+unauthenticated) `tsnet.Server`, then immediately forgets it, the exact
+interleaving that used to race; passes clean under `go test -race -count 5`.
+Full `multiproxy` suite re-run under `-race` after these two fixes,
+`UNIT-TESTED` and race-clean. Both UI fixes `ANDROID-BUILT` and
+re-verified `INSTRUMENTATION-OR-EMULATOR-TESTED` on the x86_64 emulator
+build (no crash, dialog still renders correctly, no ANR observed).
+
 **Not yet closed:** whether Tailscale's control plane treats several new
 devices registering from the same account in quick succession as anomalous
 (rate limiting, extra verification) is still an open, real question this

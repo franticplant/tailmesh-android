@@ -153,6 +153,31 @@ func TestSetTailnetExitNodeValidatesPeerAddr(t *testing.T) {
 	}
 }
 
+// Regression test for a real race: enabling an exit node starts a
+// tsnet.Server and a background goroutine that calls LocalClient().EditPrefs
+// on it (setExitNodeEnabledLocked). tsnet.Server.LocalClient() calls
+// s.Start() internally, so if Forget/disable's srv.Close() won the race
+// against that goroutine reaching LocalClient(), the goroutine would
+// restart an already-closed Server out from under state Forget was about to
+// delete. ExitNodeRuntime.Wg exists so Forget waits for that goroutine to
+// actually finish first - this must pass clean under -race.
+func TestForgetExitNodeUpstreamRacesEnableSafely(t *testing.T) {
+	e := NewEngine(t.TempDir(), &MockCallback{})
+	if err := e.AddExitNodeUpstream("exit1", "tn", "key", "100.64.0.5", true); err != nil {
+		t.Fatalf("AddExitNodeUpstream: %v", err)
+	}
+	// No real auth key, so the tsnet.Server sits at NeedsLogin - the
+	// EditPrefs goroutine is still in flight (or about to be) when Forget
+	// runs immediately after, which is exactly the interleaving that used to
+	// race.
+	if err := e.ForgetExitNodeUpstream("exit1"); err != nil {
+		t.Fatalf("ForgetExitNodeUpstream: %v", err)
+	}
+	if _, ok := e.lookupProvider("exit1"); ok {
+		t.Fatal("exit1 should be gone after Forget")
+	}
+}
+
 // AddExitNodeUpstream must refuse a request past maxExitNodeUpstreams rather
 // than let an unbounded number of dedicated tsnet.Server identities pile up -
 // see maxExitNodeUpstreams' doc comment for why that is a real resource cost,

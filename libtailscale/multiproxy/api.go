@@ -851,6 +851,9 @@ func (e *Engine) Close() {
 			if rt.Cancel != nil {
 				rt.Cancel()
 			}
+			if rt.Wg != nil {
+				rt.Wg.Wait()
+			}
 			if rt.Srv != nil {
 				rt.Srv.Close()
 			}
