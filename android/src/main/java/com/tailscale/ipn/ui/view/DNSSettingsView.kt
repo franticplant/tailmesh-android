@@ -65,6 +65,10 @@ fun DNSSettingsView(
   val publicDoHURL by model.publicDoHURL.collectAsState()
   val publicDoHOverrideExitNode by model.publicDoHOverrideExitNode.collectAsState()
   val publicDoHRouteThroughTailscale by model.publicDoHRouteThroughTailscale.collectAsState()
+  val isMultiProxy by model.isMultiProxy.collectAsState()
+  // These three prefs are read only by Standard mode's DNS manager. Say so instead of
+  // leaving switches that look live but change nothing.
+  val standardOnlyNote = if (isMultiProxy) stringResource(R.string.standard_mode_only) else null
   var showPublicDoHDialog by remember { mutableStateOf(false) }
   val isKnownPublicDoHURL =
       publicDoHURL.isBlank() ||
@@ -94,7 +98,9 @@ fun DNSSettingsView(
             Lists.ItemDivider()
             Setting.Switch(
                 R.string.use_ts_dns,
+                subtitle = standardOnlyNote,
                 isOn = useCorpDNS,
+                enabled = !isMultiProxy,
                 onToggle = {
                   LoadingIndicator.start()
                   model.toggleCorpDNS { LoadingIndicator.stop() }
@@ -115,9 +121,10 @@ fun DNSSettingsView(
           Lists.ItemDivider()
           Setting.Switch(
               R.string.public_doh_override_exit_node,
-              subtitle = stringResource(R.string.public_doh_override_exit_node_subtitle),
+              subtitle =
+                  standardOnlyNote ?: stringResource(R.string.public_doh_override_exit_node_subtitle),
               isOn = publicDoHOverrideExitNode,
-              enabled = publicDoHURL.isNotBlank(),
+              enabled = publicDoHURL.isNotBlank() && !isMultiProxy,
               onToggle = { model.togglePublicDoHOverrideExitNode() })
         }
 
@@ -125,9 +132,11 @@ fun DNSSettingsView(
           Lists.ItemDivider()
           Setting.Switch(
               R.string.public_doh_route_through_tailscale,
-              subtitle = stringResource(R.string.public_doh_route_through_tailscale_subtitle),
+              subtitle =
+                  standardOnlyNote
+                      ?: stringResource(R.string.public_doh_route_through_tailscale_subtitle),
               isOn = publicDoHRouteThroughTailscale,
-              enabled = publicDoHURL.isNotBlank(),
+              enabled = publicDoHURL.isNotBlank() && !isMultiProxy,
               onToggle = { model.togglePublicDoHRouteThroughTailscale() })
         }
 

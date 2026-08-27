@@ -19,7 +19,17 @@ import (
 	"gvisor.dev/gvisor/pkg/waiter"
 )
 
-const udpAssociationIdleTimeout = 60 * time.Second
+// udpAssociationIdleTimeout bounds how long a UDP association may sit with no
+// traffic in either direction before it is torn down. It is refreshed on every
+// packet (see runUDPAssociation), so it measures idleness, not total lifetime.
+//
+// RFC 4787 REQ-5 requires a NAT's UDP mapping timer to be at least 2 minutes and
+// recommends 5. Re-originating flows from a tsnet upstream makes this a NAT, so
+// the same floor applies. The previous 60s sat below it and expired bindings
+// that protocols legitimately leave idle for longer - notably SIP between
+// registration refreshes, where the binding an inbound INVITE would arrive on
+// could be torn down between calls.
+const udpAssociationIdleTimeout = 5 * time.Minute
 
 const (
 	tcpDialMaxAttempts = 3

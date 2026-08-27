@@ -199,6 +199,9 @@
     <string name="tailscale_is_not_running_this_device_is_using_the_system_dns_resolver">Tailscale is not running. This device is using the system\'s DNS resolver.</string>
     <string name="this_device_is_using_the_system_dns_resolver">This device is using the system DNS resolver.</string>
     <string name="not_using_tailscale_dns">Not using Tailscale DNS</string>
+    <string name="using_multi_tailnet_dns">Using Multi-Tailnet DNS</string>
+    <string name="this_device_is_using_multi_tailnet_dns">Tailnet names resolve through the Multi-Tailnet resolver. Public names use the resolver selected below.</string>
+    <string name="standard_mode_only">Applies to Standard mode only. Multi-Tailnet mode uses its own resolver.</string>
     <string name="allow_lan_access">Allow LAN access</string>
     <string name="countries">countries</string>
     <string name="cities_available">cities available</string>

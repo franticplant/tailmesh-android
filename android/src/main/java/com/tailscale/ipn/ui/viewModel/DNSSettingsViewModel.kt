@@ -11,8 +11,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.tailscale.ipn.App
+import com.tailscale.ipn.IPNService
 import com.tailscale.ipn.MultiProxySessionCoordinator
 import com.tailscale.ipn.R
+import com.tailscale.ipn.VpnRuntimeMode
 import com.tailscale.ipn.ui.localapi.Client
 import com.tailscale.ipn.ui.model.Ipn
 import com.tailscale.ipn.ui.model.Tailcfg
@@ -49,6 +51,14 @@ class DNSSettingsViewModel : IpnViewModel() {
   val publicDoHOverrideExitNode: StateFlow<Boolean> = MutableStateFlow(true)
   val publicDoHRouteThroughTailscale: StateFlow<Boolean> = MutableStateFlow(false)
 
+  /**
+   * True while Multi-Tailnet mode owns the datapath. The controls backed by CorpDNS,
+   * publicDoHOverrideExitNode and publicDoHRouteThroughTailscale are only read by
+   * Standard mode's DNS manager (libtailscale/control_doh.go), so the UI presents
+   * them as inapplicable rather than letting them look effective.
+   */
+  val isMultiProxy: StateFlow<Boolean> = MutableStateFlow(false)
+
   init {
     publicDoHURL.set(App.get().decryptFromPref(PUBLIC_DOH_URL_KEY) ?: "")
     publicDoHOverrideExitNode.set(
@@ -58,18 +68,22 @@ class DNSSettingsViewModel : IpnViewModel() {
             ?: false)
 
     viewModelScope.launch {
-      Notifier.netmap
-          .combine(Notifier.prefs) { netmap, prefs -> Pair(netmap, prefs) }
+      combine(Notifier.netmap, Notifier.prefs, IPNService.runtimeMode) { netmap, prefs, mode ->
+            Triple(netmap, prefs, mode)
+          }
           .stateIn(viewModelScope)
-          .collect { (netmap, prefs) ->
+          .collect { (netmap, prefs, mode) ->
             TSLog.d("DNSSettingsViewModel", "prefs: CorpDNS=" + prefs?.CorpDNS.toString())
-            prefs?.let {
-              if (it.CorpDNS) {
-                enablementState.set(DNSEnablementState.ENABLED)
-              } else {
-                enablementState.set(DNSEnablementState.DISABLED)
-              }
-            } ?: run { enablementState.set(DNSEnablementState.NOT_RUNNING) }
+            val multi = mode == VpnRuntimeMode.MULTIPROXY
+            isMultiProxy.set(multi)
+            when {
+              // Multi-Tailnet's resolver runs regardless of CorpDNS, so report what is
+              // actually resolving rather than what the unused pref says.
+              multi -> enablementState.set(DNSEnablementState.MULTI_TAILNET)
+              prefs == null -> enablementState.set(DNSEnablementState.NOT_RUNNING)
+              prefs.CorpDNS -> enablementState.set(DNSEnablementState.ENABLED)
+              else -> enablementState.set(DNSEnablementState.DISABLED)
+            }
             netmap?.let { dnsConfig.set(netmap.DNS) }
           }
     }
@@ -137,5 +151,14 @@ enum class DNSEnablementState(
       R.string.not_using_tailscale_dns,
       R.string.this_device_is_using_the_system_dns_resolver,
       R.drawable.xmark_circle,
-      { MaterialTheme.colorScheme.error })
+      { MaterialTheme.colorScheme.error }),
+
+  // Multi-Tailnet mode resolves DNS through libtailscale/multiproxy/dns.go, which
+  // never consults the CorpDNS pref. Reporting ENABLED/DISABLED off that pref here
+  // would describe a resolver that isn't the one in use.
+  MULTI_TAILNET(
+      R.string.using_multi_tailnet_dns,
+      R.string.this_device_is_using_multi_tailnet_dns,
+      R.drawable.check_circle,
+      { MaterialTheme.colorScheme.success })
 }

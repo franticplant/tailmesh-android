@@ -31,6 +31,18 @@ func TestWriteFullHandlesShortWrites(t *testing.T) {
 	}
 }
 
+// Re-originating flows from a tsnet upstream makes this a NAT, so RFC 4787 REQ-5
+// applies: a UDP mapping timer must be at least 2 minutes. The existing
+// association tests pass the timeout in explicitly, so none of them would notice
+// the shipped constant dropping back below the floor.
+func TestUDPAssociationIdleTimeoutMeetsRFC4787Floor(t *testing.T) {
+	const rfc4787MinimumUDPMappingTimeout = 2 * time.Minute
+	if udpAssociationIdleTimeout < rfc4787MinimumUDPMappingTimeout {
+		t.Fatalf("udpAssociationIdleTimeout = %v, must be >= %v (RFC 4787 REQ-5)",
+			udpAssociationIdleTimeout, rfc4787MinimumUDPMappingTimeout)
+	}
+}
+
 func TestRunUDPAssociationIdleTimeout(t *testing.T) {
 	a, aPeer := net.Pipe()
 	b, bPeer := net.Pipe()
