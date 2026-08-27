@@ -1,0 +1,358 @@
+package multiproxy
+
+import (
+	"context"
+	"net"
+	"net/netip"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+)
+
+func appRule(name string, uids []int32, action Action, upstream UpstreamID) Rule {
+	return Rule{
+		Name:     name,
+		Selector: Selector{AppUIDs: uids},
+		Action:   action,
+		Upstream: upstream,
+	}
+}
+
+func TestMatchAppOnlySkipsDestinationScopedRules(t *testing.T) {
+	policy := Policy{Rules: []Rule{
+		// A rule about a destination cannot be evaluated for a query whose
+		// destination is not yet known, so it must be passed over rather than
+		// matched on its app selector alone.
+		{
+			Name:     "https to a range",
+			Selector: Selector{AppUIDs: []int32{1000}, DstPrefixes: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}},
+			Action:   ActionRoute,
+			Upstream: "wrong",
+		},
+		{
+			Name:     "a port rule",
+			Selector: Selector{AppUIDs: []int32{1000}, DstPorts: []PortRange{{Lo: 443, Hi: 443}}},
+			Action:   ActionRoute,
+			Upstream: "wrong",
+		},
+		{
+			Name:     "a protocol rule",
+			Selector: Selector{AppUIDs: []int32{1000}, Protocols: []string{"tcp"}},
+			Action:   ActionRoute,
+			Upstream: "wrong",
+		},
+		appRule("the app's own route", []int32{1000}, ActionRoute, "right"),
+	}}
+
+	rule, ok := policy.MatchAppOnly(1000)
+	if !ok {
+		t.Fatal("expected a match")
+	}
+	if rule.Upstream != "right" {
+		t.Fatalf("matched %q (%s)", rule.Upstream, rule.Name)
+	}
+}
+
+func TestMatchAppOnlyOrderingAndWildcards(t *testing.T) {
+	policy := Policy{Rules: []Rule{
+		appRule("bound app", []int32{1000}, ActionRoute, "proxy"),
+		{Name: "default", Action: ActionRoute, Upstream: "fallback"},
+	}}
+
+	if rule, ok := policy.MatchAppOnly(1000); !ok || rule.Upstream != "proxy" {
+		t.Fatalf("bound app matched %v %v", rule, ok)
+	}
+	// An app with no rule of its own falls to the wildcard default.
+	if rule, ok := policy.MatchAppOnly(2000); !ok || rule.Upstream != "fallback" {
+		t.Fatalf("unbound app matched %v %v", rule, ok)
+	}
+	// An unattributed query may only widen what matches, never narrow it: it
+	// must reach the default and never the UID-scoped rule.
+	if rule, ok := policy.MatchAppOnly(UnknownAppUID); !ok || rule.Upstream != "fallback" {
+		t.Fatalf("unattributed query matched %v %v", rule, ok)
+	}
+}
+
+func TestMatchAppOnlyNoRules(t *testing.T) {
+	if _, ok := (Policy{}).MatchAppOnly(1000); ok {
+		t.Fatal("an empty policy should match nothing")
+	}
+}
+
+func TestDNSRouteFor(t *testing.T) {
+	e := NewEngine(t.TempDir(), &MockCallback{})
+	up := newFake("proxy", true)
+	if err := e.RegisterUpstream(up); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.RegisterUpstream(newFake("down", false)); err != nil {
+		t.Fatal(err)
+	}
+
+	flow := func(uid int32) FlowInfo { return FlowInfo{Protocol: "udp", AppUID: uid} }
+
+	t.Run("no policy leaves from the device", func(t *testing.T) {
+		r := e.dnsRouteFor(flow(1000))
+		if r.provider != nil || r.blocked || r.failed {
+			t.Fatalf("got %+v", r)
+		}
+	})
+
+	if err := e.SetPolicy(Policy{Rules: []Rule{
+		appRule("routed", []int32{1000}, ActionRoute, "proxy"),
+		appRule("blocked", []int32{1001}, ActionBlock, ""),
+		appRule("direct", []int32{1002}, ActionDirect, ""),
+		appRule("via the direct upstream", []int32{1003}, ActionRoute, DirectUpstreamID),
+		appRule("via something switched off", []int32{1004}, ActionRoute, "down"),
+		appRule("via something absent", []int32{1005}, ActionRoute, "gone"),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("routed app uses its upstream", func(t *testing.T) {
+		r := e.dnsRouteFor(flow(1000))
+		if r.provider == nil || r.provider.ID() != "proxy" {
+			t.Fatalf("got %+v", r)
+		}
+	})
+	t.Run("blocked app is refused", func(t *testing.T) {
+		if r := e.dnsRouteFor(flow(1001)); !r.blocked {
+			t.Fatalf("got %+v", r)
+		}
+	})
+	t.Run("direct action leaves from the device", func(t *testing.T) {
+		if r := e.dnsRouteFor(flow(1002)); r.provider != nil || r.blocked || r.failed {
+			t.Fatalf("got %+v", r)
+		}
+	})
+	t.Run("routing to @direct leaves from the device", func(t *testing.T) {
+		if r := e.dnsRouteFor(flow(1003)); r.provider != nil || r.blocked || r.failed {
+			t.Fatalf("got %+v", r)
+		}
+	})
+	// A named upstream that cannot carry the query must fail, not quietly fall
+	// back to the device - that is the leak this whole path exists to close.
+	t.Run("disabled upstream fails closed", func(t *testing.T) {
+		if r := e.dnsRouteFor(flow(1004)); !r.failed || r.provider != nil {
+			t.Fatalf("got %+v", r)
+		}
+	})
+	t.Run("missing upstream fails closed", func(t *testing.T) {
+		if r := e.dnsRouteFor(flow(1005)); !r.failed || r.provider != nil {
+			t.Fatalf("got %+v", r)
+		}
+	})
+	t.Run("unmatched app leaves from the device", func(t *testing.T) {
+		if r := e.dnsRouteFor(flow(9999)); r.provider != nil || r.blocked || r.failed {
+			t.Fatalf("got %+v", r)
+		}
+	})
+}
+
+// testDNSServer answers every A query with one fixed address, so a test can
+// tell which resolver produced an answer.
+type testDNSServer struct {
+	pc     net.PacketConn
+	answer string
+}
+
+func startTestDNS(t *testing.T, answer string) *testDNSServer {
+	t.Helper()
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	s := &testDNSServer{pc: pc, answer: answer}
+	t.Cleanup(func() { _ = pc.Close() })
+
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, addr, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			req := new(dns.Msg)
+			if req.Unpack(buf[:n]) != nil {
+				continue
+			}
+			m := new(dns.Msg)
+			m.SetReply(req)
+			m.Authoritative = true
+			for _, q := range req.Question {
+				if q.Qtype != dns.TypeA {
+					continue
+				}
+				rr, err := dns.NewRR(q.Name + " 60 IN A " + s.answer)
+				if err == nil {
+					m.Answer = append(m.Answer, rr)
+				}
+			}
+			out, err := m.Pack()
+			if err != nil {
+				continue
+			}
+			_, _ = pc.WriteTo(out, addr)
+		}
+	}()
+	return s
+}
+
+func (s *testDNSServer) Addr() string { return s.pc.LocalAddr().String() }
+
+// dialProvider carries a dial to wherever dial says, and records that it did.
+// It stands in for a proxy or tunnel without needing one.
+type dialProvider struct {
+	id    UpstreamID
+	dials chan string
+}
+
+func (p *dialProvider) ID() UpstreamID     { return p.id }
+func (p *dialProvider) Kind() UpstreamKind { return UpstreamKindSOCKS5 }
+func (p *dialProvider) Ready() bool        { return true }
+func (p *dialProvider) Close() error       { return nil }
+
+func (p *dialProvider) Dial(ctx context.Context, network, address string) (net.Conn, error) {
+	select {
+	case p.dials <- network + "|" + address:
+	default:
+	}
+	var d net.Dialer
+	return d.DialContext(ctx, network, address)
+}
+
+func (p *dialProvider) PeerPathInfo(context.Context, string) string { return "test" }
+
+// The point of the whole exercise: a query from a routed app must be forwarded
+// through that app's upstream, and must reach the resolver on the far side of
+// it rather than the device's own.
+func TestForwardedQueryFollowsTheAppsRoute(t *testing.T) {
+	viaUpstream := startTestDNS(t, "203.0.113.1")
+
+	e := NewEngine(t.TempDir(), &MockCallback{})
+	provider := &dialProvider{id: "proxy", dials: make(chan string, 4)}
+	if err := e.RegisterUpstream(provider); err != nil {
+		t.Fatal(err)
+	}
+	e.SetUpstreamDNS(viaUpstream.Addr())
+
+	if err := e.SetPolicy(Policy{Rules: []Rule{
+		appRule("routed", []int32{1000}, ActionRoute, "proxy"),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := new(dns.Msg)
+	req.SetQuestion("example.com.", dns.TypeA)
+
+	resp := e.handleDNSMsg(req, "udp", FlowInfo{Protocol: "udp", AppUID: 1000})
+	if resp == nil || resp.Rcode != dns.RcodeSuccess {
+		t.Fatalf("response = %v", resp)
+	}
+	if len(resp.Answer) != 1 {
+		t.Fatalf("answers = %v", resp.Answer)
+	}
+	if a, ok := resp.Answer[0].(*dns.A); !ok || a.A.String() != "203.0.113.1" {
+		t.Fatalf("answer = %v", resp.Answer[0])
+	}
+
+	select {
+	case got := <-provider.dials:
+		if got != "udp|"+viaUpstream.Addr() {
+			t.Fatalf("upstream was dialed for %q", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the query did not go through the app's upstream")
+	}
+}
+
+// An app with no rule keeps the previous behaviour exactly: the forward is not
+// routed through anything, and no upstream is dialed.
+func TestUnroutedQueryDoesNotTouchAnUpstream(t *testing.T) {
+	e := NewEngine(t.TempDir(), &MockCallback{})
+	provider := &dialProvider{id: "proxy", dials: make(chan string, 4)}
+	if err := e.RegisterUpstream(provider); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.SetPolicy(Policy{Rules: []Rule{
+		appRule("someone else", []int32{1000}, ActionRoute, "proxy"),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	// No upstream resolver configured, so the forward cannot succeed - which is
+	// fine, because what is under test is that the upstream is not consulted.
+	req := new(dns.Msg)
+	req.SetQuestion("example.com.", dns.TypeA)
+	e.handleDNSMsg(req, "udp", FlowInfo{Protocol: "udp", AppUID: 2000})
+
+	select {
+	case got := <-provider.dials:
+		t.Fatalf("an unrouted query was sent through an upstream: %q", got)
+	default:
+	}
+}
+
+func TestBlockedAppGetsRefused(t *testing.T) {
+	e := NewEngine(t.TempDir(), &MockCallback{})
+	e.SetUpstreamDNS("192.0.2.53:53")
+	if err := e.SetPolicy(Policy{Rules: []Rule{
+		appRule("blocked", []int32{1000}, ActionBlock, ""),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := new(dns.Msg)
+	req.SetQuestion("example.com.", dns.TypeA)
+	resp := e.handleDNSMsg(req, "udp", FlowInfo{Protocol: "udp", AppUID: 1000})
+	if resp.Rcode != dns.RcodeRefused {
+		t.Fatalf("rcode = %s, want REFUSED", dns.RcodeToString[resp.Rcode])
+	}
+}
+
+func TestRouteToUnusableUpstreamServfails(t *testing.T) {
+	e := NewEngine(t.TempDir(), &MockCallback{})
+	e.SetUpstreamDNS("192.0.2.53:53")
+	if err := e.RegisterUpstream(newFake("down", false)); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.SetPolicy(Policy{Rules: []Rule{
+		appRule("routed", []int32{1000}, ActionRoute, "down"),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := new(dns.Msg)
+	req.SetQuestion("example.com.", dns.TypeA)
+	resp := e.handleDNSMsg(req, "udp", FlowInfo{Protocol: "udp", AppUID: 1000})
+	if resp.Rcode != dns.RcodeServerFailure {
+		t.Fatalf("rcode = %s, want SERVFAIL", dns.RcodeToString[resp.Rcode])
+	}
+}
+
+// The cached client is per upstream and resolves the provider at dial time, so
+// a replaced or disabled upstream is observed rather than dialed around.
+func TestDoHClientIsCachedPerUpstreamAndFailsClosed(t *testing.T) {
+	e := NewEngine(t.TempDir(), &MockCallback{})
+
+	first := e.dohClientFor("proxy")
+	if second := e.dohClientFor("proxy"); second != first {
+		t.Fatal("a second query built a new client instead of reusing one")
+	}
+	if other := e.dohClientFor("elsewhere"); other == first {
+		t.Fatal("two upstreams share one client")
+	}
+
+	// No such upstream is registered, so the transport must refuse rather than
+	// fall back to dialing from the device.
+	req := new(dns.Msg)
+	req.SetQuestion("example.com.", dns.TypeA)
+	_, err := e.exchangeDoHVia("proxy", "https://192.0.2.1/dns-query", req)
+	if err == nil {
+		t.Fatal("expected the DoH request to fail")
+	}
+	if !strings.Contains(err.Error(), "not ready") {
+		t.Fatalf("error %q does not say the upstream was unusable", err)
+	}
+}

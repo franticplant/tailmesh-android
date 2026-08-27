@@ -79,6 +79,7 @@ Do not substitute one level for another.
 | Default upstream for unbound apps | yes | covered by policy default-rule tests | Proxies & tunnels screen | not documented |
 | Upstream/binding persistence | yes | no Android CRUD or migration tests | DB v3 + EncryptedSharedPreferences | not documented |
 | Live re-apply without VPN restart | yes | not directly tested | applier called from the view model | not documented |
+| DNS forwarding follows the app's policy route | yes | route-decision + DoH-cache-and-fail-closed tests against a real forwarding server | transparent - reached through the same applier/policy | not documented |
 
 ## 3. Evidence from the Go test suite
 

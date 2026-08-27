@@ -325,7 +325,9 @@ func (e *Engine) handleTCPConnection(r *tcp.ForwarderRequest) {
 
 	if isDNS {
 		gvisorConn := gonet.NewTCPConn(wq, ep)
-		go e.ServeDNSTCP(gvisorConn)
+		// The flow is attributed here so a forwarded query can follow the asking
+		// app's own route rather than always leaving from the device.
+		go e.ServeDNSTCP(gvisorConn, e.flowFromEndpointID("tcp", id))
 		return
 	}
 
@@ -455,7 +457,7 @@ func (e *Engine) handleUDPConnection(r *udp.ForwarderRequest) bool {
 			return false
 		}
 		gvisorConn := gonet.NewUDPConn(&wq, ep)
-		go e.ServeDNSUDP(gvisorConn)
+		go e.ServeDNSUDP(gvisorConn, e.flowFromEndpointID("udp", r.ID()))
 		return true
 	}
 

@@ -326,7 +326,7 @@ func TestSyntheticDNSAnswersBothFamilies(t *testing.T) {
 	// Test AAAA query
 	reqAAAA := new(dns.Msg)
 	reqAAAA.SetQuestion("onlyv6.", dns.TypeAAAA)
-	respAAAA := engine.handleDNSMsg(reqAAAA, "udp")
+	respAAAA := engine.handleDNSMsg(reqAAAA, "udp", FlowInfo{AppUID: UnknownAppUID})
 	if respAAAA.Rcode != dns.RcodeSuccess || len(respAAAA.Answer) != 1 {
 		t.Fatalf("Expected 1 answer for AAAA, got %d", len(respAAAA.Answer))
 	}
@@ -335,7 +335,7 @@ func TestSyntheticDNSAnswersBothFamilies(t *testing.T) {
 	// clients can reach this peer too.
 	reqA := new(dns.Msg)
 	reqA.SetQuestion("onlyv6.", dns.TypeA)
-	respA := engine.handleDNSMsg(reqA, "udp")
+	respA := engine.handleDNSMsg(reqA, "udp", FlowInfo{AppUID: UnknownAppUID})
 	if respA.Rcode != dns.RcodeSuccess || len(respA.Answer) != 1 {
 		t.Fatalf("Expected 1 answer for A query, got rcode=%d answers=%d", respA.Rcode, len(respA.Answer))
 	}
@@ -628,7 +628,7 @@ func TestSyntheticDNSNoDataForUnsupported(t *testing.T) {
 	req := new(dns.Msg)
 	req.SetQuestion(qualified, dns.TypeTXT)
 	
-	resp := engine.handleDNSMsg(req, "udp")
+	resp := engine.handleDNSMsg(req, "udp", FlowInfo{AppUID: UnknownAppUID})
 	
 	if len(resp.Answer) != 0 {
 		t.Fatalf("Expected NODATA (0 answers) for TXT, got %d", len(resp.Answer))

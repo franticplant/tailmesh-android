@@ -137,6 +137,11 @@ type Engine struct {
 	// addressing has not already bound to a specific upstream.
 	policy *policyStore
 
+	// dohCache holds one HTTP client per upstream for DoH queries routed
+	// through it, built on first use. See dns_policy.go.
+	dohOnce  sync.Once
+	dohCache *dohClientCache
+
 	// uidResolver attributes a flow to an application, or nil when the platform
 	// has not installed one. Guarded by uidMu.
 	uidMu       sync.RWMutex

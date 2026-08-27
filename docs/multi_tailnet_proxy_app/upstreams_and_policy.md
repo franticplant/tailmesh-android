@@ -363,6 +363,64 @@ policy existed. That is the regression guarantee for the whole feature.
 read on the datapath for every new flow; sharing the Engine lock would put flow
 setup behind tailnet lifecycle operations.
 
+### 3.5 DNS follows the same route
+
+`CURRENT CODE` (`dns_policy.go`, `dns.go`, `nat_router.go`)
+
+**Before:** a forwarded DNS query always left from the device, regardless of
+which upstream the querying app was routed through. For an app deliberately
+sent through a proxy or tunnel, that leaked every name it looked up to the
+device's resolver outside the transport chosen precisely to avoid that - and
+could return the wrong answer for a name that resolves differently inside the
+proxy's network.
+
+**New:** `nat_router.go`'s DNS dispatch now attributes the flow
+(`e.flowFromEndpointID`) before serving it, and `handleDNSMsg` asks
+`e.dnsRouteFor(flow)` how the forward should leave:
+
+```go
+type dnsRoute struct {
+    provider Provider // carries the query, or nil to leave from the device as before
+    blocked  bool      // policy blocks this app outright: refuse, don't answer
+    failed   bool       // named upstream missing or not ready: fail closed
+}
+```
+
+`dnsRouteFor` matches policy with `Policy.MatchAppOnly`, a variant of the usual
+match that **skips** any rule scoped by destination, port or protocol rather
+than partially applying it. A DNS query's destination is the synthetic
+resolver, not the name's eventual address, so a destination-scoped selector
+cannot be evaluated yet, and matching it against the resolver's own address
+would silently capture or miss lookups a rule was never written about. What
+remains is exactly the per-app-or-default shape that already governs
+everything else.
+
+The three outcomes:
+
+- `ActionBlock` / `ActionDirect` / no match → unchanged: `RcodeRefused`, or the
+  original device-resolver path.
+- `ActionRoute` to a ready upstream → the query is exchanged through that
+  upstream's `Dial`, plain DNS via `exchangePlainVia` (with the usual UDP→TCP
+  retry on truncation) or DoH via `exchangeDoHVia`.
+- `ActionRoute` to a missing or not-ready upstream → SERVFAIL. Consistent with
+  every other resolution in this package: a named upstream that cannot be used
+  fails the flow, it never falls back to the device.
+
+DoH needs one HTTP client per upstream, cached in `dohClientCache` and keyed by
+`UpstreamID` rather than by provider value - a `tailnetProvider` is built fresh
+on every lookup (§2.2), so caching against the value would miss on every
+lookup. The cached transport's `DialContext` resolves the provider at dial
+time, so a reconfigured or disabled upstream is observed on the next query,
+exactly as everywhere else in this design.
+
+**Why:** the whole point of routing an app through an upstream is that its
+traffic - all of it, not just the parts after a name is resolved - takes that
+path. DNS is part of that traffic.
+
+`UNIT-OR-RACE-TESTED` (`dns_policy_test.go`): `MatchAppOnly` skip behaviour,
+`dnsRouteFor`'s three outcomes end to end against a real forwarding server, and
+`TestDoHClientIsCachedPerUpstreamAndFailsClosed`.
+
 ---
 
 ## 4. App attribution
@@ -686,8 +744,8 @@ correctness bug, not a behaviour change.
    parsed and carried but the multiproxy resolver handles DNS itself, so it only
    affects lookups made by the tunnel's own netstack - of which there are
    currently none.
-6. **DNS is not policy-routed.** Name resolution is handled by the multiproxy
-   resolver before the datapath dials, so an app routed through a proxy still
-   resolves names the same way every other app does. For a proxy meant to
-   provide both transport and resolution, that is a leak of intent - and, for a
-   name that resolves differently inside the proxy's network, a wrong answer.
+6. ~~DNS is not policy-routed.~~ **Closed** - see §3.5. A forwarded query now
+   follows the querying app's route: refused if policy blocks the app,
+   SERVFAIL if the named upstream is missing or not ready, otherwise exchanged
+   through that upstream. `UNIT-OR-RACE-TESTED`; no device evidence, same as
+   everything else in this document.

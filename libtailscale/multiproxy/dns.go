@@ -223,6 +223,12 @@ var plainDNSDialer = func() *net.Dialer {
 // POST/application-dns-message form, which every public DoH provider we
 // list supports) and returns its parsed response.
 func exchangeDoH(resolverURL string, req *dns.Msg) (*dns.Msg, error) {
+	return exchangeDoHWith(dohHTTPClient, resolverURL, req)
+}
+
+// exchangeDoHWith is exchangeDoH with the client supplied, so a query routed
+// through an upstream can use one that dials through it. See dns_policy.go.
+func exchangeDoHWith(client *http.Client, resolverURL string, req *dns.Msg) (*dns.Msg, error) {
 	packed, err := req.Pack()
 	if err != nil {
 		return nil, fmt.Errorf("packing DoH query: %w", err)
@@ -235,7 +241,7 @@ func exchangeDoH(resolverURL string, req *dns.Msg) (*dns.Msg, error) {
 	httpReq.Header.Set("Content-Type", "application/dns-message")
 	httpReq.Header.Set("Accept", "application/dns-message")
 
-	resp, err := dohHTTPClient.Do(httpReq)
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("DoH request to %s: %w", resolverURL, err)
 	}
@@ -366,7 +372,7 @@ func (e *Engine) rebuildTargetsUnlocked() {
 	}
 }
 
-func (e *Engine) ServeDNSUDP(conn net.Conn) {
+func (e *Engine) ServeDNSUDP(conn net.Conn, flow FlowInfo) {
 	defer recoverAndLog("ServeDNSUDP")
 	defer conn.Close()
 	buf := make([]byte, 4096)
@@ -385,7 +391,7 @@ func (e *Engine) ServeDNSUDP(conn net.Conn) {
 			continue
 		}
 
-		resp := e.handleDNSMsg(req, "udp")
+		resp := e.handleDNSMsg(req, "udp", flow)
 		out, err := resp.Pack()
 		if err != nil {
 			continue
@@ -413,7 +419,7 @@ func writeFull(w io.Writer, p []byte) error {
 	return nil
 }
 
-func (e *Engine) ServeDNSTCP(conn net.Conn) {
+func (e *Engine) ServeDNSTCP(conn net.Conn, flow FlowInfo) {
 	defer recoverAndLog("ServeDNSTCP")
 	defer conn.Close()
 
@@ -441,7 +447,7 @@ func (e *Engine) ServeDNSTCP(conn net.Conn) {
 			continue
 		}
 
-		resp := e.handleDNSMsg(req, "tcp")
+		resp := e.handleDNSMsg(req, "tcp", flow)
 		out, err := resp.Pack()
 		if err != nil || len(out) > 0xffff {
 			continue
@@ -460,7 +466,7 @@ func (e *Engine) ServeDNSTCP(conn net.Conn) {
 	}
 }
 
-func (e *Engine) handleDNSMsg(r *dns.Msg, netType string) *dns.Msg {
+func (e *Engine) handleDNSMsg(r *dns.Msg, netType string, flow FlowInfo) *dns.Msg {
 	m := new(dns.Msg)
 	m.SetReply(r)
 
@@ -529,10 +535,49 @@ func (e *Engine) handleDNSMsg(r *dns.Msg, netType string) *dns.Msg {
 			return m
 		}
 
+		// Where the forward leaves from follows the asking app's own route, so a
+		// proxied app does not announce its lookups to the device resolver. See
+		// dns_policy.go.
+		route := e.dnsRouteFor(flow)
+		switch {
+		case route.blocked:
+			m.Rcode = dns.RcodeRefused
+			return m
+		case route.failed:
+			m.Rcode = dns.RcodeServerFailure
+			return m
+		}
+
 		if strings.HasPrefix(upstream, "https://") {
-			resp, err := exchangeDoH(upstream, r)
+			var (
+				resp *dns.Msg
+				err  error
+			)
+			if route.provider != nil {
+				resp, err = e.exchangeDoHVia(route.provider.ID(), upstream, r)
+			} else {
+				resp, err = exchangeDoH(upstream, r)
+			}
 			if err != nil {
 				log.Printf("multiproxy DNS: %v", err)
+				m.Rcode = dns.RcodeServerFailure
+				return m
+			}
+			resp.Id = r.Id
+			return resp
+		}
+
+		if route.provider != nil {
+			resp, err := exchangePlainVia(route.provider, r, netType, upstream)
+			// Truncation is answered the same way as on the device path: retry
+			// over TCP rather than handing the client a clipped answer.
+			if netType == "udp" && (err != nil || (resp != nil && resp.Truncated)) {
+				resp, err = exchangePlainVia(route.provider, r, "tcp", upstream)
+			}
+			if err != nil || resp == nil {
+				if err != nil {
+					log.Printf("multiproxy DNS: %v", err)
+				}
 				m.Rcode = dns.RcodeServerFailure
 				return m
 			}
