@@ -912,3 +912,41 @@ correctness bug, not a behaviour change.
     control plane itself rate-limits or flags rapid multi-device registration
     from one account remains untested - that needs real multi-device
     credentials this sandbox does not have.
+
+    A closer read-through of this feature after the above landed found two
+    more real bugs, both fixed (see `validation_and_gaps.md` §61, §62): a
+    bootstrap `AuthKey` (tailnet's and exit-node's alike) stayed resident in
+    the Go engine's in-memory `Config` indefinitely - `ClearTailnetAuthKey`
+    existed but was dead code, called from nowhere - now wired into the
+    existing state-poll paths so it clears the moment a real `Running` state
+    is observed; and disabling an exit-node upstream from the UI actually
+    called `ForgetExitNodeUpstream`, permanently destroying its device
+    identity and demanding a fresh auth key on every re-enable, rather than
+    `SetExitNodeUpstreamEnabled(false)` (which existed but, before the fix,
+    was never called with `false` from anywhere in Kotlin) - directly
+    reproducing the multi-auth-churn concern this whole feature pass was
+    trying to guard against.
+
+12. **The encrypted Kotlin-side secret store still keeps the raw auth key
+    forever.** `UpstreamSecretStore` (`android/.../multiproxy/UpstreamSecretStore.kt`)
+    persists an exit-node upstream's full config JSON - including the
+    bootstrap `authKey` - in `EncryptedSharedPreferences`, with no code path
+    that ever strips the key back out after the identity is confirmed
+    running. `registerExitNode` (`UpstreamPolicyApplier.kt`) reads that same
+    stored config and passes the key to `AddExitNodeUpstream` again on every
+    VPN rebuild, which is why it has to still be there - tsnet only actually
+    needs the key on first login and should ignore it once the state
+    directory already holds a valid one, but nothing on the Kotlin side
+    currently distinguishes "still needed" from "already provisioned,
+    keeping this around is just unnecessary secret retention." Closing this
+    properly needs a small Go-side API change (an `AddExitNodeUpstream`
+    variant, or an added query, that lets Kotlin tell whether the key is
+    still required) plus a live `Running` signal reaching the Kotlin secret
+    store (`OnTailnetStateChange` already exists as an event but is
+    currently just logged, not wired to anything - see `IPNService.kt`) to
+    know when to actually purge the field. Deliberately not attempted
+    tonight: it changes a public Go/gomobile method signature other callers
+    depend on, and verifying it does not break re-registration after a real
+    app restart needs live auth credentials this sandbox does not have -
+    the same recurring constraint as the items above. Flagged here rather
+    than rushed.
