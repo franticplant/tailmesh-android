@@ -53,7 +53,11 @@ class UpstreamPolicyApplier(
    * Tailnets and the built-in direct upstream are skipped: neither is ours to remove.
    */
   private fun removeStale(engine: MultiProxyEngine, desired: List<Upstream>) {
-    val keep = desired.map { it.id }.toSet()
+    val enabledIds = desired.map { it.id }.toSet()
+    // Every row that still exists, enabled or not - distinct from enabledIds
+    // because a merely-disabled exit-node upstream must not be treated the
+    // same as a deleted one (see the kind == KIND_EXITNODE branch below).
+    val existingIds = upstreams.getAllImmediate().map { it.id }.toSet()
     val registered =
         try {
           JSONArray(engine.upstreamsJSON)
@@ -66,14 +70,23 @@ class UpstreamPolicyApplier(
       val entry = registered.optJSONObject(i) ?: continue
       val id = entry.optString("id")
       val kind = entry.optString("kind")
-      if (id.isEmpty() || id in keep) continue
+      if (id.isEmpty() || id in enabledIds) continue
       if (kind != KIND_SOCKS5 && kind != KIND_WIREGUARD && kind != KIND_EXITNODE) continue
       try {
         // An exit-node upstream has its own lifecycle (a dedicated node
         // identity, not a plain registry entry - see upstream_exitnode.go) and
         // removeUpstream/UnregisterUpstream cannot see it.
         if (kind == KIND_EXITNODE) {
-          engine.forgetExitNodeUpstream(id)
+          if (id in existingIds) {
+            // Still configured, just disabled - not deleted. ForgetExitNodeUpstream
+            // permanently deletes the node identity it logged into its tailnet
+            // with, so treating "disabled" the same as "deleted" here would mean
+            // every disable/enable cycle burns a fresh device slot and a fresh
+            // auth key instead of just toggling WantRunning on the same identity.
+            engine.setExitNodeUpstreamEnabled(id, false)
+          } else {
+            engine.forgetExitNodeUpstream(id)
+          }
         } else {
           engine.removeUpstream(id)
         }

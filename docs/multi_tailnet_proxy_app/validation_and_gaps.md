@@ -2771,6 +2771,63 @@ not have - the same constraint already noted for
 `TestForgetExitNodeUpstreamRacesEnableSafely`.) Full `multiproxy` suite
 re-run clean under `go test -race -count=1` after this change.
 
+## 62. Fixed: disabling an exit-node upstream destroyed its device identity (2026-08-27)
+
+The most significant bug found this session, and one that directly reproduces
+the exact failure mode raised earlier tonight - "our app backend may not be
+able to handle multiple auths from same tailnet."
+
+`UpstreamPolicyApplier.removeStale` (`android/.../multiproxy/UpstreamPolicyApplier.kt`)
+unregisters any upstream the engine still holds that is not in `desired`, and
+`desired` is `upstreams.registrationOrder()`, which is filtered to
+`enabled == true` rows only. That is correct and intentional for SOCKS5 and
+WireGuard upstreams - both are stateless config wrappers, so unregistering a
+merely-disabled one and re-registering it later from the same stored config
+is cheap and lossless, exactly what the method's own doc comment describes
+("Unregisters upstreams ... that are no longer configured or have been
+disabled").
+
+It is not correct for `EXITNODE`-kind upstreams. `removeStale` could not
+distinguish "disabled but still configured" from "deleted" - both are simply
+absent from the enabled-only `desired` set - so it treated a user toggling an
+exit-node upstream off the same way it treats deleting one: it called
+`ForgetExitNodeUpstream`, which - per that function's own doc comment -
+"permanently deletes the node identity it logged into the tailnet with."
+`SetExitNodeUpstreamEnabled` exists specifically to toggle an exit node's
+`WantRunning` in place without touching its identity, but grepping every
+Kotlin call site showed it was only ever invoked with `enabled = true` (the
+"already registered, just re-enable it" fallback in `registerExitNode`) -
+never with `false`. In practice: turning an exit-node upstream off in the UI
+and back on again would have burned a brand new device slot and demanded a
+brand new auth key every single time, rather than resuming the same
+identity - the opposite of what a resource cap and stuck-auth visibility
+(§59.3, §60) are for, and precisely the kind of unnecessary repeated
+registration the user was worried the control plane might not tolerate well.
+
+**Fix:** `removeStale` now also computes `existingIds` from
+`upstreams.getAllImmediate()` (every row, enabled or not) separately from
+the enabled-only `desired` set. For an `EXITNODE`-kind entry the engine
+still holds: if its id is still in `existingIds`, the row exists and is
+merely disabled, so `removeStale` now calls
+`engine.setExitNodeUpstreamEnabled(id, false)`; only when the id has
+actually left `existingIds` (a real delete) does it fall through to
+`engine.forgetExitNodeUpstream(id)`. SOCKS5 and WireGuard behavior is
+unchanged.
+
+**Verification:** `./gradlew compileDebugKotlin -PtestAbi=x86_64` succeeds.
+The Go-side split this Kotlin fix relies on - that `SetExitNodeUpstreamEnabled`
+disables in place while `ForgetExitNodeUpstream` actually deletes state - was
+already covered end to end by the existing Go test suite
+(`upstream_exitnode_test.go`; the disable path is also what
+`TestForgetExitNodeUpstreamRacesEnableSafely`'s regression coverage sits on
+top of). Not yet closed: a full on-device UI repro (add a real exit-node
+upstream, disable it, confirm its `state-<hash>` directory survives) needs a
+tailnet actually logged in far enough to populate the peer picker, which
+this sandbox could not reach without live credentials - attempted this
+session and blocked on exactly that (no tailnet to pick a peer from). This
+is a code-trace-verified fix, not a device-verified one; flagging that
+distinction explicitly rather than overstating confidence.
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.
