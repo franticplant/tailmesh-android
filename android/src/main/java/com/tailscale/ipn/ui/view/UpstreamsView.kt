@@ -27,6 +27,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -46,6 +47,8 @@ import com.tailscale.ipn.ui.util.Lists
 import com.tailscale.ipn.ui.viewModel.ExitNodeCandidate
 import com.tailscale.ipn.ui.viewModel.RoutableUpstream
 import com.tailscale.ipn.ui.viewModel.UpstreamRoutingViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Manages the non-Tailnet upstreams traffic can be routed through, and picks the one that carries
@@ -409,11 +412,16 @@ fun UpstreamEditorDialog(
   var exitAuthKey by remember { mutableStateOf("") }
   var exitTailnetMenuOpen by remember { mutableStateOf(false) }
   var exitPeerMenuOpen by remember { mutableStateOf(false) }
-  val exitPeerCandidates =
-      remember(exitSourceTailnetId) {
+  // fetchExitNodeCandidates makes a live, JNI-crossing Status() call (up to a
+  // 5s timeout in Go) - fetched off the main thread in LaunchedEffect, not
+  // synchronously in remember{}, so opening this dialog or switching tailnets
+  // never blocks composition.
+  var exitPeerCandidates by remember { mutableStateOf<List<ExitNodeCandidate>>(emptyList()) }
+  LaunchedEffect(exitSourceTailnetId) {
+    exitPeerCandidates =
         if (exitSourceTailnetId.isBlank()) emptyList()
-        else fetchExitNodeCandidates(exitSourceTailnetId)
-      }
+        else withContext(Dispatchers.IO) { fetchExitNodeCandidates(exitSourceTailnetId) }
+  }
 
   AlertDialog(
       onDismissRequest = onDismiss,

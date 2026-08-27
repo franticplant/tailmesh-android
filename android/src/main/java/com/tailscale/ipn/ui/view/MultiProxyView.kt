@@ -13,6 +13,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tailscale.ipn.VpnRuntimeMode
 import com.tailscale.ipn.ui.viewModel.ExitNodeCandidate
 import com.tailscale.ipn.ui.viewModel.MultiProxyViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -304,7 +306,14 @@ fun MultiProxyView(
         }
 
         exitNodeTailnetId?.let { tailnetId ->
-            val candidates = remember(tailnetId) { viewModel.fetchExitNodeCandidates(tailnetId) }
+            // fetchExitNodeCandidates makes a live, JNI-crossing Status() call
+            // (up to a 5s timeout in Go) - fetched off the main thread in
+            // LaunchedEffect, not synchronously in remember{}, so opening
+            // this dialog never blocks composition.
+            var candidates by remember(tailnetId) { mutableStateOf<List<ExitNodeCandidate>>(emptyList()) }
+            LaunchedEffect(tailnetId) {
+                candidates = withContext(Dispatchers.IO) { viewModel.fetchExitNodeCandidates(tailnetId) }
+            }
             var selected by remember(tailnetId) { mutableStateOf<ExitNodeCandidate?>(null) }
             AlertDialog(
                 onDismissRequest = { exitNodeTailnetId = null },
