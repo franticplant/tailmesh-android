@@ -776,11 +776,14 @@ correctness bug, not a behaviour change.
    `getConnectionOwnerUid` has still never been exercised against this TUN on
    a real device, across API levels or OEMs - which remains the single most
    consequential unknown, since per-app routing silently degrades to "no rule
-   matches" if it does not work. WireGuard and chaining also remain
-   device-unverified - a real on-device two-hop chain (e.g. WireGuard-over-
-   SOCKS5, matching the shape `TestWireGuardChainedOverSOCKS5` already
-   proves at the Go level) has still not been set up on the emulator; see
-   `validation_and_gaps.md` §56.
+   matches" if it does not work. WireGuard specifically remains device-
+   unverified as a chain hop (only proven at the Go level,
+   `TestWireGuardChainedOverSOCKS5`) - but chaining *itself* is no longer
+   device-unverified: a real two-hop SOCKS5-over-SOCKS5 chain was set up on
+   the emulator and traced end to end, including `VpnService.protect()`
+   coverage for the chained hop, `validation_and_gaps.md` §57.1. Chaining
+   combined with UID-scoped attribution specifically (a chained rule that
+   also names an app) is still untested.
 2. **No Android tests for the new stores.** `UpstreamRepository`,
    `AppBindingRepository` and the v3 migration have no JVM tests. This is the
    same gap `validation_and_gaps.md` §5.1 and §5.2 already record for
@@ -842,13 +845,19 @@ correctness bug, not a behaviour change.
    **global** on/off, not the per-app override ("still tunnel LAN traffic
    for this one app") the original plan described - that needs a schema
    change to `AppBinding` and was scoped out of this pass.
-10. **DNS/data split has no per-app UI yet, and Private DNS is
-    uncharacterized.** `validation_and_gaps.md` §55: `Rule.DNSUpstream` and
+10. **DNS/data split has no per-app UI yet; Private DNS Strict mode remains
+    uncharacterized (Off/Automatic are now confirmed).**
+    `validation_and_gaps.md` §55: `Rule.DNSUpstream` and
     `BuildAppBindingPolicyJSON`'s per-binding `dnsUpstream` are implemented
     and `UNIT-TESTED`; only the **default-route** picker ("DNS for unbound
     apps") shipped a UI, `INSTRUMENTATION-OR-EMULATOR-TESTED`. A per-app
     picker needs the same `AppBinding` schema change gap 9 already flags.
-    Separately, how Android's Private DNS modes (Off/Automatic/Strict)
-    interact with the synthetic resolver and this split has not been
-    device-tested at all - a real gap the original plan called out
-    (`validation_and_gaps.md` gap #16) and this pass did not close.
+    Separately, `validation_and_gaps.md` §57.2 device-tested Android's three
+    Private DNS modes against the synthetic resolver: Off and Automatic
+    both confirmed working (fresh MagicDNS names resolved correctly in
+    both). Strict mode's result is **inconclusive**, not negative or
+    positive - this test sandbox's own network cannot complete a DoT
+    handshake to any strict-mode server at all, confirmed independent of
+    this app (Android itself reported no internet access with the VPN
+    stopped entirely), so gap #16's prediction that Strict mode breaks
+    MagicDNS resolution remains untested rather than confirmed.

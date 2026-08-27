@@ -557,6 +557,12 @@ Private DNS strict hostname
 
 and surface a warning if strict mode makes synthetic names unusable.
 
+**Update (§57.2, 2026-08-27):** Off and Automatic are now device-confirmed
+working (fresh MagicDNS names resolve correctly under both). Strict mode
+could not be characterized - the test device's own network cannot complete
+a DoT handshake at all, independent of this app, so no result was obtained
+either way. This gap remains open for Strict mode specifically.
+
 ## 17. Gap: Always-On and lockdown semantics
 
 Always-On can be useful because it restarts the selected VPN service.
@@ -2323,6 +2329,111 @@ facade changes, only a Go test addition and a documentation correction.
 
 **Not verified here:** the real on-device two-hop chain and its
 `VpnService.protect()` coverage, as described above.
+
+## 57. Device verification: a real two-hop chain, and Private DNS characterization (2026-08-27)
+
+This closes out the two device-evidence gaps §54-§56 left open, per the
+user's explicit request to deal with both before pushing.
+
+### 57.1 A real on-device two-hop chain
+
+**Setup:** a local, loopback-only, lifetime-bounded SOCKS5 test double
+(two listening ports on one process, `127.0.0.1:1080`/`:1081`, bridged to
+the emulator via `adb reverse` rather than the emulator's own `10.0.2.2`
+NAT alias, which did not forward correctly on this custom emulator image)
+stood in for two independent SOCKS5 upstreams. Configured through the
+Proxies & tunnels UI exactly as a real user would: upstream `chain-inner`
+(address `127.0.0.1:1080`, unchained) and `chain-outer` (address
+`127.0.0.1:1081`, chained via `chain-inner`), with `chain-outer` set as the
+default route and broad capture on, in Multi-Tailnet mode with both
+tailnets `RUNNING`.
+
+**Result:** opening a real page in Chrome produced, on the relay's own
+log, exactly the traversal the chain is supposed to produce - a real
+device-to-host SOCKS5 CONNECT arriving on port 1080 for target
+`127.0.0.1:1081`, correctly relayed, followed by a real SOCKS5 CONNECT
+arriving on port 1081 for the actual destination
+(`2600:1f13:37c:1400:...:443`, `neverssl.com`'s real address). The final
+leg failed - but with a **SOCKS5-protocol-level** `connection refused
+(0x05)` reply from the far hop, not a network-level failure - because this
+sandbox's own outbound egress has no route to the public internet, a
+property of the test environment, not the app. `logcat` and the
+Proxies & tunnels screen's own live stats agreed: `chain-inner` showed "57
+succeeded, 222 failed" (real successful SOCKS5 handshakes to the relay,
+mixed with retries), `chain-outer` showed "connection refused (0x05)" -
+confirming Phase 1's stats surfacing and this chain both work together,
+live, on a real device.
+
+This is real evidence that `chainDialer`'s core mechanism - the outer
+upstream's own transport connection is chained through the inner one
+rather than dialed independently - works end to end on Android, not just
+in the Go test suite, and that `VpnService.protect()` coverage for a
+chained provider is correct: the device's real SOCKS5 client connection to
+`chain-inner` was not itself captured back into the tunnel (no loop, no
+hang - it reached the host relay and completed a real handshake). §56's
+"not verified here" note is superseded by this.
+
+**Still not verified:** WireGuard specifically as one of the two hops
+(this test used SOCKS5-over-SOCKS5, since standing up a real WireGuard
+peer for a device pass is materially more setup than a SOCKS5 double, and
+chaining is transport-agnostic in `chain.go` - the mechanism under test
+does not care what protocol either hop speaks); and the
+`getConnectionOwnerUid`-dependent app-attribution path fed into a *chained*
+rule specifically (the default-route rule used here has no app selector).
+Both remain open, `upstreams_and_policy.md` gap 1.
+
+**Cleanup:** the two test upstreams, the default-route and DNS-route
+overrides, and the `adb reverse` port mappings were all removed after the
+test; broad capture and LAN exclusion were restored to their prior
+(already-on) state. No test configuration was left on the device or in any
+committed file.
+
+### 57.2 Private DNS characterization
+
+Per gap #16 and the plan's explicit ask, tested Android's three Private
+DNS modes against the running Multi-Tailnet session, using fresh
+never-queried MagicDNS names (this session's own established methodology,
+§49.1) via `adb shell ping` (the same `getaddrinfo` path an app's resolver
+takes).
+
+- **Off:** `actions-grande.tailee10c1.ts.net` resolved to a synthetic v4
+  address (`198.18.237.3`) immediately. Pass, as expected - this is the
+  configuration every other device pass in this document already exercises.
+- **Automatic (opportunistic):** `rocky-test-1.tailee10c1.ts.net` resolved
+  to a synthetic v4 address (`198.18.75.119`). Pass - confirms the
+  hypothesis that Android's opportunistic DoT probe to our resolver
+  (which only serves plain DNS on port 53, not DoT on 853) fails and falls
+  back to plain DNS transparently, with no visible disruption.
+- **Strict (hostname, `dns.google`):** `batuhan-local.tailee10c1.ts.net`
+  failed to resolve (`unknown host`). Investigated further before treating
+  this as confirmation of gap #16's prediction, because a confound needed
+  to be ruled out: with broad capture *on*, a captured-but-unrouted
+  destination (the DoT server's own real IP) could plausibly fail for a
+  reason having nothing to do with DNS. Tested a fresh **public** domain
+  under the same Strict configuration next (`postgresql.org`) - also
+  `unknown host`. Turned broad capture *off* and retested - still
+  `unknown host`. Finally stopped Multi-Tailnet **entirely** (no VPN
+  active at all) and retested - Android itself surfaced a system
+  notification: *"Network has no internet access - Private DNS server
+  cannot be accessed."*
+
+  **Conclusion: inconclusive, not confirmed.** The Strict-mode failure is
+  not attributable to this app - this sandbox's underlying network cannot
+  reach `dns.google` on port 853 (DoT) at all, independent of Multi-Tailnet,
+  broad capture, or our resolver. Whether our synthetic resolver's names
+  become unusable under a Strict mode that can actually complete its DoT
+  handshake remains untested; gap #16 stays open, correctly, since this
+  did not produce evidence either way. The one thing this pass adds: Off
+  and Automatic are now real, positive, device-confirmed evidence rather
+  than inference from the code, and the negative Strict-mode result was
+  investigated rather than taken at face value - the same discipline this
+  document applied to the §49.1 cache-false-positive and the §56 test-hang
+  correction.
+
+**Evidence (`INSTRUMENTATION-OR-EMULATOR-TESTED`):** all of the above, on
+the `sdk_gphone64_x86_64` emulator, Multi-Tailnet mode, both tailnets
+`RUNNING`. `private_dns_mode`/`private_dns_specifier` set via
+`adb shell settings put global`, restored to `off`/unset afterward.
 
 ## 48. Bottom line
 
