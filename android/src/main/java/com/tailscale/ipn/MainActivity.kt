@@ -65,6 +65,7 @@ import com.tailscale.ipn.ui.util.AndroidTVUtil
 import com.tailscale.ipn.ui.util.set
 import com.tailscale.ipn.ui.util.universalFit
 import com.tailscale.ipn.ui.view.AboutView
+import com.tailscale.ipn.ui.view.AppRoutingView
 import com.tailscale.ipn.ui.view.BugReportView
 import com.tailscale.ipn.ui.view.DNSSettingsView
 import com.tailscale.ipn.ui.view.ExitNodePicker
@@ -74,6 +75,7 @@ import com.tailscale.ipn.ui.view.LoginQRView
 import com.tailscale.ipn.ui.view.LoginWithAuthKeyView
 import com.tailscale.ipn.ui.view.LoginWithCustomControlURLView
 import com.tailscale.ipn.ui.view.MDMSettingsDebugView
+import com.tailscale.ipn.ui.view.UpstreamsView
 import com.tailscale.ipn.ui.view.MainView
 import com.tailscale.ipn.ui.view.MainViewNavigation
 import com.tailscale.ipn.ui.view.ManagedByView
@@ -312,6 +314,10 @@ class MainActivity : ComponentActivity() {
                           onNavigateToPermissions = { navController.navigate("permissions") },
                           onNavigateToNetcheck = { navController.navigate("netcheck") },
                           onNavigateToMultiProxy = { navController.navigate("multiProxy") },
+                          onNavigateToProxyUpstreams = {
+                            navController.navigate("proxyUpstreams")
+                          },
+                          onNavigateToAppRouting = { navController.navigate("appRouting") },
                           onBackToSettings = backTo("settings"),
                           onNavigateBackHome = backTo("main"))
                   val exitNodePickerNav =
@@ -386,6 +392,8 @@ class MainActivity : ComponentActivity() {
                     )
                   }
                   composable("splitTunneling") { SplitTunnelAppPickerView(backTo("settings")) }
+                  composable("proxyUpstreams") { UpstreamsView(backTo("settings")) }
+                  composable("appRouting") { AppRoutingView(backTo("settings")) }
                   composable("tailnetLock") { TailnetLockSetupView(backTo("settings")) }
                   composable("subnetRouting") { SubnetRoutingView(backTo("settings")) }
                   composable("about") { AboutView(backTo("settings")) }

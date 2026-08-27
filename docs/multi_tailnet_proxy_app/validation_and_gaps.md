@@ -66,6 +66,17 @@ Do not substitute one level for another.
 | Process/service profile reconstruction | yes | no Android reconstruction test found | called on MULTIPROXY startup | not documented |
 | Internal subnet routes | yes in Go | route tests | not captured by current Android Builder | n/a as product feature |
 | Internal exit Tailnet | yes in Go | lower-level path exists | not captured by current Android Builder | n/a as product feature |
+| Pluggable upstream registry (Provider/source) | yes | registry, chain and route tests | reached through the applier | not documented |
+| SOCKS5 upstream (CONNECT + UDP ASSOCIATE) | yes | tested against a real in-process SOCKS5 server | configurable in Proxies & tunnels | not documented |
+| WireGuard upstream | yes | two devices back to back, real handshake carrying TCP | configurable as raw JSON | not documented |
+| Upstream chaining (`via`) | yes | three-hop traversal; WireGuard over a real SOCKS5 UDP association | pickable per upstream | not documented |
+| Chain cycle rejection | yes | static walk at registration + dial-time depth guard | refused before save where the UI can tell | not documented |
+| First-match-wins routing policy | yes | policy and route tests, incl. empty-policy regression guard | built from bindings by the applier | not documented |
+| Per-app upstream binding | yes | policy selector tests | App routing screen, package to UID at apply time | not documented |
+| App attribution (getConnectionOwnerUid) | yes | resolver timeout/fail-safe tests with a stub | AppUidResolver installed before startVPN | **not verified on any device** |
+| Default upstream for unbound apps | yes | covered by policy default-rule tests | Proxies & tunnels screen | not documented |
+| Upstream/binding persistence | yes | no Android CRUD or migration tests | DB v3 + EncryptedSharedPreferences | not documented |
+| Live re-apply without VPN restart | yes | not directly tested | applier called from the view model | not documented |
 
 ## 3. Evidence from the Go test suite
 

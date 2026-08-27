@@ -527,7 +527,91 @@ running on the device works unchanged.
 
 ---
 
-## 7. Invariants
+## 7. The Android layer
+
+### 7.1 Where configuration lives
+
+`CURRENT CODE`
+
+The engine holds no configuration across restarts. Three stores are the source
+of truth, and `UpstreamPolicyApplier` reconciles a running engine with them.
+
+| Store | Holds | Backing |
+|---|---|---|
+| `UpstreamRepository` | id, kind, label, `via`, enabled, timestamps | `multiproxy_profiles.db`, table `upstreams` (schema v3) |
+| `UpstreamSecretStore` | the whole configuration blob per upstream | EncryptedSharedPreferences |
+| `AppBindingRepository` | package name to upstream id | `multiproxy_profiles.db`, table `app_bindings` |
+| `RoutingSettings` | the default upstream for unbound apps | unencrypted prefs, alongside the split-tunnel selection |
+
+**Why the split.** A WireGuard config contains a private key and a SOCKS5 one
+may contain a password, so no configuration is written to the database at all.
+Splitting a config *within* itself - secret parts encrypted, the rest not -
+was rejected: it would put a WireGuard config half in each store, with the
+reassembly, and the chance of writing a key to the wrong half, repeated at every
+call site.
+
+**Why package names, not UIDs.** A UID is stable only until the app is
+reinstalled; the user's choice is about the app. The UID is resolved from the
+package at apply time via `PackageManager.getPackageUid`, and a binding whose
+package is no longer installed is dropped for that session. The row stays, so
+reinstalling the app restores the binding.
+
+### 7.2 When it is applied
+
+`CURRENT CODE` (`IPNService.rebuildMultiProxyTunLocked`)
+
+`UpstreamPolicyApplier.apply(engine)` runs immediately after `startVPN`, so a
+registered upstream is never dialable before the datapath it belongs to exists.
+It also runs from the UI on every change, because upstream registration and
+policy are both designed to be replaced live - a routing change takes effect on
+the next flow rather than needing the VPN restarted.
+
+`apply` does three things:
+
+1. Unregisters SOCKS5/WireGuard upstreams the engine still holds that are no
+   longer configured or have been disabled. Without this a deleted upstream
+   would keep carrying traffic until the process restarted - the one case where
+   the UI and the datapath could disagree about whether traffic is still
+   flowing through something. Tailnets and `@direct` are skipped; neither is
+   the applier's to remove.
+2. Registers the configured upstreams, parents before children
+   (`registrationOrder`). Ordering is not required for correctness - `via` is
+   resolved at dial time - but it means the cycle check sees the real graph.
+3. Resolves bindings to UIDs and installs the policy via
+   `BuildAppBindingPolicyJSON`.
+
+Nothing in it is fatal. A misconfigured upstream is logged and skipped, which
+costs its own traffic - policy rules naming it then fail closed - rather than
+taking the VPN down.
+
+### 7.3 The screens
+
+`CURRENT CODE` (`UpstreamsView`, `AppRoutingView`, `UpstreamRoutingViewModel`)
+
+- **Proxies & tunnels** manages SOCKS5 and WireGuard upstreams, their chaining,
+  and the default route for unbound apps.
+- **App routing** lists installed apps with a "Route via" picker each.
+
+Both are backed by one view model, because they share every repository and would
+otherwise keep two copies of the same state - which is exactly the bug that
+matters here: a picker offering an upstream the list has just deleted.
+
+The pickers flatten Tailnets, configured upstreams, and `@direct` into one list.
+To the user these are the same decision - where does this app's traffic go -
+even though they have nothing in common underneath. A disabled upstream is still
+listed, marked off, so a binding to something currently switched off never looks
+lost.
+
+App routing is deliberately a separate screen from split tunnelling, which
+answers a different question: whether an app uses the VPN at all, rather than
+where its traffic exits.
+
+`ANDROID-BUILT`: the whole layer compiles and links into a debug APK. There is
+no instrumentation or device evidence for any of it.
+
+---
+
+## 8. Invariants
 
 These are the properties the tests exist to protect. Breaking any of them is a
 correctness bug, not a behaviour change.
@@ -546,20 +630,24 @@ correctness bug, not a behaviour change.
 
 ---
 
-## 8. Known gaps
+## 9. Known gaps
 
 `RECOMMENDATION` / evidence levels per `validation_and_gaps.md`.
 
-1. **No persistence.** Upstreams and policy live only in the running Engine.
-   They need a DB table mirroring `ProfileRepository`, and re-registration on
-   VPN rebuild. Until then, everything configured is lost on restart.
-2. **No UI.** Nothing in the Android app currently calls the policy or upstream
-   bindings. Per-app upstream selection is the intended surface -
-   `SplitTunnelAppPickerView` is the natural home.
-3. **No device evidence.** Everything here is `UNIT-OR-RACE-TESTED` and
+1. **No device evidence.** Everything here is `UNIT-OR-RACE-TESTED` and
    `ANDROID-BUILT`. Nothing is `PHYSICAL-DEVICE-E2E`. In particular
    `getConnectionOwnerUid` has never been exercised against this TUN on a real
-   device, across API levels or OEMs.
+   device, across API levels or OEMs - which is the single most consequential
+   unknown, since per-app routing silently degrades to "no rule matches" if it
+   does not work.
+2. **No Android tests for the new stores.** `UpstreamRepository`,
+   `AppBindingRepository` and the v3 migration have no JVM tests. This is the
+   same gap `validation_and_gaps.md` §5.1 and §5.2 already record for
+   `ProfileRepository`, now widened.
+3. **The WireGuard editor takes raw JSON.** A user must transcribe a wg-quick
+   config into the JSON form by hand. A parser for the `.conf` format, or a QR
+   import, is the obvious next step; nothing in the design depends on the JSON
+   spelling.
 4. **WireGuard cannot act as a responder** through `Engine.NewWireGuardUpstream`
    (§2.6, §5.3). Acceptable for a client upstream; a blocker if inbound is ever
    wanted.
@@ -567,3 +655,8 @@ correctness bug, not a behaviour change.
    parsed and carried but the multiproxy resolver handles DNS itself, so it only
    affects lookups made by the tunnel's own netstack - of which there are
    currently none.
+6. **DNS is not policy-routed.** Name resolution is handled by the multiproxy
+   resolver before the datapath dials, so an app routed through a proxy still
+   resolves names the same way every other app does. For a proxy meant to
+   provide both transport and resolution, that is a leak of intent - and, for a
+   name that resolves differently inside the proxy's network, a wrong answer.

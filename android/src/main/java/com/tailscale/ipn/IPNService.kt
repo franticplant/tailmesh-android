@@ -4,8 +4,13 @@ package com.tailscale.ipn
 import com.tailscale.ipn.multiproxy.db.ProfileRepository
 import com.tailscale.ipn.multiproxy.AppUidResolver
 import com.tailscale.ipn.multiproxy.CredentialStore
+import com.tailscale.ipn.multiproxy.RoutingSettings
+import com.tailscale.ipn.multiproxy.UpstreamPolicyApplier
+import com.tailscale.ipn.multiproxy.UpstreamSecretStore
+import com.tailscale.ipn.multiproxy.db.AppBindingRepository
 import com.tailscale.ipn.multiproxy.db.TailnetProfile
 import com.tailscale.ipn.multiproxy.db.UpstreamOwner
+import com.tailscale.ipn.multiproxy.db.UpstreamRepository
 import kotlinx.coroutines.launch
 import libtailscale.Libtailscale
 
@@ -43,6 +48,16 @@ class MultiProxySession(val app: App) {
 
     val profileRepository = ProfileRepository(app)
     val credentialStore = CredentialStore(app.getEncryptedPrefs())
+
+    // Non-Tailnet upstreams and the per-app routing policy. The engine keeps none
+    // of this across restarts, so these are the source of truth and
+    // upstreamPolicyApplier is what reconciles a fresh engine with them.
+    val upstreamRepository = UpstreamRepository(app)
+    val appBindingRepository = AppBindingRepository(app)
+    val upstreamSecretStore = UpstreamSecretStore(app.getEncryptedPrefs())
+    val routingSettings = RoutingSettings(app)
+    val upstreamPolicyApplier = UpstreamPolicyApplier(
+        app, upstreamRepository, appBindingRepository, upstreamSecretStore, routingSettings)
 
     // The network's own DNS server, refreshed whenever the underlying
     // network changes. Used as the non-tailnet DNS fallback only when the
@@ -385,6 +400,11 @@ open class IPNService : VpnService(), libtailscale.IPNService {
               // us from establish() onwards, so this is the earliest correct point.
               engine.setUIDResolver(AppUidResolver(this))
               engine.startVPN(session.activeFd, 1280)
+              // After startVPN, so that a registered upstream is never dialable
+              // before the datapath it belongs to exists. Failures inside are
+              // logged and skipped rather than taking the session down: a
+              // misconfigured upstream should cost its own traffic, not the VPN.
+              session.upstreamPolicyApplier.apply(engine)
               return true
           } catch (e: Exception) {
               TSLog.e(TAG, "MultiProxy StartVPN failed: $e")

@@ -182,6 +182,22 @@ func (e *MultiProxyEngine) AddWireGuardUpstream(id, configJSON string) error {
 	return e.inner.RegisterUpstream(p)
 }
 
+// RemoveUpstream unregisters a non-tailnet upstream. Removing one that policy
+// rules still name is allowed: those rules then fail closed, which is safer
+// than silently rerouting their traffic somewhere else. The same goes for an
+// upstream chained behind it.
+func (e *MultiProxyEngine) RemoveUpstream(id string) error {
+	return e.inner.UnregisterUpstream(multiproxy.UpstreamID(id))
+}
+
+// MultiProxyDirectUpstreamID is the reserved id of the built-in upstream that
+// dials outside every tunnel. Use it in a rule to exempt an app from the VPN.
+func MultiProxyDirectUpstreamID() string { return string(multiproxy.DirectUpstreamID) }
+
+// MultiProxyUnknownAppUID is the UID reported for a flow whose owning app could
+// not be determined. A rule naming specific UIDs never matches such a flow.
+func MultiProxyUnknownAppUID() int32 { return multiproxy.UnknownAppUID }
+
 // ---------------------------------------------------------------------------
 // app attribution
 // ---------------------------------------------------------------------------

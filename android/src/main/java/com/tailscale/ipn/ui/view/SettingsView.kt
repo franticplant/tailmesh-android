@@ -114,6 +114,22 @@ fun SettingsView(
               subtitle = "Choose one Standard upstream or enable multiple proxy upstreams",
               onClick = settingsNav.onNavigateToMultiProxy)
 
+          // Routing through things that are not Tailnets. Kept next to the
+          // Multi-Tailnet entry because they are the same decision from the
+          // user's side - where does traffic go - and separate from split
+          // tunneling, which decides only whether an app uses the VPN at all.
+          Lists.ItemDivider()
+          Setting.Text(
+              R.string.upstreams,
+              subtitle = stringResource(R.string.upstreams_subtitle),
+              onClick = settingsNav.onNavigateToProxyUpstreams)
+
+          Lists.ItemDivider()
+          Setting.Text(
+              R.string.app_routing,
+              subtitle = stringResource(R.string.app_routing_subtitle),
+              onClick = settingsNav.onNavigateToAppRouting)
+
           Lists.ItemDivider()
           Setting.Switch(
               title = "Proxy-Only Mode (No VPN)",
@@ -420,5 +436,5 @@ fun SettingsPreview() {
   vm.tailNetLockEnabled.set(true)
   vm.isAdmin.set(true)
   vm.managedByOrganization.set("Tails and Scales Inc.")
-  SettingsView(SettingsNav({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}), vm)
+  SettingsView(SettingsNav({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}), vm)
 }

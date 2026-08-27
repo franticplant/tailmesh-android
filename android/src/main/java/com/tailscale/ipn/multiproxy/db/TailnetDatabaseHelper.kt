@@ -7,7 +7,7 @@ import android.database.sqlite.SQLiteOpenHelper
 class TailnetDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
     companion object {
         const val DATABASE_NAME = "multiproxy_profiles.db"
-        const val DATABASE_VERSION = 2
+        const val DATABASE_VERSION = 3
         const val TABLE_PROFILES = "profiles"
         const val COL_ID = "id"
         const val COL_DISPLAY_NAME = "display_name"
@@ -19,6 +19,46 @@ class TailnetDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABA
         const val COL_OWNER = "owner"
         const val COL_STANDARD_SELECTED = "standard_selected"
         const val COL_MIGRATION_VERSION = "migration_version"
+
+        // Non-Tailnet upstreams: SOCKS5 proxies and WireGuard tunnels.
+        //
+        // Only the non-secret parts of an upstream live here. Its configuration -
+        // which for WireGuard contains a private key, and for SOCKS5 may contain a
+        // password - is held in EncryptedSharedPreferences by UpstreamSecretStore,
+        // so nothing sensitive is written to this database.
+        const val TABLE_UPSTREAMS = "upstreams"
+        const val COL_UPSTREAM_ID = "id"
+        const val COL_UPSTREAM_KIND = "kind"
+        const val COL_UPSTREAM_LABEL = "label"
+        const val COL_UPSTREAM_VIA = "via"
+
+        // Per-app upstream selection, keyed by package name rather than UID
+        // because a UID is only stable until the app is reinstalled, whereas the
+        // user's choice is about the app.
+        const val TABLE_APP_BINDINGS = "app_bindings"
+        const val COL_BINDING_PACKAGE = "package_name"
+        const val COL_BINDING_UPSTREAM = "upstream_id"
+
+        private const val CREATE_UPSTREAMS = """
+            CREATE TABLE IF NOT EXISTS $TABLE_UPSTREAMS (
+                $COL_UPSTREAM_ID TEXT PRIMARY KEY,
+                $COL_UPSTREAM_KIND TEXT NOT NULL,
+                $COL_UPSTREAM_LABEL TEXT NOT NULL,
+                $COL_UPSTREAM_VIA TEXT NOT NULL DEFAULT '',
+                $COL_ENABLED INTEGER NOT NULL DEFAULT 1,
+                $COL_CREATED_AT INTEGER NOT NULL,
+                $COL_UPDATED_AT INTEGER NOT NULL
+            )
+        """
+
+        private const val CREATE_APP_BINDINGS = """
+            CREATE TABLE IF NOT EXISTS $TABLE_APP_BINDINGS (
+                $COL_BINDING_PACKAGE TEXT PRIMARY KEY,
+                $COL_BINDING_UPSTREAM TEXT NOT NULL,
+                $COL_CREATED_AT INTEGER NOT NULL,
+                $COL_UPDATED_AT INTEGER NOT NULL
+            )
+        """
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -36,6 +76,8 @@ class TailnetDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABA
                 $COL_MIGRATION_VERSION INTEGER NOT NULL DEFAULT 1
             )
         """.trimIndent())
+        db.execSQL(CREATE_UPSTREAMS.trimIndent())
+        db.execSQL(CREATE_APP_BINDINGS.trimIndent())
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -47,6 +89,18 @@ class TailnetDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABA
                 db.execSQL("ALTER TABLE $TABLE_PROFILES ADD COLUMN $COL_STANDARD_SELECTED INTEGER NOT NULL DEFAULT 0")
                 db.execSQL("ALTER TABLE $TABLE_PROFILES ADD COLUMN $COL_MIGRATION_VERSION INTEGER NOT NULL DEFAULT 1")
                 db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS profiles_source_profile_id ON $TABLE_PROFILES($COL_SOURCE_PROFILE_ID)")
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
+        }
+        if (oldVersion < 3) {
+            // Both tables are new rather than altered, so this is the whole
+            // migration: no data to move, and IF NOT EXISTS keeps it idempotent.
+            db.beginTransaction()
+            try {
+                db.execSQL(CREATE_UPSTREAMS.trimIndent())
+                db.execSQL(CREATE_APP_BINDINGS.trimIndent())
                 db.setTransactionSuccessful()
             } finally {
                 db.endTransaction()

@@ -27,6 +27,8 @@ data class SettingsNav(
     val onNavigateToPermissions: () -> Unit,
     val onNavigateToNetcheck: () -> Unit,
     val onNavigateToMultiProxy: () -> Unit,
+    val onNavigateToProxyUpstreams: () -> Unit,
+    val onNavigateToAppRouting: () -> Unit,
     val onNavigateBackHome: () -> Unit,
     val onBackToSettings: () -> Unit,
 )

@@ -124,7 +124,23 @@ It traces:
 - Tailscale underlay socket protection;
 - Wi-Fi/cellular and DNS changes.
 
-### 2.5 `validation_and_gaps.md`
+### 2.5 `upstreams_and_policy.md`
+
+The upstream and routing-policy layer, which sits beneath everything above and
+changes nothing when unconfigured.
+
+Read this for:
+
+- `Provider` versus `Upstream`, and why the datapath never switches on kind;
+- tailnets as a provider source rather than a special case;
+- the SOCKS5 and WireGuard upstreams, and what each one proves;
+- the first-match-wins policy engine and where it sits in the route ladder;
+- per-app attribution, and how it fails safe;
+- upstream chaining, its fail-closed rule, and its two cycle guards;
+- where Android stores upstreams, bindings and secrets, and when they are applied;
+- the invariants the tests exist to protect.
+
+### 2.6 `validation_and_gaps.md`
 
 The evidence ledger.
 

@@ -385,4 +385,43 @@
     <string name="enable_hardware_attestation">Enable hardware attestation</string>
     <string name="use_hardware_backed_keys_to_bind_node_identity_to_the_device">Use hardware-backed keys to bind node identity to the device</string>
 
+    <!-- Pluggable upstreams and per-app routing (Multi-Tailnet mode) -->
+    <string name="edit">Edit</string>
+    <string name="delete">Delete</string>
+
+    <string name="upstreams">Proxies &amp; tunnels</string>
+    <string name="upstreams_explanation">Upstreams are the places traffic can be sent: your Tailnets, a SOCKS5 proxy such as a local Xray or sing-box listener, or a WireGuard tunnel. Apps can be routed through any of them on the App routing screen.</string>
+    <string name="upstreams_empty">No proxy or WireGuard upstreams configured yet.</string>
+    <string name="count_upstreams">Configured upstreams (%1$s)</string>
+    <string name="upstream_add">Add upstream</string>
+    <string name="upstream_edit">Edit upstream</string>
+    <string name="upstream_name">Name</string>
+    <string name="upstream_kind">Type: %1$s</string>
+    <string name="upstream_address">Proxy address (host:port)</string>
+    <string name="upstream_username_optional">Username (optional)</string>
+    <string name="upstream_password_optional">Password (optional)</string>
+    <string name="upstream_wireguard_config">WireGuard configuration (JSON)</string>
+    <string name="upstream_wireguard_help">Paste a JSON configuration with privateKey, addresses, and peers. Keys are base64, exactly as they appear in a wg-quick config.</string>
+    <string name="upstream_chain_through">Reach it through: %1$s</string>
+    <string name="upstream_chain_none">The device (no chaining)</string>
+    <string name="upstream_chained_via">Chained through %1$s</string>
+    <string name="upstream_invalid">That will not work</string>
+    <string name="upstream_delete_title">Delete %1$s?</string>
+    <string name="upstream_delete_explanation">Apps routed through it will fall back to the default route, and any upstream chained behind it will go direct.</string>
+    <string name="upstream_disabled">%1$s (off)</string>
+    <string name="upstream_missing">Missing: %1$s</string>
+
+    <string name="default_route">Default route</string>
+    <string name="default_route_explanation">Where traffic goes for apps with no route of their own.</string>
+    <string name="default_route_unset">Unchanged (subnet routes, then exit node)</string>
+    <string name="route_via">Route via: %1$s</string>
+    <string name="route_default">Default (%1$s)</string>
+
+    <string name="app_routing">App routing</string>
+    <string name="app_routing_explanation">Choose which upstream each app\'s traffic takes. This is separate from split tunneling, which decides whether an app uses the VPN at all.</string>
+    <string name="count_bound_apps">%1$s of %2$s apps routed explicitly</string>
+    <string name="unbound_apps">Apps with no route of their own</string>
+    <string name="app_routing_subtitle">Send specific apps through a proxy, tunnel, or Tailnet</string>
+    <string name="upstreams_subtitle">SOCKS5 proxies and WireGuard tunnels to route traffic through</string>
+
 </resources>
