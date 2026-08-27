@@ -2740,6 +2740,37 @@ pass could not test - it would need actual multi-device credentials against
 a live tailnet, which this sandbox does not have. The three fixes above make
 the failure *visible and bounded* if it happens; they do not prove it won't.
 
+## 61. Fixed: bootstrap auth keys never cleared from memory (2026-08-27)
+
+`ClearTailnetAuthKey` (`runtime_state.go`) existed with a clear doc comment
+("drops the bootstrap auth key from the in-memory runtime after the Tailnet
+has successfully established persistent tsnet state") but was never called
+from anywhere - not from Kotlin (`grep`-confirmed: no reference anywhere
+under `android/src/main/java/`), not from Go. A tailnet's or exit node's
+one-time bootstrap `AuthKey` stayed resident in the in-memory `Config` for
+as long as the engine ran, well past the point tsnet actually needs it
+(only read once, at first `Start`; a later disable/enable cycle relies on
+the persisted state directory, not the key).
+
+Fixed by wiring the call in at the two places that already observe real
+backend state: `pollTailnetStatus`'s existing per-tailnet poll loop
+(`api.go`) now calls `ClearTailnetAuthKey` the moment `BackendState` first
+reports `Running`; exit-node upstreams have no equivalent background poll
+loop, so `GetExitNodeStatesJSON` (`runtime_state.go`) - the function that
+already does a real `Status()` call per identity, specifically because an
+exit node's `EditPrefs` call succeeding locally does not mean the identity
+is actually approved (see that function's own doc comment, §59.3) - clears
+it there instead, once a probe reports genuine `Running` state.
+
+**Evidence:** new test `TestGetExitNodeStatesJSONKeepsAuthKeyBeforeRunning`
+guards the direction most likely to regress silently - the key must stay
+present while an identity is stuck at `NeedsLogin`/`NeedsMachineAuth`, not
+cleared early just because `GetExitNodeStatesJSON` ran. (A real
+Running-clears-it assertion needs live auth credentials this sandbox does
+not have - the same constraint already noted for
+`TestForgetExitNodeUpstreamRacesEnableSafely`.) Full `multiproxy` suite
+re-run clean under `go test -race -count=1` after this change.
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.
