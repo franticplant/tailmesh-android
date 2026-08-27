@@ -204,6 +204,36 @@ func TestAddExitNodeUpstreamEnforcesCap(t *testing.T) {
 	}
 }
 
+// GetExitNodeStatesJSON also drops a Running exit node's bootstrap AuthKey
+// from memory (see its doc comment and the clearing loop right after
+// wg.Wait() in runtime_state.go) - but only once tsnet has actually
+// reported Running, not merely because AddExitNodeUpstream's EditPrefs
+// call succeeded locally. Without a real auth key this test can only reach
+// NeedsLogin, not Running (see TestForgetExitNodeUpstreamRacesEnableSafely's
+// comment for the same constraint) - so it guards the other direction: the
+// key must still be present while the node is stuck, not cleared early.
+func TestGetExitNodeStatesJSONKeepsAuthKeyBeforeRunning(t *testing.T) {
+	e := NewEngine(t.TempDir(), &MockCallback{})
+	if err := e.AddExitNodeUpstream("exit1", "tn", "test-auth-key", "100.64.0.5", true); err != nil {
+		t.Fatalf("AddExitNodeUpstream: %v", err)
+	}
+
+	// Call it twice - the clearing logic runs on every call, so this also
+	// guards against a one-off vs. every-call regression.
+	_ = e.GetExitNodeStatesJSON()
+	_ = e.GetExitNodeStatesJSON()
+
+	e.mu.RLock()
+	rt := e.exitNodes["exit1"]
+	e.mu.RUnlock()
+	if rt == nil {
+		t.Fatal("exit1 missing from engine")
+	}
+	if rt.Config.AuthKey != "test-auth-key" {
+		t.Fatalf("AuthKey cleared while state is not Running: got %q", rt.Config.AuthKey)
+	}
+}
+
 // GetExitNodeStatesJSON is what makes a stuck NeedsMachineAuth/NeedsLogin
 // dedicated identity visible (see its doc comment) - a disabled upstream
 // must read as the cheap, unambiguous STOPPED rather than an empty or

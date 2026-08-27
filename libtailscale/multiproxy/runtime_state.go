@@ -162,6 +162,30 @@ func (e *Engine) GetExitNodeStatesJSON() string {
 	}
 	wg.Wait()
 
+	// An exit-node identity's AuthKey is a one-time bootstrap credential -
+	// once tsnet has actually reached Running (not just "EditPrefs
+	// succeeded locally", which upstream_exitnode.go's optimistic RUNNING
+	// event cannot distinguish from a stuck NeedsMachineAuth/NeedsLogin -
+	// see this function's doc comment), it is never read again: a later
+	// disable/enable cycle restarts the same tsnet.Server against its own
+	// persisted state directory. Drop it from memory here, the one place
+	// that already confirms real backend state via a live Status() call.
+	var toClear []UpstreamID
+	for _, exp := range out {
+		if exp.State == "Running" {
+			toClear = append(toClear, UpstreamID(exp.ID))
+		}
+	}
+	if len(toClear) > 0 {
+		e.mu.Lock()
+		for _, id := range toClear {
+			if rt := e.exitNodes[id]; rt != nil {
+				rt.Config.AuthKey = ""
+			}
+		}
+		e.mu.Unlock()
+	}
+
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	b, err := json.Marshal(out)
 	if err != nil {

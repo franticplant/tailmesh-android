@@ -741,6 +741,12 @@ func (e *Engine) pollTailnetStatus(ctx context.Context, wg *sync.WaitGroup, uid 
 			if status.BackendState != lastState {
 				lastState = status.BackendState
 				e.enqueueStateEvent(string(uid), status.BackendState)
+				if status.BackendState == ipn.Running.String() {
+					// One-time bootstrap credential, never read again once
+					// this Tailnet's tsnet.Server has actually reached
+					// Running - see ClearTailnetAuthKey's doc comment.
+					e.ClearTailnetAuthKey(string(uid))
+				}
 			}
 
 			var snapshot []TargetRecord
