@@ -12,6 +12,7 @@ import com.tailscale.ipn.multiproxy.db.Upstream
 import com.tailscale.ipn.multiproxy.db.UpstreamKind
 import com.tailscale.ipn.util.TSLog
 import java.util.UUID
+import libtailscale.Libtailscale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -140,21 +141,38 @@ class UpstreamRoutingViewModel : ViewModel() {
   }
 
   /**
-   * Saves a WireGuard upstream from a JSON configuration in the form
-   * `MultiProxyEngine.addWireGuardUpstream` accepts.
+   * Saves a WireGuard upstream.
+   *
+   * The text may be either a wg-quick `.conf`, which is what a provider hands out, or the JSON form
+   * directly. Which one it is is decided by looking at it rather than by asking, because a user
+   * pasting a config should not have to know or care that the two forms exist.
    */
-  fun saveWireGuard(id: String?, label: String, configJson: String, via: String) {
-    if (configJson.isBlank()) {
+  fun saveWireGuard(id: String?, label: String, config: String, via: String) {
+    val text = config.trim()
+    if (text.isEmpty()) {
       errorMessage.value = "A WireGuard configuration is required"
       return
     }
-    try {
-      JSONObject(configJson)
-    } catch (e: Exception) {
-      errorMessage.value = "That is not valid JSON: ${e.message}"
-      return
-    }
-    save(id, UpstreamKind.WIREGUARD, label, via, configJson)
+
+    val json =
+        if (text.startsWith("{")) {
+          try {
+            JSONObject(text)
+            text
+          } catch (e: Exception) {
+            errorMessage.value = "That is not valid JSON: ${e.message}"
+            return
+          }
+        } else {
+          try {
+            Libtailscale.multiProxyWireGuardConfigFromQuick(text)
+          } catch (e: Exception) {
+            errorMessage.value = e.message ?: "That is not a usable WireGuard configuration"
+            return
+          }
+        }
+
+    save(id, UpstreamKind.WIREGUARD, label, via, json)
   }
 
   private fun save(

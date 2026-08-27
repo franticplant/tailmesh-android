@@ -128,35 +128,8 @@ class UpstreamRepository(context: Context) {
 
   fun getAllImmediate(): List<Upstream> = _upstreams.value
 
-  /**
-   * Returns the enabled upstreams ordered so that every chain parent precedes its children.
-   *
-   * Registration order does not affect correctness - `via` is resolved at dial time, not at
-   * registration - but registering a parent first means the cycle check sees the real graph and a
-   * dial made immediately after registration finds its parent already there.
-   *
-   * An upstream in a cycle, or one whose chain does not terminate within the graph, is placed last
-   * rather than dropped: Go refuses the cycle with a clear error, which is better than this method
-   * silently deciding an upstream does not exist.
-   */
-  fun registrationOrder(): List<Upstream> {
-    val enabled = _upstreams.value.filter { it.enabled }
-    val byId = enabled.associateBy { it.id }
-    val ordered = mutableListOf<Upstream>()
-    val placed = mutableSetOf<String>()
-    val visiting = mutableSetOf<String>()
-
-    fun place(upstream: Upstream) {
-      if (upstream.id in placed || upstream.id in visiting) return
-      visiting += upstream.id
-      byId[upstream.via]?.let { place(it) }
-      visiting -= upstream.id
-      if (placed.add(upstream.id)) ordered += upstream
-    }
-
-    enabled.forEach(::place)
-    return ordered
-  }
+  /** The enabled upstreams, ordered so that every chain parent precedes its children. */
+  fun registrationOrder(): List<Upstream> = orderByChain(_upstreams.value.filter { it.enabled })
 
   private fun values(upstream: Upstream) =
       ContentValues().apply {

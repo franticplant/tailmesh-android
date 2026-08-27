@@ -400,8 +400,8 @@
     <string name="upstream_address">Proxy address (host:port)</string>
     <string name="upstream_username_optional">Username (optional)</string>
     <string name="upstream_password_optional">Password (optional)</string>
-    <string name="upstream_wireguard_config">WireGuard configuration (JSON)</string>
-    <string name="upstream_wireguard_help">Paste a JSON configuration with privateKey, addresses, and peers. Keys are base64, exactly as they appear in a wg-quick config.</string>
+    <string name="upstream_wireguard_config">WireGuard configuration</string>
+    <string name="upstream_wireguard_help">Paste a wg-quick .conf exactly as your provider gave it to you, including the [Interface] and [Peer] sections. The JSON form is accepted too.</string>
     <string name="upstream_chain_through">Reach it through: %1$s</string>
     <string name="upstream_chain_none">The device (no chaining)</string>
     <string name="upstream_chained_via">Chained through %1$s</string>

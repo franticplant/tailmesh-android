@@ -182,6 +182,19 @@ func (e *MultiProxyEngine) AddWireGuardUpstream(id, configJSON string) error {
 	return e.inner.RegisterUpstream(p)
 }
 
+// MultiProxyWireGuardConfigFromQuick converts a wg-quick .conf - what a VPN
+// provider hands out, and what a WireGuard QR code encodes - into the JSON that
+// AddWireGuardUpstream takes.
+//
+// It reads the [Interface] and [Peer] settings that describe a client tunnel,
+// ignores wg-quick's host routing and shell hooks (Table, PostUp and friends),
+// and uses the first [Peer] only. An unrecognised setting is an error rather
+// than being dropped: a directive the user believed they had set going silently
+// missing is worse than being told it is unsupported.
+func MultiProxyWireGuardConfigFromQuick(conf string) (string, error) {
+	return multiproxy.ParseWireGuardQuickConfig(conf)
+}
+
 // RemoveUpstream unregisters a non-tailnet upstream. Removing one that policy
 // rules still name is allowed: those rules then fail closed, which is safer
 // than silently rerouting their traffic somewhere else. The same goes for an

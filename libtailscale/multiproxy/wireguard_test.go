@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -719,5 +720,123 @@ func TestParseWireGuardConfigJSONEmptyIsRejectedOnUse(t *testing.T) {
 	}
 	if _, err := NewWireGuardUpstream(cfg, nil, nil); err == nil {
 		t.Fatal("an empty config should not produce a usable upstream")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// endpoint resolution
+// ---------------------------------------------------------------------------
+
+// stubEndpointLookup replaces the resolver for one test.
+func stubEndpointLookup(t *testing.T, answers map[string][]netip.Addr) *[]string {
+	t.Helper()
+	asked := []string{}
+	original := lookupEndpointIP
+	lookupEndpointIP = func(_ context.Context, host string) ([]netip.Addr, error) {
+		asked = append(asked, host)
+		addrs, ok := answers[host]
+		if !ok {
+			return nil, fmt.Errorf("no such host: %s", host)
+		}
+		return addrs, nil
+	}
+	t.Cleanup(func() { lookupEndpointIP = original })
+	return &asked
+}
+
+// A peer endpoint given by name has to be resolved before it reaches the UAPI,
+// which takes only a literal and rejects anything else with an opaque IPC
+// error. Provider configs name their endpoint, so this is the normal case.
+func TestWireGuardResolvesNamedEndpoint(t *testing.T) {
+	asked := stubEndpointLookup(t, map[string][]netip.Addr{
+		"vpn.example.com": {netip.MustParseAddr("203.0.113.9")},
+	})
+
+	priv, pub := wgKeypair(t)
+	cfg := WireGuardConfig{
+		ID:         "wg",
+		PrivateKey: priv,
+		Addresses:  []netip.Addr{netip.MustParseAddr("10.9.0.2")},
+		Peers: []WireGuardPeer{{
+			PublicKey:  pub,
+			Endpoint:   "vpn.example.com:51820",
+			AllowedIPs: []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")},
+		}},
+	}
+
+	resolved, err := cfg.resolveEndpoints()
+	if err != nil {
+		t.Fatalf("resolveEndpoints: %v", err)
+	}
+	if got := resolved.Peers[0].Endpoint; got != "203.0.113.9:51820" {
+		t.Fatalf("endpoint = %q", got)
+	}
+	if len(*asked) != 1 || (*asked)[0] != "vpn.example.com" {
+		t.Fatalf("resolver was asked for %v", *asked)
+	}
+
+	// The original must be untouched: the caller's config is not ours to edit.
+	if cfg.Peers[0].Endpoint != "vpn.example.com:51820" {
+		t.Fatal("resolveEndpoints mutated its receiver's peers")
+	}
+
+	// And the whole path has to work, not just the helper.
+	up, err := NewWireGuardUpstream(cfg, newRealBind(), nil)
+	if err != nil {
+		t.Fatalf("building an upstream with a named endpoint: %v", err)
+	}
+	_ = up.Close()
+}
+
+// A literal endpoint must not cost a lookup - that would put a resolver on the
+// path of a config that never needed one.
+func TestWireGuardSkipsLookupForLiteralEndpoint(t *testing.T) {
+	asked := stubEndpointLookup(t, nil)
+
+	priv, pub := wgKeypair(t)
+	cfg := WireGuardConfig{
+		ID:         "wg",
+		PrivateKey: priv,
+		Addresses:  []netip.Addr{netip.MustParseAddr("10.9.0.2")},
+		Peers: []WireGuardPeer{
+			{PublicKey: pub, Endpoint: "203.0.113.9:51820"},
+			{PublicKey: pub, Endpoint: "[2001:db8::1]:51820"},
+			{PublicKey: pub},
+		},
+	}
+
+	resolved, err := cfg.resolveEndpoints()
+	if err != nil {
+		t.Fatalf("resolveEndpoints: %v", err)
+	}
+	if len(*asked) != 0 {
+		t.Fatalf("resolver was asked for %v", *asked)
+	}
+	if resolved.Peers[0].Endpoint != "203.0.113.9:51820" ||
+		resolved.Peers[1].Endpoint != "[2001:db8::1]:51820" ||
+		resolved.Peers[2].Endpoint != "" {
+		t.Fatalf("endpoints changed: %v", resolved.Peers)
+	}
+}
+
+// A name that does not resolve is reported as such, rather than surfacing later
+// as a handshake that silently never completes.
+func TestWireGuardReportsUnresolvableEndpoint(t *testing.T) {
+	stubEndpointLookup(t, map[string][]netip.Addr{})
+
+	priv, pub := wgKeypair(t)
+	cfg := WireGuardConfig{
+		ID:         "wg",
+		PrivateKey: priv,
+		Addresses:  []netip.Addr{netip.MustParseAddr("10.9.0.2")},
+		Peers:      []WireGuardPeer{{PublicKey: pub, Endpoint: "nowhere.invalid:51820"}},
+	}
+
+	_, err := NewWireGuardUpstream(cfg, newRealBind(), nil)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "resolving peer 0 endpoint") {
+		t.Fatalf("error %q does not name the endpoint that failed", err)
 	}
 }

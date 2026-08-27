@@ -237,6 +237,37 @@ applies lines in order and anything after a peer key belongs to that peer.
 localhost, completing a real handshake and carrying a TCP echo session through
 the tunnel; plus config validation, UAPI rendering, and JSON parsing tests.
 
+**Importing a config.** A WireGuard config reaches a user as an INI-ish
+`.conf`: that is what every provider hands out, what `wg-quick` reads, and what
+a QR code encodes. `ParseWireGuardQuickConfig` converts one into the same JSON
+the binding already takes, so the two paths converge immediately and cannot
+drift.
+
+It reads the `[Interface]` and `[Peer]` settings that describe a client tunnel,
+recognises and ignores wg-quick's host routing and shell hooks (`Table`,
+`PostUp` and friends) because those describe a machine's routing table rather
+than an in-process tunnel, and uses the first `[Peer]` only - a multi-peer file
+describes a mesh, which an upstream is not. An unrecognised setting is an error
+rather than being dropped: a directive the user believed they had set going
+silently missing is worse than being told it is unsupported.
+
+**Endpoints are resolved once, up front.** `resolveEndpoints` turns a named
+peer endpoint into a literal before the config reaches the UAPI.
+
+- *Before:* the endpoint was passed through as written.
+- *New:* a name is resolved once, with a 10s bound, and reported by name if it
+  fails.
+- *Why:* wireguard-go's `IpcSet` accepts only a literal address and rejects a
+  hostname with an opaque `IPC error -22`. Since essentially every provider
+  config names its endpoint, the previous behaviour meant a correct, pasted
+  config failed with a message that pointed nowhere. This was found by a test
+  that built a tunnel from an imported `.conf` rather than only parsing one -
+  parsing alone would have passed.
+
+The resolved address is fixed for the life of the upstream; a peer that moves is
+not followed until the upstream is reconfigured. That is the same bargain
+wg-quick makes, and acceptable for a client tunnel whose far end is a server.
+
 ### 2.6 A limitation worth knowing: no endpoint learning
 
 `CURRENT CODE` / `INFERENCE`
@@ -507,7 +538,8 @@ established.
 | `GetUpstreamsJSON` | list every routable upstream: `id`, `kind`, `ready`, `via` |
 | `AddSOCKS5Upstream` | register a SOCKS5 proxy |
 | `AddSOCKS5UpstreamVia` | the same, chained behind another upstream |
-| `AddWireGuardUpstream` | register a WireGuard tunnel from a wg-quick-shaped JSON config |
+| `AddWireGuardUpstream` | register a WireGuard tunnel from a JSON config |
+| `MultiProxyWireGuardConfigFromQuick` | convert a wg-quick `.conf` into that JSON |
 | `RemoveUpstream` | unregister a non-tailnet upstream |
 | `SetUIDResolver` | install the per-flow app attribution hook |
 | `MultiProxyDirectUpstreamID` | the reserved `@direct` id |
@@ -644,10 +676,9 @@ correctness bug, not a behaviour change.
    `AppBindingRepository` and the v3 migration have no JVM tests. This is the
    same gap `validation_and_gaps.md` §5.1 and §5.2 already record for
    `ProfileRepository`, now widened.
-3. **The WireGuard editor takes raw JSON.** A user must transcribe a wg-quick
-   config into the JSON form by hand. A parser for the `.conf` format, or a QR
-   import, is the obvious next step; nothing in the design depends on the JSON
-   spelling.
+3. **No QR import for WireGuard.** A `.conf` can be pasted (§2.5), but the QR
+   code providers print encodes the same text and would save the paste. Nothing
+   in the design depends on how the text arrives.
 4. **WireGuard cannot act as a responder** through `Engine.NewWireGuardUpstream`
    (§2.6, §5.3). Acceptable for a client upstream; a blocker if inbound is ever
    wanted.

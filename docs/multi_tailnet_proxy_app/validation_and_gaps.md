@@ -68,7 +68,9 @@ Do not substitute one level for another.
 | Internal exit Tailnet | yes in Go | lower-level path exists | not captured by current Android Builder | n/a as product feature |
 | Pluggable upstream registry (Provider/source) | yes | registry, chain and route tests | reached through the applier | not documented |
 | SOCKS5 upstream (CONNECT + UDP ASSOCIATE) | yes | tested against a real in-process SOCKS5 server | configurable in Proxies & tunnels | not documented |
-| WireGuard upstream | yes | two devices back to back, real handshake carrying TCP | configurable as raw JSON | not documented |
+| WireGuard upstream | yes | two devices back to back, real handshake carrying TCP | wg-quick .conf or JSON paste | not documented |
+| wg-quick .conf import | yes | round-trip to JSON, then built into a real tunnel | accepted by the upstream editor | not documented |
+| Named peer endpoint resolution | yes | stubbed-resolver tests + failure message test | transparent | not documented |
 | Upstream chaining (`via`) | yes | three-hop traversal; WireGuard over a real SOCKS5 UDP association | pickable per upstream | not documented |
 | Chain cycle rejection | yes | static walk at registration + dial-time depth guard | refused before save where the UI can tell | not documented |
 | First-match-wins routing policy | yes | policy and route tests, incl. empty-policy regression guard | built from bindings by the applier | not documented |

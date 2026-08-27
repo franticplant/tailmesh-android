@@ -33,9 +33,18 @@ Before building locally, set up the required toolchain environment:
 export JAVA_HOME=$HOME/jdk17
 export ANDROID_HOME=$HOME/Android/Sdk
 export NDK_ROOT=$ANDROID_HOME/ndk/26.1.10909125
-export TOOLCHAIN_DIR=$HOME/go_sdk/go
 export PATH=$JAVA_HOME/bin:$HOME/go/bin:$HOME/go_sdk/go/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH
 ```
+
+**Do not set `TOOLCHAINDIR`.** `tool/go` refuses to run with it set, because it
+would bypass the Tailscale Go revision pinned in `go.toolchain.rev`. That is not
+a theoretical concern: an APK built against a mismatched toolchain compiled and
+tested cleanly and then panicked at Go init on the device, because `libgojni.so`
+had been produced by an older Tailscale Go compiler. If your shell exports it for
+some other project, unset it before building here.
+
+Only a deliberate external-toolchain build - F-Droid, say - may override this,
+by also setting `TS_ANDROID_ALLOW_EXTERNAL_TOOLCHAIN=1`.
 
 ---
 
@@ -48,7 +57,8 @@ export PATH=$JAVA_HOME/bin:$HOME/go/bin:$HOME/go_sdk/go/bin:$ANDROID_HOME/cmdlin
 
 ### Step 2: Build the `libtailscale.aar` Library
 ```sh
-make libtailscale TOOLCHAINDIR=$HOME/go_sdk/go GOTOOLCHAIN=auto
+unset TOOLCHAINDIR
+make libtailscale
 ```
 This builds `android/libs/libtailscale_unstripped.aar`, strips symbols via `llvm-objcopy`, and outputs `android/libs/libtailscale.aar`.
 

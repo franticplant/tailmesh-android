@@ -57,3 +57,37 @@ data class AppBinding(
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
 )
+
+/**
+ * Orders upstreams so that every chain parent precedes the upstreams chained behind it.
+ *
+ * Registration order does not affect correctness - `via` is resolved in Go at dial time, not at
+ * registration - but registering a parent first means the cycle check sees the real graph, and a
+ * dial made immediately after registration finds its parent already there.
+ *
+ * An upstream in a cycle, or one whose parent is not in the list at all, is still returned rather
+ * than dropped. Go refuses a cycle with a clear error, and a chained upstream whose parent is
+ * missing fails closed at dial time; either is better than this function silently deciding an
+ * upstream the user configured does not exist.
+ *
+ * Kept out of [UpstreamRepository] so it can be tested without a database.
+ */
+fun orderByChain(upstreams: List<Upstream>): List<Upstream> {
+  val byId = upstreams.associateBy { it.id }
+  val ordered = mutableListOf<Upstream>()
+  val placed = mutableSetOf<String>()
+  val visiting = mutableSetOf<String>()
+
+  fun place(upstream: Upstream) {
+    // Already emitted, or reached again while placing its own ancestors - which is
+    // what a cycle looks like from here. Either way, stop rather than recurse.
+    if (upstream.id in placed || upstream.id in visiting) return
+    visiting += upstream.id
+    byId[upstream.via]?.let { place(it) }
+    visiting -= upstream.id
+    if (placed.add(upstream.id)) ordered += upstream
+  }
+
+  upstreams.forEach(::place)
+  return ordered
+}
