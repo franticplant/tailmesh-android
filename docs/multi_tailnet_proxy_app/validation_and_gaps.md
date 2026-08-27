@@ -2010,6 +2010,87 @@ concrete type.
   above; the event is a best-effort nudge, and `UpstreamHealthEvent`'s
   Kotlin-side accumulating log exists but has no UI surface yet).
 
+## 53. Added: opt-in broad VPN capture, with Direct-by-default (2026-08-27)
+
+**BEFORE:** the Multi-Tailnet `VpnService.Builder` (`IPNService.kt`,
+`rebuildMultiProxyTunLocked`) only ever installed six routes: the synthetic
+`/48` and `198.18.0.0/15`, and real Tailscale's CGNAT/ULA ranges. Confirmed
+via `dumpsys connectivity` both this session and in §50: no
+`0.0.0.0/0`/`::/0` route existed, so ordinary internet and LAN traffic never
+reached the engine - picking a non-Tailnet upstream for an app only ever
+affected its DNS lookups and its traffic to real Tailscale addresses, never
+its general traffic, because Android never handed those packets to `tun0`.
+
+**NEW:** `RoutingSettings.broadCaptureEnabled` (new, off by default,
+unencrypted prefs alongside `defaultUpstreamId`). When on,
+`rebuildMultiProxyTunLocked` additionally installs `0.0.0.0/0` and `::/0`
+routes, alongside the six narrower ones rather than replacing them - Android
+prefers the most specific match, so this only changes behaviour for traffic
+none of the existing routes covered. A Compose switch on the Proxies &
+tunnels screen ("Route general internet traffic") drives it, restarting the
+VPN (`ACTION_RESTART_VPN`) to pick up the new route table, since routes are
+fixed at `Builder.establish()` time rather than something a live policy
+update can change.
+
+Turning broad capture on, by itself, must not change behaviour for an app
+the user has not routed anywhere - `UpstreamPolicyApplier.applyPolicy` now
+defaults `defaultUpstream` to `Libtailscale.multiProxyDirectUpstreamID()`
+when `broadCaptureEnabled` is on and `RoutingSettings.defaultUpstreamId` is
+unset, rather than leaving it empty (which would otherwise route newly-
+captured traffic into `resolveFlow`'s legacy subnet-route/exit-node
+fallback - never designed to carry ordinary internet traffic for an unbound
+app). No Go engine change was needed for the routing ladder itself:
+`resolveFlow` (`nat_router.go`) already applies policy uniformly to any
+non-synthetic destination, and `ActionDirect`/`DirectUpstreamID`
+(`upstream.go`) already dials outside every tunnel via the same
+`VpnService.protect()`-backed mechanism the tailnet upstreams' own sockets
+use - this phase is Android-side capture plus one Kotlin default, not a
+core routing change.
+
+**WHY:** this is the structural foundation the rest of the plan
+(`eventual-humming-beacon.md`) sits on - LAN exclusion, DNS split-routing,
+and "a chosen upstream carries an app's *general* traffic, not just its
+Tailnet reachability" all require the OS to hand the engine packets it
+currently never sees. Off-by-default and Direct-by-default together mean
+enabling Multi-Tailnet, and even enabling broad capture itself, never
+silently changes what an existing user's unbound apps can reach - broad
+capture only makes routing *possible*; it does not add a policy.
+
+**Evidence (`ANDROID-BUILT`, `INSTRUMENTATION-OR-EMULATOR-TESTED`):** built
+from a clean `make libtailscale && make apk`, installed on the
+`sdk_gphone64_x86_64` emulator with both tailnets from §50 running in
+Multi-Tailnet mode.
+- Broad capture off (default): `dumpsys connectivity`'s `tun0` route list
+  matched the pre-existing six routes exactly, byte for byte - confirmed
+  this is a true no-op for anyone who does not opt in.
+- Toggled on: the VPN network handle changed (confirmed restart happened)
+  and the route list gained exactly `0.0.0.0/0 -> 0.0.0.0 tun0` and
+  `::/0 -> :: tun0`, nothing else changed.
+- With broad capture on and no default route configured, opened
+  `https://example.com` in Chrome; it loaded normally, and `logcat` showed
+  real, non-synthetic destination IPs (Google's `2a00:1450:...`,
+  Cloudflare's `2606:4700:...`) flowing through `[flow-N] ... dial @direct`
+  - i.e. genuinely captured by `tun0` and explicitly routed through the
+    engine's Direct provider, not merely still working because it was never
+    captured.
+- Both tailnets stayed `RUNNING` throughout (including after a VPN restart
+  triggered by the toggle), confirming no capture-induced routing loop on
+  the engine's own control-plane/DERP traffic - the specific risk the plan
+  flagged as needing explicit verification once capture broadens.
+- Toggled back off and confirmed the route list reverted to exactly the
+  original six.
+
+**Not verified here:** an app deliberately bound to a non-Tailnet upstream
+carrying its *general* TCP traffic under broad capture (only the unbound/
+Direct-by-default path and the engine's own DNS/control traffic were
+exercised this session); LAN-destination behaviour under broad capture
+(Phase 3, not yet built, is what is supposed to keep LAN traffic direct by
+default); an unrelated Chrome ANR and app-process restart occurred during
+this session's manual testing, but tailnets reconnected to `RUNNING` cleanly
+immediately after and the route table was unaffected - read as emulator
+resource pressure from a long debugging session, not a capture-related
+regression, but noted here rather than silently discarded.
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.

@@ -60,6 +60,9 @@ class UpstreamRoutingViewModel : ViewModel() {
 
   val defaultUpstreamId: MutableStateFlow<String> = MutableStateFlow(settings.defaultUpstreamId)
 
+  /** Whether the Multi-Tailnet VPN captures ordinary internet and LAN traffic. Off by default. */
+  val broadCaptureEnabled: MutableStateFlow<Boolean> = MutableStateFlow(settings.broadCaptureEnabled)
+
   /** Surfaces a failed save to the screen that asked for it. */
   val errorMessage: MutableStateFlow<String?> = MutableStateFlow(null)
 
@@ -233,6 +236,23 @@ class UpstreamRoutingViewModel : ViewModel() {
     settings.defaultUpstreamId = id
     defaultUpstreamId.value = id
     viewModelScope.launch { applyNow() }
+  }
+
+  /**
+   * Turns broad VPN capture on or off.
+   *
+   * Unlike [setDefaultUpstream], this changes what the VPN's TUN device itself captures
+   * (IPNService.kt's rebuildMultiProxyTunLocked), not just the policy applied over a live engine -
+   * so it only takes effect on the next VPN (re)build, not immediately.
+   */
+  fun setBroadCaptureEnabled(enabled: Boolean) {
+    settings.broadCaptureEnabled = enabled
+    broadCaptureEnabled.value = enabled
+    if (session.engine != null) {
+      val intent = android.content.Intent(session.app, com.tailscale.ipn.IPNService::class.java)
+          .setAction(com.tailscale.ipn.IPNService.ACTION_RESTART_VPN)
+      session.app.startService(intent)
+    }
   }
 
   fun bindApp(packageName: String, upstreamId: String) {

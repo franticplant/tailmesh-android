@@ -62,6 +62,7 @@ fun UpstreamsView(
   val routable by model.routableUpstreams.collectAsState()
   val defaultUpstreamId by model.defaultUpstreamId.collectAsState()
   val errorMessage by model.errorMessage.collectAsState()
+  val broadCaptureEnabled by model.broadCaptureEnabled.collectAsState()
   val liveStats by MultiProxySessionCoordinator.upstreamStats.collectAsState()
 
   var editing by remember { mutableStateOf<Upstream?>(null) }
@@ -136,6 +137,21 @@ fun UpstreamsView(
         ListItem(
             headlineContent = { Text(stringResource(R.string.upstreams_explanation)) },
         )
+      }
+
+      item("broadCapture") {
+        ListItem(
+            modifier = Modifier.fillMaxWidth(),
+            headlineContent = { Text(stringResource(R.string.broad_capture_title)) },
+            supportingContent = { Text(stringResource(R.string.broad_capture_explanation)) },
+            trailingContent = {
+              Switch(
+                  checked = broadCaptureEnabled,
+                  onCheckedChange = { model.setBroadCaptureEnabled(it) },
+              )
+            },
+        )
+        Lists.ItemDivider()
       }
 
       item("defaultHeader") { Lists.SectionDivider(stringResource(R.string.default_route)) }

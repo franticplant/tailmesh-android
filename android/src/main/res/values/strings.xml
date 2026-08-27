@@ -413,6 +413,8 @@
     <string name="upstream_status_ready">Ready</string>
     <string name="upstream_status_not_ready">Not ready</string>
     <string name="upstream_status_counts">%1$d succeeded, %2$d failed</string>
+    <string name="broad_capture_title">Route general internet traffic</string>
+    <string name="broad_capture_explanation">Off by default. When on, the VPN also captures ordinary internet and LAN traffic, not just Tailscale traffic, so apps can be routed through a proxy or WireGuard tunnel for everything, not only their Tailnet reachability. Restarts the VPN to take effect.</string>
 
     <string name="default_route">Default route</string>
     <string name="default_route_explanation">Where traffic goes for apps with no route of their own.</string>

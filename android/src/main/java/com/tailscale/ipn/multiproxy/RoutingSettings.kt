@@ -28,8 +28,25 @@ class RoutingSettings(context: Context) {
       prefs.edit().putString(KEY_DEFAULT_UPSTREAM, value).apply()
     }
 
+  /**
+   * Whether the Multi-Tailnet VPN captures ordinary internet and LAN traffic, not just the
+   * synthetic and real-Tailscale ranges it always has.
+   *
+   * Off by default so enabling Multi-Tailnet never silently changes what an existing user's other
+   * apps can reach. With this on and [defaultUpstreamId] unset, [UpstreamPolicyApplier] defaults
+   * unbound apps to the built-in direct upstream rather than leaving the newly-captured traffic to
+   * the legacy subnet-route/exit-node fallback, which was never meant to carry ordinary internet
+   * traffic for apps the user has not routed anywhere.
+   */
+  var broadCaptureEnabled: Boolean
+    get() = prefs.getBoolean(KEY_BROAD_CAPTURE, false)
+    set(value) {
+      prefs.edit().putBoolean(KEY_BROAD_CAPTURE, value).apply()
+    }
+
   companion object {
     private const val PREFS_NAME = "unencrypted"
     private const val KEY_DEFAULT_UPSTREAM = "multiproxyDefaultUpstream"
+    private const val KEY_BROAD_CAPTURE = "multiproxyBroadCapture"
   }
 }

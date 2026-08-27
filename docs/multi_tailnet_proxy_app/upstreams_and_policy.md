@@ -699,6 +699,36 @@ where its traffic exits.
 `ANDROID-BUILT`: the whole layer compiles and links into a debug APK. There is
 no instrumentation or device evidence for any of it.
 
+### 7.4 Broad capture
+
+`CURRENT CODE` (`RoutingSettings.broadCaptureEnabled`,
+`IPNService.rebuildMultiProxyTunLocked`, `UpstreamPolicyApplier`)
+
+By default the Multi-Tailnet `VpnService` only ever captures Tailscale-shaped
+traffic: the synthetic ranges and real Tailscale's own CGNAT/ULA space (§1.2).
+A non-Tailnet upstream selected for an app therefore only ever carried that
+app's DNS lookups and its real-Tailscale traffic - never its general internet
+or LAN traffic - because Android never handed those packets to the TUN in the
+first place.
+
+`RoutingSettings.broadCaptureEnabled` (off by default) changes what the TUN
+captures, not how routing decides where captured traffic goes:
+`rebuildMultiProxyTunLocked` additionally installs `0.0.0.0/0` and `::/0`
+alongside the existing narrower routes. `resolveFlow` (`nat_router.go`)
+needed no change - it already applies policy uniformly to any non-synthetic
+destination. The one behavioural coupling is in `UpstreamPolicyApplier`:
+with broad capture on and no explicit default route configured, it defaults
+unbound apps to the direct upstream rather than the legacy subnet-route/
+exit-node fallback, so enabling broad capture never by itself changes what
+an unbound app can reach - it only makes routing that traffic *possible*.
+
+Device-verified in `validation_and_gaps.md` §53: off is a byte-for-byte
+no-op on the route table; on adds exactly the two routes; a real browser
+page load under broad capture with no configured default route was observed
+in `logcat` dialing through the direct provider, proving the traffic was
+genuinely captured and explicitly routed, not merely still working because
+it was never captured.
+
 ---
 
 ## 8. Invariants
@@ -754,3 +784,27 @@ correctness bug, not a behaviour change.
    through that upstream. `UNIT-OR-RACE-TESTED` and, as of
    `validation_and_gaps.md` §50.2, device-verified: a real DoH request was
    observed tunneling through a SOCKS5 upstream on a running emulator.
+7. ~~The VPN only ever captured Tailscale-shaped traffic; a non-Tailnet
+   upstream could only ever carry an app's DNS lookups and its real-Tailscale
+   traffic, never its general internet or LAN traffic.~~ **Closed** - see
+   §7.4 below and `validation_and_gaps.md` §53. Opt-in
+   (`RoutingSettings.broadCaptureEnabled`, off by default) broad capture adds
+   `0.0.0.0/0`/`::/0` routes alongside the existing narrower ones, with
+   `UpstreamPolicyApplier` defaulting unbound apps to the direct upstream
+   when it is on, so turning it on never by itself changes what an unbound
+   app can reach. `INSTRUMENTATION-OR-EMULATOR-TESTED`. LAN-destination
+   default-exclusion behaviour under broad capture is separate, not-yet-built
+   work (Phase 3 of `eventual-humming-beacon.md`).
+8. ~~`Provider.Ready()` was a bare bool with no per-upstream stats or
+   history; a degraded upstream failed silently from the user's point of
+   view.~~ **Closed** - see `validation_and_gaps.md` §52. Every real dial
+   (flow router, DNS forwarding, chained upstreams) is now counted via
+   `readyProvider`'s stats wrapper (`stats.go`): attempts, successes,
+   failures, not-ready observations, TCP byte counts, last error and
+   latency, exposed via `GetUpstreamStatsJSON` and a best-effort
+   `OnUpstreamHealthChanged` event on readiness transitions. Surfaced on the
+   Proxies & tunnels screen. `UNIT-OR-RACE-TESTED` and
+   `INSTRUMENTATION-OR-EMULATOR-TESTED`: a SOCKS5 upstream pointed at a
+   closed port went from "Ready" to a live "N succeeded, M failed" with the
+   real dial error, on-device. Byte counts currently cover TCP flows only,
+   not DNS forwards or UDP associations.

@@ -128,9 +128,22 @@ class UpstreamPolicyApplier(
       entries.put(JSONObject().put("appUid", uid).put("upstream", upstreamId))
     }
 
+    // Broad capture (RoutingSettings.broadCaptureEnabled) hands the engine
+    // ordinary internet and LAN traffic it never used to see. Turning that on
+    // must not, by itself, change behaviour for an app the user has not
+    // routed anywhere: with no explicit default the newly-captured traffic
+    // would otherwise fall into the legacy subnet-route/exit-node chain
+    // (nat_router.go's resolveFlow), which was never meant to carry ordinary
+    // internet traffic. Direct - dial straight from the device, same as
+    // today's un-captured behaviour - is the safe default in that case.
+    val defaultUpstream =
+        settings.defaultUpstreamId.ifEmpty {
+          if (settings.broadCaptureEnabled) Libtailscale.multiProxyDirectUpstreamID() else ""
+        }
+
     val policy =
         try {
-          Libtailscale.buildAppBindingPolicyJSON(entries.toString(), settings.defaultUpstreamId)
+          Libtailscale.buildAppBindingPolicyJSON(entries.toString(), defaultUpstream)
         } catch (e: Exception) {
           TSLog.e(TAG, "could not build routing policy: $e")
           return

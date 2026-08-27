@@ -388,6 +388,24 @@ open class IPNService : VpnService(), libtailscale.IPNService {
           }
       }
 
+      // Broad capture: hand the engine ordinary internet and LAN traffic too,
+      // not just the synthetic and real-Tailscale ranges above. Off by
+      // default - enabling Multi-Tailnet must never, by itself, change what
+      // an existing user's other apps can reach - so this only takes effect
+      // once the user opts in via RoutingSettings.broadCaptureEnabled.
+      // Installed alongside the narrower routes above rather than replacing
+      // them: Android's VPN routing already prefers the most specific match,
+      // so this only changes behaviour for traffic none of them covered.
+      //
+      // UpstreamPolicyApplier defaults unbound apps to the direct upstream
+      // when this is on and no explicit default route is set, so turning
+      // this on alone does not change behaviour for an app the user has not
+      // routed anywhere - it only makes doing so possible.
+      if (session.routingSettings.broadCaptureEnabled) {
+          b.addRoute("0.0.0.0", 0)
+          b.addRoute("::", 0)
+      }
+
       b.setMtu(1280)
 
       engine.stopVPN()
