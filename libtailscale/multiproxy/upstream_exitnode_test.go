@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 )
@@ -82,6 +83,43 @@ func TestExitNodeUpstreamAppearsInSnapshot(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("exit1 missing from UpstreamSnapshot")
+	}
+}
+
+// Regression test for UpstreamPolicyApplier's Kotlin-side fix (§62,
+// validation_and_gaps.md): SetExitNodeUpstreamEnabled(false) must disable in
+// place, never touching the node identity's state directory - only
+// ForgetExitNodeUpstream may delete it. Before that fix, disabling an
+// exit-node upstream through the UI actually called ForgetExitNodeUpstream,
+// so this asserts the Go-side building block the Kotlin fix now relies on.
+func TestSetExitNodeUpstreamEnabledPreservesStateDir(t *testing.T) {
+	e := NewEngine(t.TempDir(), &MockCallback{})
+	if err := e.AddExitNodeUpstream("exit1", "tn", "key", "100.64.0.5", true); err != nil {
+		t.Fatalf("AddExitNodeUpstream: %v", err)
+	}
+
+	e.mu.RLock()
+	stateDir := e.exitNodes["exit1"].Config.StateDir
+	e.mu.RUnlock()
+	if _, err := os.Stat(stateDir); err != nil {
+		t.Fatalf("state dir missing right after Add: %v", err)
+	}
+
+	if err := e.SetExitNodeUpstreamEnabled("exit1", false); err != nil {
+		t.Fatalf("SetExitNodeUpstreamEnabled(false): %v", err)
+	}
+	if _, err := os.Stat(stateDir); err != nil {
+		t.Fatalf("state dir gone after disabling, want it preserved: %v", err)
+	}
+	if _, ok := e.lookupProvider("exit1"); !ok {
+		t.Fatal("exit1 should still be registered after disabling, just not ready")
+	}
+
+	if err := e.SetExitNodeUpstreamEnabled("exit1", true); err != nil {
+		t.Fatalf("SetExitNodeUpstreamEnabled(true) after disable: %v", err)
+	}
+	if _, err := os.Stat(stateDir); err != nil {
+		t.Fatalf("state dir gone after re-enabling: %v", err)
 	}
 }
 
