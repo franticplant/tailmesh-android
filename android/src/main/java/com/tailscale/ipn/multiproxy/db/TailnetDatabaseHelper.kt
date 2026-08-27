@@ -58,6 +58,25 @@ class TailnetDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABA
             )
         """
 
+        // The v3 migration's original shape, frozen without the two columns
+        // the v4 migration below adds. onUpgrade can run both branches in one
+        // call (an install literally at schema 2 jumping straight to the
+        // current version), and CREATE_UPSTREAMS above reflects the current
+        // (v4+) schema - sharing it here would create the table with those
+        // columns already present, and the v4 branch's ALTER TABLE ADD COLUMN
+        // would then fail with "duplicate column name".
+        private const val CREATE_UPSTREAMS_V3 = """
+            CREATE TABLE IF NOT EXISTS $TABLE_UPSTREAMS (
+                $COL_UPSTREAM_ID TEXT PRIMARY KEY,
+                $COL_UPSTREAM_KIND TEXT NOT NULL,
+                $COL_UPSTREAM_LABEL TEXT NOT NULL,
+                $COL_UPSTREAM_VIA TEXT NOT NULL DEFAULT '',
+                $COL_ENABLED INTEGER NOT NULL DEFAULT 1,
+                $COL_CREATED_AT INTEGER NOT NULL,
+                $COL_UPDATED_AT INTEGER NOT NULL
+            )
+        """
+
         private const val CREATE_APP_BINDINGS = """
             CREATE TABLE IF NOT EXISTS $TABLE_APP_BINDINGS (
                 $COL_BINDING_PACKAGE TEXT PRIMARY KEY,
@@ -104,9 +123,14 @@ class TailnetDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABA
         if (oldVersion < 3) {
             // Both tables are new rather than altered, so this is the whole
             // migration: no data to move, and IF NOT EXISTS keeps it idempotent.
+            // Uses the frozen v3 shape (CREATE_UPSTREAMS_V3), not the current
+            // CREATE_UPSTREAMS - see that constant's doc comment for why: an
+            // upgrade landing here can fall through to the v4 branch below in
+            // the same call, which must find the table without those columns
+            // yet.
             db.beginTransaction()
             try {
-                db.execSQL(CREATE_UPSTREAMS.trimIndent())
+                db.execSQL(CREATE_UPSTREAMS_V3.trimIndent())
                 db.execSQL(CREATE_APP_BINDINGS.trimIndent())
                 db.setTransactionSuccessful()
             } finally {

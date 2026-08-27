@@ -2707,6 +2707,32 @@ Full `multiproxy` suite re-run under `-race` after these two fixes,
 re-verified `INSTRUMENTATION-OR-EMULATOR-TESTED` on the x86_64 emulator
 build (no crash, dialog still renders correctly, no ANR observed).
 
+**§59.4 - a third real bug, in the schema migration this feature added.**
+`TailnetDatabaseHelper.onUpgrade` runs its version-gated branches
+cumulatively in one call (`if (oldVersion < 3) {...}; if (oldVersion < 4)
+{...}`), so an install literally at schema version 2 (predating the
+`upstreams`/`app_bindings` tables entirely - anyone who installed before
+that feature existed and updates straight to the current build) hits both
+branches in the same `onUpgrade`. The v3 branch created the `upstreams`
+table via the shared `CREATE_UPSTREAMS` constant, which by this session
+already included the v4 columns (`source_tailnet_id`, `peer_addr`) - so the
+v4 branch's `ALTER TABLE ADD COLUMN` for those same columns, running
+immediately after on the table the v3 branch had just created, would fail
+with `duplicate column name`. Confirmed the failure is real (not just a
+theoretical read) by reproducing the exact SQL sequence directly with
+`sqlite3` on the emulator via `adb shell` - `ALTER TABLE ... ADD COLUMN
+source_tailnet_id ...` against a table already carrying that column errors
+`in prepare, duplicate column name: source_tailnet_id`, no Kotlin/SQLiteOpenHelper
+involved. Fixed by freezing the v3 branch's create statement as
+`CREATE_UPSTREAMS_V3` (the original, pre-v4 column set), separate from
+`CREATE_UPSTREAMS` (current schema, still used by `onCreate` for a genuinely
+fresh install) - so the v4 branch's `ALTER TABLE` always finds a table
+without those columns yet, whether it just got created by the v3 branch in
+the same call or already existed from a prior v3 install. Re-verified the
+now-fixed sequence the same way (`sqlite3` via `adb shell`): a v3-shaped
+table followed by both `ALTER TABLE ADD COLUMN` statements exits 0 and
+`.schema` shows exactly the expected nine columns.
+
 **Not yet closed:** whether Tailscale's control plane treats several new
 devices registering from the same account in quick succession as anomalous
 (rate limiting, extra verification) is still an open, real question this
