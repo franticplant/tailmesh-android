@@ -724,12 +724,16 @@ correctness bug, not a behaviour change.
 
 `RECOMMENDATION` / evidence levels per `validation_and_gaps.md`.
 
-1. **No device evidence.** Everything here is `UNIT-OR-RACE-TESTED` and
-   `ANDROID-BUILT`. Nothing is `PHYSICAL-DEVICE-E2E`. In particular
-   `getConnectionOwnerUid` has never been exercised against this TUN on a real
-   device, across API levels or OEMs - which is the single most consequential
-   unknown, since per-app routing silently degrades to "no rule matches" if it
-   does not work.
+1. **Little device evidence, and the most consequential gap is still open.**
+   `validation_and_gaps.md` §50 has real emulator evidence for the upstream
+   registry, SOCKS5 add/edit/delete, the default-route policy rule, and
+   policy-routed DNS (a real DoH `CONNECT` observed tunneling through a SOCKS5
+   upstream). But that only exercises the no-selector default rule.
+   `getConnectionOwnerUid` has still never been exercised against this TUN on
+   a real device, across API levels or OEMs - which remains the single most
+   consequential unknown, since per-app routing silently degrades to "no rule
+   matches" if it does not work. WireGuard and chaining also remain
+   device-unverified.
 2. **No Android tests for the new stores.** `UpstreamRepository`,
    `AppBindingRepository` and the v3 migration have no JVM tests. This is the
    same gap `validation_and_gaps.md` §5.1 and §5.2 already record for
@@ -747,5 +751,6 @@ correctness bug, not a behaviour change.
 6. ~~DNS is not policy-routed.~~ **Closed** - see §3.5. A forwarded query now
    follows the querying app's route: refused if policy blocks the app,
    SERVFAIL if the named upstream is missing or not ready, otherwise exchanged
-   through that upstream. `UNIT-OR-RACE-TESTED`; no device evidence, same as
-   everything else in this document.
+   through that upstream. `UNIT-OR-RACE-TESTED` and, as of
+   `validation_and_gaps.md` §50.2, device-verified: a real DoH request was
+   observed tunneling through a SOCKS5 upstream on a running emulator.

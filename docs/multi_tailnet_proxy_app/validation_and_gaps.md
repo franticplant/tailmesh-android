@@ -66,20 +66,20 @@ Do not substitute one level for another.
 | Process/service profile reconstruction | yes | no Android reconstruction test found | called on MULTIPROXY startup | not documented |
 | Internal subnet routes | yes in Go | route tests | not captured by current Android Builder | n/a as product feature |
 | Internal exit Tailnet | yes in Go | lower-level path exists | not captured by current Android Builder | n/a as product feature |
-| Pluggable upstream registry (Provider/source) | yes | registry, chain and route tests | reached through the applier | not documented |
-| SOCKS5 upstream (CONNECT + UDP ASSOCIATE) | yes | tested against a real in-process SOCKS5 server | configurable in Proxies & tunnels | not documented |
+| Pluggable upstream registry (Provider/source) | yes | registry, chain and route tests | reached through the applier | §50.1: SOCKS5 upstream and both tailnets listed together in one picker |
+| SOCKS5 upstream (CONNECT + UDP ASSOCIATE) | yes | tested against a real in-process SOCKS5 server | configurable in Proxies & tunnels | §50.1-50.2: added, edited, deleted via UI; real CONNECT observed |
 | WireGuard upstream | yes | two devices back to back, real handshake carrying TCP | wg-quick .conf or JSON paste | not documented |
 | wg-quick .conf import | yes | round-trip to JSON, then built into a real tunnel | accepted by the upstream editor | not documented |
 | Named peer endpoint resolution | yes | stubbed-resolver tests + failure message test | transparent | not documented |
 | Upstream chaining (`via`) | yes | three-hop traversal; WireGuard over a real SOCKS5 UDP association | pickable per upstream | not documented |
 | Chain cycle rejection | yes | static walk at registration + dial-time depth guard | refused before save where the UI can tell | not documented |
-| First-match-wins routing policy | yes | policy and route tests, incl. empty-policy regression guard | built from bindings by the applier | not documented |
-| Per-app upstream binding | yes | policy selector tests | App routing screen, package to UID at apply time | not documented |
-| App attribution (getConnectionOwnerUid) | yes | resolver timeout/fail-safe tests with a stub | AppUidResolver installed before startVPN | **not verified on any device** |
-| Default upstream for unbound apps | yes | covered by policy default-rule tests | Proxies & tunnels screen | not documented |
-| Upstream/binding persistence | yes | no Android CRUD or migration tests | DB v3 + EncryptedSharedPreferences | not documented |
-| Live re-apply without VPN restart | yes | not directly tested | applier called from the view model | not documented |
-| DNS forwarding follows the app's policy route | yes | route-decision + DoH-cache-and-fail-closed tests against a real forwarding server | transparent - reached through the same applier/policy | not documented |
+| First-match-wins routing policy | yes | policy and route tests, incl. empty-policy regression guard | built from bindings by the applier | §50.2: default-route rule verified end to end |
+| Per-app upstream binding | yes | policy selector tests | App routing screen, package to UID at apply time | not documented (only the default rule was device-tested, §50.3) |
+| App attribution (getConnectionOwnerUid) | yes | resolver timeout/fail-safe tests with a stub | AppUidResolver installed before startVPN | **not verified on any device** (§50.3) |
+| Default upstream for unbound apps | yes | covered by policy default-rule tests | Proxies & tunnels screen | §50.1-50.2: set, applied, and reset via UI; routed real traffic |
+| Upstream/binding persistence | yes | no Android CRUD or migration tests | DB v3 + EncryptedSharedPreferences | §50.1: upstream and default route survived an app reinstall |
+| Live re-apply without VPN restart | yes | not directly tested | applier called from the view model | not documented (edit was verified only after a VPN restart, §50.1) |
+| DNS forwarding follows the app's policy route | yes | route-decision + DoH-cache-and-fail-closed tests against a real forwarding server | transparent - reached through the same applier/policy | §50.2: real DoH CONNECT tunneled through a SOCKS5 upstream |
 
 ## 3. Evidence from the Go test suite
 
@@ -1764,6 +1764,93 @@ is a fallback for v4-only clients in practice, exactly as §62.9 intends.
   source ports, 60s association idle timeout).
 - Mullvad passed with fresh domains, but only its `Default` endpoint; the
   other five Mullvad variants were not individually retested.
+
+## 50. Device verification: pluggable upstreams and policy-routed DNS (2026-08-27)
+
+All of the below was run on the x86_64 emulator (`sdk_gphone64_x86_64`),
+debug build, against two real logged-in tailnets in Multi-Tailnet mode. This
+is the first device evidence for anything in `upstreams_and_policy.md` -
+previously everything there was `UNIT-OR-RACE-TESTED` or `ANDROID-BUILT`
+only.
+
+### 50.1 What was exercised
+
+Through the UI, with no code changes needed to get here:
+
+- Settings -> Upstreams (Experimental) -> **Start Multi-Tailnet** brought up
+  a real `VpnService` session with two real tailnets (`akkara.com.tr` and a
+  second account), both reaching `Running` and exchanging real peer data.
+- Settings -> Proxies & tunnels -> **Add upstream** created a real SOCKS5
+  upstream, persisted it (survived an `adb install -r` app-data-preserving
+  reinstall), and listed it - correctly labelled `socks5` - alongside the
+  two tailnets in the same "Route via" picker. This is the device-level
+  confirmation of §2.2's design goal: tailnets and pluggable upstreams are
+  the same kind of thing to the UI, not a special case.
+- Setting the picker's **default route** to the new upstream, editing the
+  upstream's address, and deleting it (with a confirmation dialog naming
+  the concrete consequence: "Apps routed through it will fall back to the
+  default route, and any upstream chained behind it will go direct") all
+  worked and persisted correctly across an app restart.
+
+No crash, ANR, or `FATAL EXCEPTION` occurred anywhere in the session
+(`logcat` swept for `FATAL EXCEPTION`, `panic:`, `SIGSEGV`, `SIGABRT` -
+none found).
+
+### 50.2 Policy-routed DNS (§3.5), proven with a real SOCKS5 tunnel
+
+A throwaway ~90-line Go SOCKS5 server (CONNECT-only, no auth) was run on
+the host and reached from the emulator via `adb reverse tcp:1080 tcp:1080`
+- `10.0.2.2:1080`, the usual emulator-to-host alias, was unreachable even
+from a bare `adb shell` TCP connect on this image, so `adb reverse` was
+used instead once that was diagnosed.
+
+With that upstream registered and set as the default route, real
+background DNS-over-HTTPS traffic from the running engine (periodic
+control-plane/DERP lookups against `security.cloudflare-dns.com`, the
+Tailscale default DoH resolver) was observed tunneling through it:
+
+```text
+2026/08/27 12:45:41 CONNECT security.cloudflare-dns.com:443
+2026/08/27 12:45:41 CONNECT security.cloudflare-dns.com:443
+```
+
+This is genuine end-to-end confirmation of the chain committed in
+`af283a9` (§3.5): UI -> `RoutingSettings`/`UpstreamSecretStore` ->
+`UpstreamPolicyApplier.apply()` -> `BuildAppBindingPolicyJSON` ->
+`Engine.SetPolicyJSON` -> `dnsRouteFor` -> `exchangeDoHVia` -> a real
+SOCKS5 `CONNECT`. Verified twice: once with temporary debug logging added
+to confirm each hop (policy JSON, `dnsRouteFor`'s resolved provider, the
+`exchangeDoHVia` dial itself), and again after that logging was removed,
+against a clean rebuild, to make sure the debug scaffolding itself wasn't
+what made it work. Both runs produced the same `CONNECT` line.
+
+The debugging path is itself worth recording: the first attempt tried to
+exercise this by browsing in Chrome and doing plain `ping`/`nc` DNS
+lookups from `adb shell`. Both looked like failures (no `CONNECT` line
+ever appeared) but were actually the wrong test - ordinary internet
+traffic is out of scope for this VPN's route capture by design (§67-68:
+only the synthetic `/48`, real Tailscale CGNAT/ULA, and `198.18.0.0/15`
+are routed to `tun0`; there is no `0.0.0.0/0`/`::/0` route, confirmed via
+`dumpsys connectivity`), and Chrome's own secure-DNS logic bypassed the
+device resolver entirely for the plain-`nc` variant. The test that
+actually worked was a raw UDP DNS query sent with `nc` directly at the
+synthetic resolver's captured address (`198.18.0.3:53`), which reliably
+reached the multiproxy DNS server and, once a real reachable SOCKS5
+upstream was available, proved the routing.
+
+### 50.3 Not verified here
+
+- **App attribution (`getConnectionOwnerUid`) is still unverified.** The
+  route exercised above was the no-selector default rule, which matches
+  regardless of `AppUID` (§4.3) - it does not require attribution to
+  succeed. A UID-scoped per-app binding, which does depend on
+  `getConnectionOwnerUid` resolving correctly for a real installed app's
+  socket, was not exercised this session. This remains gap #1 below.
+- WireGuard upstream and chaining were not exercised on-device this
+  session (only SOCKS5); both already have real end-to-end coverage in
+  the Go test suite (§3 above), just not on a device.
+- Only the default-route rule was tested, not a per-app binding rule via
+  the App routing screen.
 
 ## 48. Bottom line
 
