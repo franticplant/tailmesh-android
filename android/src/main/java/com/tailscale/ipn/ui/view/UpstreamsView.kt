@@ -557,28 +557,35 @@ fun UpstreamEditorDialog(
             }
           }
 
-          val viaLabel =
-              chainCandidates.firstOrNull { it.id == via }?.label
-                  ?: stringResource(R.string.upstream_chain_none)
-          TextButton(onClick = { viaMenuOpen = true }) {
-            Text(stringResource(R.string.upstream_chain_through, viaLabel))
-          }
-          DropdownMenu(expanded = viaMenuOpen, onDismissRequest = { viaMenuOpen = false }) {
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.upstream_chain_none)) },
-                onClick = {
-                  via = ""
-                  viaMenuOpen = false
-                },
-            )
-            chainCandidates.forEach { candidate ->
+          // Not shown for EXITNODE: its dedicated tsnet.Server dials directly
+          // (upstream_exitnode.go), the same as a Tailnet upstream - neither
+          // implements ChainedProvider, so there is no via for onSaveExitNode
+          // to apply. Showing this picker anyway would silently discard
+          // whatever the user picked.
+          if (kind != UpstreamKind.EXITNODE) {
+            val viaLabel =
+                chainCandidates.firstOrNull { it.id == via }?.label
+                    ?: stringResource(R.string.upstream_chain_none)
+            TextButton(onClick = { viaMenuOpen = true }) {
+              Text(stringResource(R.string.upstream_chain_through, viaLabel))
+            }
+            DropdownMenu(expanded = viaMenuOpen, onDismissRequest = { viaMenuOpen = false }) {
               DropdownMenuItem(
-                  text = { Text(candidate.label) },
+                  text = { Text(stringResource(R.string.upstream_chain_none)) },
                   onClick = {
-                    via = candidate.id
+                    via = ""
                     viaMenuOpen = false
                   },
               )
+              chainCandidates.forEach { candidate ->
+                DropdownMenuItem(
+                    text = { Text(candidate.label) },
+                    onClick = {
+                      via = candidate.id
+                      viaMenuOpen = false
+                    },
+                )
+              }
             }
           }
         }
