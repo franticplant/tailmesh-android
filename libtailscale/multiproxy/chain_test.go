@@ -169,6 +169,49 @@ func TestChainOfThreeTraversesEveryHop(t *testing.T) {
 	}
 }
 
+// A chained dial's error must name whichever hop actually failed, not just the
+// outermost upstream the caller asked for - "top is down" is not actionable
+// when top is fine and its grandparent is what's actually unreachable.
+// chainDialer already gets this right by construction: each hop wraps its own
+// parent's error rather than replacing it, so the error naturally bubbles up
+// from wherever the chain actually broke. This is a regression guard for that
+// property, not a fix - see validation_and_gaps.md's Phase 5 note.
+func TestChainErrorAttributesTheActualFailingHop(t *testing.T) {
+	e := NewEngine(t.TempDir(), &MockCallback{})
+
+	// bottom <- middle <- top, with the failure two hops down from top: bottom
+	// is registered but not ready. A generic "not ready" error naming top or
+	// middle would send someone debugging this straight to the wrong upstream.
+	bottom := newChainFake("bottom", "", false)
+	if err := e.RegisterUpstream(bottom); err != nil {
+		t.Fatal(err)
+	}
+	middle := newChainFake("middle", "bottom", true)
+	middle.dialer = e.chainDialer(middle.via, nil)
+	if err := e.RegisterUpstream(middle); err != nil {
+		t.Fatal(err)
+	}
+	top := newChainFake("top", "middle", true)
+	top.dialer = e.chainDialer(top.via, nil)
+	if err := e.RegisterUpstream(top); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := top.Dial(context.Background(), "tcp", "10.0.0.1:443")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !errors.Is(err, ErrUpstreamNotReady) {
+		t.Fatalf("got %v, want ErrUpstreamNotReady", err)
+	}
+	if !strings.Contains(err.Error(), `"bottom"`) {
+		t.Fatalf("got %q, want it to name the actual failing hop (bottom), not just top", err.Error())
+	}
+	if strings.Contains(err.Error(), `"middle"`) || strings.Contains(err.Error(), `"top"`) {
+		t.Fatalf("got %q, want it to name only the failing hop, not the intermediate ones", err.Error())
+	}
+}
+
 func TestRegisterRejectsChainCycles(t *testing.T) {
 	t.Run("self", func(t *testing.T) {
 		e := NewEngine(t.TempDir(), &MockCallback{})

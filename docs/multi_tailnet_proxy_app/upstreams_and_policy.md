@@ -549,7 +549,12 @@ Cycles are caught twice:
 `TEST EVIDENCE` (`chain_test.go`): a three-hop chain is traversed hop by hop and
 each hop's dial recorded; self-cycles, two-hop and three-hop cycles are rejected
 at registration; a cycle installed behind the registry's back is stopped by the
-depth guard.
+depth guard. Each hop's `ErrUpstreamNotReady` wraps the specific parent id
+that failed (`fmt.Errorf("%w: chain parent %q", ...)`), and because each hop
+only ever names its own immediate parent, a failure several hops down
+already bubbles up naming the actual failing upstream, not the outermost
+one - `TestChainErrorAttributesTheActualFailingHop` is a permanent
+regression guard for this (`validation_and_gaps.md` §56).
 
 ### 5.3 WireGuard over another upstream
 
@@ -772,7 +777,10 @@ correctness bug, not a behaviour change.
    a real device, across API levels or OEMs - which remains the single most
    consequential unknown, since per-app routing silently degrades to "no rule
    matches" if it does not work. WireGuard and chaining also remain
-   device-unverified.
+   device-unverified - a real on-device two-hop chain (e.g. WireGuard-over-
+   SOCKS5, matching the shape `TestWireGuardChainedOverSOCKS5` already
+   proves at the Go level) has still not been set up on the emulator; see
+   `validation_and_gaps.md` §56.
 2. **No Android tests for the new stores.** `UpstreamRepository`,
    `AppBindingRepository` and the v3 migration have no JVM tests. This is the
    same gap `validation_and_gaps.md` §5.1 and §5.2 already record for

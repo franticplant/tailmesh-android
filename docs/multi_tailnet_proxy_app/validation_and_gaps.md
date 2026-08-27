@@ -2140,13 +2140,17 @@ in-between period before this landed.
 
 **Evidence (`ANDROID-BUILT`, `UNIT-TESTED`):**
 - `go build`/`go vet` for `GOOS=android GOARCH=arm64` and
-  `go test ./libtailscale/multiproxy/...` (excluding this package's two
-  pre-existing tests that hang in this sandboxed environment regardless of
-  this change - `TestWireGuardTunnelCarriesTCP`,
-  `TestWireGuardChainedOverSOCKS5`, `TestResolveRouteConcurrency`; confirmed
-  via `git stash -u` that the same three hang identically on the
-  pre-Phase-3 baseline, so this is environmental, not a regression) all
-  pass, including the two new tests above.
+  `go test ./libtailscale/multiproxy/...` pass, including the two new tests
+  above. (At the time this section was first written, three tests -
+  `TestWireGuardTunnelCarriesTCP`, `TestWireGuardChainedOverSOCKS5`,
+  `TestResolveRouteConcurrency` - were reported here as hanging under a 60s
+  per-run timeout; `git stash -u` confirmed the same three behaved
+  identically on the pre-Phase-3 baseline, ruling out a regression from this
+  change, but the underlying cause was actually resource contention from
+  running the full ~130-test package concurrently in this sandbox, not a
+  real hang - see §55's correction. Run individually or with a longer
+  timeout, all three pass; `TestResolveRouteConcurrency` alone genuinely
+  takes ~150s, which is what triggered the false "hang" reading.)
 - Built clean from `make libtailscale && make apk`, installed on the
   `sdk_gphone64_x86_64` emulator. Screenshots confirm both the §53 broad
   capture switch and the new "Keep LAN traffic direct" switch render
@@ -2247,6 +2251,78 @@ upstreams (the engine-level test above proves the routing decision; this
 would additionally need a live non-Direct upstream and a captured query, not
 attempted this pass for the same reason noted in §54 - standing up a test
 proxy listener was declined by this session's own tooling).
+
+## 56. Chaining robustness: verification, and a correction to §54/§55 (2026-08-27)
+
+**Correction first:** §54 and §55 (above) both recorded
+`TestWireGuardTunnelCarriesTCP`, `TestWireGuardChainedOverSOCKS5` and
+`TestResolveRouteConcurrency` as hanging under this session's tooling and
+excluded them from the reported test runs. That was wrong. Investigating
+for this Phase 5 pass: run individually with a longer timeout, all three
+pass - `TestWireGuardChainedOverSOCKS5` in 0.04s,
+`TestWireGuardTunnelCarriesTCP` in 0.06s, `TestResolveRouteConcurrency`
+genuinely taking ~150s on its own. Running the *entire* ~130-test
+`libtailscale/multiproxy` package with `go test -timeout 550s -p 1`
+(instead of the default higher parallelism) completes cleanly in ~131s. The
+actual cause was resource contention in this sandbox when many tests -
+several of them real WireGuard device instances spinning up dozens of
+goroutines each - run concurrently under the default test parallelism, not
+a genuine deadlock or a regression from any change made this session. Both
+§54 and §55 have been corrected in place rather than left standing; this
+paragraph is that correction's own record, per this project's standing
+practice of surfacing corrections rather than quietly rewriting prior
+sections.
+
+**Chain robustness itself:** the plan (`eventual-humming-beacon.md`, Phase
+5) scoped two things, given `maxChainDepth`, cycle detection and the
+dial-time depth guard were already correct and tested (§5 of
+`upstreams_and_policy.md`):
+
+1. *Device-verify a real two-hop chain.* `TestWireGuardChainedOverSOCKS5`
+   already proves this end to end at the Go level - a real WireGuard
+   handshake and data exchange, carried through a real SOCKS5 CONNECT, with
+   real bytes round-tripped - and, per the correction above, it is
+   confirmed passing, not merely assumed. What it does *not* prove is the
+   Android-specific pieces: `VpnService.protect()` coverage for a chained
+   provider's *own* transport (the SOCKS5 hop dialing its remote address
+   must be protected exactly once, at the outermost hop, or gVisor
+   captures it and it never leaves - `chainDialer`'s use of the shared
+   `protectedDialContext`, §2.2/§5 of `upstreams_and_policy.md`, is designed
+   for this but was not observed on a real device this pass), and the
+   `getConnectionOwnerUid`-dependent app-attribution path feeding into a
+   chained rule. A real on-device two-hop chain (e.g. WireGuard-over-SOCKS5,
+   both configured through the Proxies & tunnels UI, an app bound to the
+   outer upstream) was **not** set up this pass - it needs either a second
+   real SOCKS5 endpoint or a real WireGuard peer reachable from the
+   emulator, and standing up a local listener for this purpose was declined
+   by this session's own tooling as an unreviewed open network service (the
+   same constraint noted in §54/§55). This is carried forward as the
+   single most consequential remaining device-evidence gap for chaining,
+   same status as `getConnectionOwnerUid` itself (`upstreams_and_policy.md`
+   gap 1).
+2. *Improve fail-closed error attribution to name the failing hop.*
+   Investigated and found already correct: `chainDialer` (`chain.go`)
+   wraps each hop's own error with `fmt.Errorf("%w: chain parent %q", ...,
+   via)` around whatever its parent's `Dial` returned, so a failure two or
+   more hops down already bubbles up carrying the *actual* failing
+   upstream's id, not the outermost one - by construction, not by
+   accident, since each hop only ever knows about its own immediate parent.
+   `TestChainErrorAttributesTheActualFailingHop` (new, `chain_test.go`)
+   makes this a permanent regression guard: a three-hop chain (`top` via
+   `middle` via `bottom`) with only `bottom` not-ready produces an error
+   naming `"bottom"` and explicitly *not* `"middle"` or `"top"`. No engine
+   change was needed for this item - the plan's premise that today's error
+   names "the outermost upstream" turned out not to match the code.
+
+**Evidence (`UNIT-OR-RACE-TESTED`):** `TestChainErrorAttributesTheActualFailingHop`
+passes; the full `libtailscale/multiproxy` suite (`go test -timeout 550s -p 1
+./libtailscale/multiproxy/...`, ~131s, no skips) passes, including both
+WireGuard chain tests. `go build`/`go vet` for `GOOS=android GOARCH=arm64`
+pass. No Android/APK rebuild was needed - this phase made no Kotlin or
+facade changes, only a Go test addition and a documentation correction.
+
+**Not verified here:** the real on-device two-hop chain and its
+`VpnService.protect()` coverage, as described above.
 
 ## 48. Bottom line
 
