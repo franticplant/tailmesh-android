@@ -50,8 +50,13 @@ func RunNetcheck() string {
 		return errorJSON("DERP region map unavailable")
 	}
 
+	if b.netMon == nil {
+		return errorJSON("Network monitor unavailable")
+	}
+
 	c := &netcheck.Client{
-		Logf: log.Printf,
+		Logf:   log.Printf,
+		NetMon: b.netMon,
 	}
 
 	report, err := c.GetReport(ctx, dm, nil)

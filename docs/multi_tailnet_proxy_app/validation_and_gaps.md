@@ -1852,6 +1852,46 @@ upstream was available, proved the routing.
 - Only the default-route rule was tested, not a per-app binding rule via
   the App routing screen.
 
+## 51. Fixed: Network Diagnostics never worked, in any mode (2026-08-27)
+
+**BEFORE:** `RunNetcheck()` (`libtailscale/netcheck.go`) built
+`&netcheck.Client{Logf: log.Printf}` without setting `NetMon`. Every call to
+`netcheck.Client.GetReport` failed immediately with `"netcheck: GetReport:
+Client.NetMon is nil"` (`tailscale.com/net/netcheck`), regardless of
+STANDARD vs MULTIPROXY mode, login state, or network condition - the
+Network Diagnostics screen has never returned a real report.
+
+**NEW:** `backend` (`libtailscale/backend.go`) already constructs and holds
+a `*netmon.Monitor` on every app instance (`b.netMon`, set during
+`(*backend).Start`). `RunNetcheck` now passes it through:
+`&netcheck.Client{Logf: log.Printf, NetMon: b.netMon}`, with an explicit
+`errorJSON("Network monitor unavailable")` guard if `b.netMon` is nil
+(mirrors the existing `DERPMap() == nil` guard immediately above it).
+
+**WHY:** One missing field, not a design issue - `netcheck.Client.NetMon`
+is a required dependency the client uses to read interface state and build
+its packet listeners (confirmed by reading
+`tailscale.com/net/netcheck.(*Client).GetReport` and
+`.standaloneNetcheck`/probe-building code, which dereference `c.NetMon`
+directly and fail fast if nil). The report still runs against the single
+shared STANDARD `ipnlocal.LocalBackend`'s own network path (NAT type, DERP
+latency) rather than any specific MultiProxy upstream tailnet - that stays
+a known scope limit, not something this fix addresses; per-upstream health
+is separate work (tracked as the new observability initiative in
+`eventual-humming-beacon.md`, Phase 1).
+
+**Evidence (`ANDROID-BUILT`, `PHYSICAL-DEVICE-E2E`… here emulator, so
+`INSTRUMENTATION-OR-EMULATOR-TESTED`):** built `libtailscale.aar` and the
+debug APK from a clean `make libtailscale && make apk`, installed on the
+`sdk_gphone64_x86_64` emulator, logged into `akkara.com.tr`, connected, and
+opened Settings -> Network Diagnostics. Before this session's fix the
+screen would have errored immediately; after the fix it completed a real
+probe and rendered `NAT Connection Type: Relay Only`, `IPv4 Active` /
+`IPv6 Active` badges, and a sorted table of live DERP relay latencies
+(Frankfurt 53 ms (preferred) through Ashburn 145 ms) - i.e. exactly the
+report shape `NetcheckReportJSON` defines, populated with real data, not an
+`error` field.
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.
