@@ -421,6 +421,15 @@ path. DNS is part of that traffic.
 `dnsRouteFor`'s three outcomes end to end against a real forwarding server, and
 `TestDoHClientIsCachedPerUpstreamAndFailsClosed`.
 
+**Splitting DNS from data (`validation_and_gaps.md` §55):** `Rule` also
+carries an optional `DNSUpstream`, read by `dnsRouteFor` ahead of `Upstream`
+and falling back to it when empty - so a rule can send an app's data one way
+and its DNS another (`DNSUpstream: DirectUpstreamID` for "tunnel the data,
+keep DNS on the device"; any other upstream id for split DNS). The default
+route gained the same split via `RoutingSettings.defaultDNSUpstreamId` and a
+"DNS for unbound apps" picker; per-app `DNSUpstream` is accepted by
+`BuildAppBindingPolicyJSON` already but has no UI yet - see gap 10.
+
 ---
 
 ## 4. App attribution
@@ -825,3 +834,13 @@ correctness bug, not a behaviour change.
    **global** on/off, not the per-app override ("still tunnel LAN traffic
    for this one app") the original plan described - that needs a schema
    change to `AppBinding` and was scoped out of this pass.
+10. **DNS/data split has no per-app UI yet, and Private DNS is
+    uncharacterized.** `validation_and_gaps.md` §55: `Rule.DNSUpstream` and
+    `BuildAppBindingPolicyJSON`'s per-binding `dnsUpstream` are implemented
+    and `UNIT-TESTED`; only the **default-route** picker ("DNS for unbound
+    apps") shipped a UI, `INSTRUMENTATION-OR-EMULATOR-TESTED`. A per-app
+    picker needs the same `AppBinding` schema change gap 9 already flags.
+    Separately, how Android's Private DNS modes (Off/Automatic/Strict)
+    interact with the synthetic resolver and this split has not been
+    device-tested at all - a real gap the original plan called out
+    (`validation_and_gaps.md` gap #16) and this pass did not close.

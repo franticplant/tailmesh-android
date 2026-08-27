@@ -277,12 +277,20 @@ func (e *MultiProxyEngine) SetUIDResolver(r MultiProxyUIDResolver) {
 // pieces the settings UI naturally has, so the Kotlin side does not have to
 // hand-assemble JSON.
 //
-// bindingsJSON is [{"appUid":10123,"upstream":"tailnet-office"}...]; each entry
-// becomes a rule ahead of the default. defaultUpstream, when non-empty, becomes
-// a trailing catch-all routing everything else - this is the exit-node selection
-// for ordinary non-tailnet traffic. Pass the direct upstream's id to have
-// unbound apps bypass the VPN, or leave it empty to keep today's behaviour of
-// falling through to subnet routes and the exit-node tailnet.
+// bindingsJSON is [{"appUid":10123,"upstream":"tailnet-office","dnsUpstream":""}...];
+// each entry becomes a rule ahead of the default. dnsUpstream is optional and,
+// when set, splits where that app's DNS lookups go from where its data goes
+// (multiproxy.Rule.DNSUpstream) - pass the direct upstream's id for "tunnel
+// the data but keep DNS on the device", or a different upstream's id for split
+// DNS. Leaving it empty keeps today's behaviour: DNS auto-follows upstream.
+//
+// defaultUpstream, when non-empty, becomes a trailing catch-all routing
+// everything else - this is the exit-node selection for ordinary non-tailnet
+// traffic. Pass the direct upstream's id to have unbound apps bypass the VPN,
+// or leave it empty to keep today's behaviour of falling through to subnet
+// routes and the exit-node tailnet. defaultDNSUpstream is the same DNS split
+// applied to that catch-all rule.
+//
 // excludeLAN, when true, prepends a rule sending traffic to well-known local/
 // private destinations (multiproxy.DefaultLANPrefixes) direct, ahead of every
 // binding below - so LAN reachability (a printer, a NAS, a dev server on the
@@ -291,10 +299,11 @@ func (e *MultiProxyEngine) SetUIDResolver(r MultiProxyUIDResolver) {
 // LAN destination (which cannot happen through this builder, since bindings
 // here are per-app, not per-destination - a future per-app "still tunnel LAN
 // traffic" override would need its own rule ahead of this one).
-func BuildAppBindingPolicyJSON(bindingsJSON, defaultUpstream string, excludeLAN bool) (string, error) {
+func BuildAppBindingPolicyJSON(bindingsJSON, defaultUpstream, defaultDNSUpstream string, excludeLAN bool) (string, error) {
 	var bindings []struct {
-		AppUID   int32  `json:"appUid"`
-		Upstream string `json:"upstream"`
+		AppUID      int32  `json:"appUid"`
+		Upstream    string `json:"upstream"`
+		DNSUpstream string `json:"dnsUpstream"`
 	}
 	if bindingsJSON != "" {
 		if err := json.Unmarshal([]byte(bindingsJSON), &bindings); err != nil {
@@ -315,14 +324,15 @@ func BuildAppBindingPolicyJSON(bindingsJSON, defaultUpstream string, excludeLAN 
 			continue
 		}
 		policy.Rules = append(policy.Rules, multiproxy.Rule{
-			Name:     fmt.Sprintf("app %d", b.AppUID),
-			Selector: multiproxy.Selector{AppUIDs: []int32{b.AppUID}},
-			Action:   multiproxy.ActionRoute,
-			Upstream: multiproxy.UpstreamID(b.Upstream),
+			Name:        fmt.Sprintf("app %d", b.AppUID),
+			Selector:    multiproxy.Selector{AppUIDs: []int32{b.AppUID}},
+			Action:      multiproxy.ActionRoute,
+			Upstream:    multiproxy.UpstreamID(b.Upstream),
+			DNSUpstream: multiproxy.UpstreamID(b.DNSUpstream),
 		})
 	}
 	if defaultUpstream != "" {
-		rule := multiproxy.Rule{Name: "default"}
+		rule := multiproxy.Rule{Name: "default", DNSUpstream: multiproxy.UpstreamID(defaultDNSUpstream)}
 		if multiproxy.UpstreamID(defaultUpstream) == multiproxy.DirectUpstreamID {
 			rule.Action = multiproxy.ActionDirect
 		} else {

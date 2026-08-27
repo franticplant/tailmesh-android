@@ -61,6 +61,7 @@ fun UpstreamsView(
   val upstreams by model.upstreams.collectAsState()
   val routable by model.routableUpstreams.collectAsState()
   val defaultUpstreamId by model.defaultUpstreamId.collectAsState()
+  val defaultDNSUpstreamId by model.defaultDNSUpstreamId.collectAsState()
   val errorMessage by model.errorMessage.collectAsState()
   val broadCaptureEnabled by model.broadCaptureEnabled.collectAsState()
   val lanExclusionEnabled by model.lanExclusionEnabled.collectAsState()
@@ -179,6 +180,16 @@ fun UpstreamsView(
             unsetLabel = stringResource(R.string.default_route_unset),
             candidates = routable,
             onSelect = { model.setDefaultUpstream(it) },
+        )
+      }
+      item("defaultDNS") {
+        UpstreamPickerRow(
+            title = stringResource(R.string.default_dns_title),
+            subtitle = stringResource(R.string.default_dns_explanation),
+            selectedId = defaultDNSUpstreamId,
+            unsetLabel = stringResource(R.string.default_dns_unset),
+            candidates = routable,
+            onSelect = { model.setDefaultDNSUpstream(it) },
         )
       }
 

@@ -79,6 +79,13 @@ type Rule struct {
 	// Upstream is the destination for ActionRoute. It is ignored by the other
 	// actions.
 	Upstream UpstreamID `json:"upstream,omitempty"`
+	// DNSUpstream overrides where a forwarded DNS query for this rule's app
+	// goes, independent of where its data goes (Upstream). Empty means "same
+	// as the data path" - today's auto-follow behaviour, unchanged for any
+	// rule that doesn't set this. Set to DirectUpstreamID for the common
+	// "use device DNS despite tunneling the data" case; set to any other
+	// upstream for split DNS. Ignored by ActionBlock.
+	DNSUpstream UpstreamID `json:"dnsUpstream,omitempty"`
 }
 
 // FlowInfo describes one flow being resolved.

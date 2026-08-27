@@ -60,6 +60,10 @@ class UpstreamRoutingViewModel : ViewModel() {
 
   val defaultUpstreamId: MutableStateFlow<String> = MutableStateFlow(settings.defaultUpstreamId)
 
+  /** Where DNS goes for apps with no route of their own; empty means "same as the data path". */
+  val defaultDNSUpstreamId: MutableStateFlow<String> =
+      MutableStateFlow(settings.defaultDNSUpstreamId)
+
   /** Whether the Multi-Tailnet VPN captures ordinary internet and LAN traffic. Off by default. */
   val broadCaptureEnabled: MutableStateFlow<Boolean> = MutableStateFlow(settings.broadCaptureEnabled)
 
@@ -238,6 +242,16 @@ class UpstreamRoutingViewModel : ViewModel() {
   fun setDefaultUpstream(id: String) {
     settings.defaultUpstreamId = id
     defaultUpstreamId.value = id
+    viewModelScope.launch { applyNow() }
+  }
+
+  /**
+   * Splits where default-route DNS goes from where default-route data goes. A policy-only
+   * change, like [setLanExclusionEnabled] - takes effect on [applyNow] with no VPN restart.
+   */
+  fun setDefaultDNSUpstream(id: String) {
+    settings.defaultDNSUpstreamId = id
+    defaultDNSUpstreamId.value = id
     viewModelScope.launch { applyNow() }
   }
 

@@ -59,10 +59,23 @@ class RoutingSettings(context: Context) {
       prefs.edit().putBoolean(KEY_LAN_EXCLUSION, value).apply()
     }
 
+  /**
+   * Where DNS lookups go for apps with no route of their own, independent of where their data
+   * goes ([defaultUpstreamId]). Empty means "same as the data path" - today's auto-follow
+   * behaviour. Set to the direct upstream's id to keep DNS on the device while data still
+   * tunnels, or to a different upstream's id for split DNS.
+   */
+  var defaultDNSUpstreamId: String
+    get() = prefs.getString(KEY_DEFAULT_DNS_UPSTREAM, "") ?: ""
+    set(value) {
+      prefs.edit().putString(KEY_DEFAULT_DNS_UPSTREAM, value).apply()
+    }
+
   companion object {
     private const val PREFS_NAME = "unencrypted"
     private const val KEY_DEFAULT_UPSTREAM = "multiproxyDefaultUpstream"
     private const val KEY_BROAD_CAPTURE = "multiproxyBroadCapture"
     private const val KEY_LAN_EXCLUSION = "multiproxyLanExclusion"
+    private const val KEY_DEFAULT_DNS_UPSTREAM = "multiproxyDefaultDnsUpstream"
   }
 }

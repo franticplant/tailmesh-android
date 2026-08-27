@@ -107,6 +107,8 @@ func TestDNSRouteFor(t *testing.T) {
 		appRule("via the direct upstream", []int32{1003}, ActionRoute, DirectUpstreamID),
 		appRule("via something switched off", []int32{1004}, ActionRoute, "down"),
 		appRule("via something absent", []int32{1005}, ActionRoute, "gone"),
+		{Name: "data tunnels, DNS stays direct", Selector: Selector{AppUIDs: []int32{1006}}, Action: ActionRoute, Upstream: "proxy", DNSUpstream: DirectUpstreamID},
+		{Name: "direct data, DNS via a different upstream", Selector: Selector{AppUIDs: []int32{1007}}, Action: ActionDirect, DNSUpstream: "proxy"},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -147,6 +149,22 @@ func TestDNSRouteFor(t *testing.T) {
 	t.Run("unmatched app leaves from the device", func(t *testing.T) {
 		if r := e.dnsRouteFor(flow(9999)); r.provider != nil || r.blocked || r.failed {
 			t.Fatalf("got %+v", r)
+		}
+	})
+	// DNSUpstream splits the DNS path from the data path: data tunnels through
+	// the app's Upstream, but DNS explicitly leaves from the device instead of
+	// auto-following it.
+	t.Run("DNSUpstream overrides Upstream for the data-tunnels-DNS-direct case", func(t *testing.T) {
+		if r := e.dnsRouteFor(flow(1006)); r.provider != nil || r.blocked || r.failed {
+			t.Fatalf("got %+v, want DNS to leave from the device despite data routing via proxy", r)
+		}
+	})
+	// The reverse split: data leaves the device directly, but DNS still follows
+	// a chosen upstream.
+	t.Run("DNSUpstream applies even when the data path is direct", func(t *testing.T) {
+		r := e.dnsRouteFor(flow(1007))
+		if r.provider == nil || r.provider.ID() != "proxy" {
+			t.Fatalf("got %+v, want DNS routed via proxy despite direct data", r)
 		}
 	})
 }

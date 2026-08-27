@@ -2171,6 +2171,83 @@ at the policy-engine level by `TestLANExclusionRuleWinsOverLaterAppBinding`.
 The per-app override described above as a known limitation is also,
 consequently, not built or tested at all.
 
+## 55. Added: DNS versatility - splitting a rule's DNS path from its data path (2026-08-27)
+
+**BEFORE:** a rule's DNS forwards always auto-followed its `Upstream`
+(`dnsRouteFor`, `dns_policy.go`, §3.5/§50.2) - correct for the common case,
+but with no way to say "tunnel this app's data but keep its DNS on the
+device" (a legitimate privacy/latency choice: DNS is often not sensitive the
+way data is) or "route this app's DNS through upstream A while its data goes
+through upstream B" (split DNS).
+
+**NEW:** `Rule` gained an optional `DNSUpstream UpstreamID` field
+(`policy.go`). Empty (the zero value) means "same as `Upstream`" - today's
+behaviour, unchanged for every existing rule and every existing test, since
+no rule sets it. `dnsRouteFor` now reads `DNSUpstream` first, falling back to
+`Upstream` only when it's empty; `DNSUpstream: DirectUpstreamID` reuses the
+already-working Direct provider for the "device DNS despite tunneled data"
+case, and the field applies to `ActionDirect` rules too (DNS can be routed
+even when the data path itself is direct). This was the entire Go engine
+change - `MatchAppOnly` and the rest of the policy-matching machinery needed
+no restructuring.
+
+`BuildAppBindingPolicyJSON` (`multiproxy_policy_facade.go`) gained a
+`defaultDNSUpstream` parameter and each binding entry gained an optional
+`dnsUpstream` field, both threaded straight into `Rule.DNSUpstream`.
+`RoutingSettings.defaultDNSUpstreamId` (new, empty by default) and a new
+"DNS for unbound apps" picker on the Proxies & tunnels screen wire up the
+**default-route** half of this - `UpstreamRoutingViewModel.setDefaultDNSUpstream`
+applies live via `applyNow()`, no VPN restart, same as LAN exclusion.
+
+**Known limitation, deliberate, scoped down from the original plan:** only
+the default-route DNS split shipped this pass, not a **per-app** DNS picker.
+The plan called for both, but a per-app split needs a second field on
+`AppBinding` (currently just `packageName -> upstreamId`), which means a
+Room schema migration - correctly out of scope for this pass, same call
+made for LAN exclusion's per-app override in §54. The engine and facade
+already accept a `dnsUpstream` per binding entry (see above), so adding the
+per-app picker later is UI-and-schema work only, not another engine change.
+
+**Also scoped out, not attempted:** Private DNS characterization (how
+Android's system Private DNS modes - Off / Automatic / Strict - interact
+with the synthetic resolver and this new split). The plan called for a real
+device pass across all three modes using the disjoint-fresh-domain
+methodology from §49, and flagged Strict mode's opportunistic DNS-over-TLS
+probing as a likely gap (`validation_and_gaps.md` gap #16, pre-existing,
+still open). That is a substantial, separate device investigation, not
+exercised in this pass - noted here rather than silently dropped.
+
+**WHY:** the plan's stated priority order puts this after broad capture and
+LAN exclusion and explicitly below chaining robustness in *effort*, but the
+underlying mechanism the plan asked for (route data one way, DNS another) is
+a single optional field with no new matching logic - cheap enough to ship
+now rather than deferred, even though the full per-app UI and the Private
+DNS device work were not.
+
+**Evidence (`ANDROID-BUILT`, `UNIT-TESTED`, `INSTRUMENTATION-OR-EMULATOR-TESTED`):**
+- `TestDNSRouteFor` (`dns_policy_test.go`) extended with two new subtests:
+  `DNSUpstream` overriding `Upstream` for a tunneled-data/direct-DNS rule,
+  and `DNSUpstream` applying on top of an `ActionDirect` rule. Both pass;
+  the full pre-existing `dns_policy_test.go`/`multiproxy` suite still passes
+  unchanged (empty `DNSUpstream` is a true no-op).
+- `go build`/`go vet` for `GOOS=android GOARCH=arm64` pass.
+- Built clean from `make libtailscale && make apk`, installed on the
+  `sdk_gphone64_x86_64` emulator. Screenshot-verified the new "DNS for
+  unbound apps" picker renders under "Default route," correctly defaults to
+  "Same as default route," and its dropdown lists the real, live candidate
+  set (Direct plus both connected Tailnets from earlier sessions).
+  Selected "Direct" and confirmed via `logcat` that no
+  "could not build/apply routing policy" error appeared - the JNI call
+  through `BuildAppBindingPolicyJSON`'s new signature succeeded and applied
+  live with no VPN restart, matching the policy-only design.
+
+**Not verified here:** a real device trace proving a forwarded DNS query
+actually left through the chosen path when data and DNS point at different
+upstreams (the engine-level test above proves the routing decision; this
+would additionally need a live non-Direct upstream and a captured query, not
+attempted this pass for the same reason noted in §54 - standing up a test
+proxy listener was declined by this session's own tooling).
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.

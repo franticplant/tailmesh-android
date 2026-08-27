@@ -105,13 +105,18 @@ func (e *Engine) dnsRouteFor(flow FlowInfo) dnsRoute {
 	switch rule.Action {
 	case ActionBlock:
 		return dnsRoute{blocked: true}
-	case ActionDirect:
-		return dnsRoute{}
-	case ActionRoute:
-		if rule.Upstream == DirectUpstreamID {
+	case ActionDirect, ActionRoute:
+		upstream := rule.DNSUpstream
+		if upstream == "" {
+			if rule.Action == ActionDirect {
+				return dnsRoute{}
+			}
+			upstream = rule.Upstream
+		}
+		if upstream == DirectUpstreamID {
 			return dnsRoute{}
 		}
-		p, ok := e.readyProvider(rule.Upstream)
+		p, ok := e.readyProvider(upstream)
 		if !ok {
 			return dnsRoute{failed: true}
 		}

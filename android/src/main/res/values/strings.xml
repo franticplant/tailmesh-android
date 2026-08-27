@@ -421,6 +421,9 @@
     <string name="default_route">Default route</string>
     <string name="default_route_explanation">Where traffic goes for apps with no route of their own.</string>
     <string name="default_route_unset">Unchanged (subnet routes, then exit node)</string>
+    <string name="default_dns_title">DNS for unbound apps</string>
+    <string name="default_dns_explanation">Where DNS lookups go for apps with no route of their own, independent of where their data goes. Leave unset to have DNS follow the default route above.</string>
+    <string name="default_dns_unset">Same as default route</string>
     <string name="route_via">Route via: %1$s</string>
     <string name="route_default">Default (%1$s)</string>
 
