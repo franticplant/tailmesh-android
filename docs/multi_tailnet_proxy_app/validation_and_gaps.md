@@ -2443,6 +2443,83 @@ the `sdk_gphone64_x86_64` emulator, Multi-Tailnet mode, both tailnets
 `RUNNING`. `private_dns_mode`/`private_dns_specifier` set via
 `adb shell settings put global`, restored to `off`/unset afterward.
 
+## 58. Device verification: per-app UID attribution actually works (2026-08-27)
+
+The single most consequential untested gap in `upstreams_and_policy.md` (gap
+#1) was `getConnectionOwnerUid`: per-app routing silently degrades to "no
+rule matches" if the UID lookup doesn't hold up on a real device, and until
+this pass it had never been exercised at all. Tested directly.
+
+### 58.1 Setup
+
+Multi-Tailnet mode, broad capture on (`0.0.0.0/0`/`::/0` present in
+`dumpsys connectivity`'s route table, confirmed), a SOCKS5 upstream
+(`termuxsocks`) pointed at a loopback test relay reached via `adb reverse
+tcp:1090 tcp:1090` (same relay-double technique as §57.1). Termux was bound
+explicitly to `termuxsocks` via App routing; every other app, including
+Chrome, was left on the default route (which itself resolves to Direct
+under broad capture, per §53).
+
+### 58.2 Positive result: the bound app's traffic actually crosses the named upstream
+
+From Termux, `curl http://9.9.9.9` (a literal IP, chosen to skip DNS
+entirely and isolate the UID/CONNECT path) produced a real SOCKS5 `CONNECT`
+on the relay's log: `CONNECT from ('127.0.0.1', 36071) -> 9.9.9.9:80`,
+followed by a correct timeout (9.9.9.9 doesn't serve HTTP) surfaced back to
+curl. This is the first real evidence, on a device, that the flow
+router's UID lookup correctly identified Termux specifically and routed its
+data path through the upstream named in its `AppBinding` - not the default
+route, not any other app's rule.
+
+### 58.3 Negative control: an unbound app's traffic does not cross the same upstream
+
+From Chrome (left unbound), navigating to `http://1.1.1.1/` loaded the real
+Cloudflare landing page in full, while the relay's log recorded **zero**
+connections for the entire window. Under broad capture Chrome's traffic is
+just as capturable as Termux's - the only thing distinguishing the two is
+the UID match against the `AppBinding` naming Termux specifically. This is
+the negative control the positive result needs: if UID attribution were
+broken (e.g. failing open and matching everything, or failing closed and
+matching nothing), either both apps would show up on the relay or neither
+would. Only Termux did.
+
+### 58.4 An anomaly, investigated and left open rather than glossed over
+
+Earlier in this pass, before the setup above was fully controlled, a curl
+from Termux to `1.1.1.1` succeeded with a real Cloudflare response at a
+moment when the relay process had already exited (its bounded lifetime had
+expired). Taken at face value this would mean a bound app's traffic leaked
+to Direct when its named upstream was unreachable - a real fail-closed
+violation, not a cosmetic issue. Rather than report that as a finding, it
+was re-tested under a controlled repeat: relay process confirmed dead via a
+direct `/dev/tcp` probe from the host immediately before curling, same
+target (`1.1.1.1`), same Termux binding, same running VPN. The controlled
+repeat produced `Recv failure: Connection reset by peer` - correct
+fail-closed behavior, no leak. The two results are inconsistent, and the
+discrepancy was not root-caused (candidates: a stale relay process from an
+earlier run still holding the port at the moment of the first curl,
+`adb reverse` mapping momentarily pointing at a different listener, or a
+measurement/timing error correlating device-local time against the relay's
+host-UTC log timestamps). Documented here rather than either asserted as a
+bug or quietly dropped: the controlled, reproducible result is fail-closed
+behavior working correctly, but the anomaly means this should be re-run
+cleanly (single relay process, no restarts mid-test) before gap #1 is
+considered fully closed on the fail-closed axis specifically.
+
+### 58.5 What this does and doesn't close
+
+**Closes:** the core claim that `getConnectionOwnerUid` resolves correctly
+for at least one real app on one real device - previously zero evidence
+existed either way. **Does not close:** gap #1's broader concern about
+API-level and OEM variation (this is still a single emulator, one API
+level), chaining combined with a UID-scoped rule (still untested), and the
+fail-closed anomaly in §58.4 above.
+
+**Evidence (`INSTRUMENTATION-OR-EMULATOR-TESTED`):** `sdk_gphone64_x86_64`
+emulator, Multi-Tailnet mode, broad capture on, one SOCKS5 upstream, one
+explicit `AppBinding` (Termux), relay-side logs and on-device curl/Chrome
+output both captured.
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.

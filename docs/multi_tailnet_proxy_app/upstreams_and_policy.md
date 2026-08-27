@@ -768,16 +768,25 @@ correctness bug, not a behaviour change.
 
 `RECOMMENDATION` / evidence levels per `validation_and_gaps.md`.
 
-1. **Little device evidence, and the most consequential gap is still open.**
-   `validation_and_gaps.md` §50 has real emulator evidence for the upstream
-   registry, SOCKS5 add/edit/delete, the default-route policy rule, and
-   policy-routed DNS (a real DoH `CONNECT` observed tunneling through a SOCKS5
-   upstream). But that only exercises the no-selector default rule.
-   `getConnectionOwnerUid` has still never been exercised against this TUN on
-   a real device, across API levels or OEMs - which remains the single most
-   consequential unknown, since per-app routing silently degrades to "no rule
-   matches" if it does not work. WireGuard specifically remains device-
-   unverified as a chain hop (only proven at the Go level,
+1. **Growing device evidence; the most consequential gap now has a first
+   positive result, with one loose end.** `validation_and_gaps.md` §50 has
+   real emulator evidence for the upstream registry, SOCKS5 add/edit/delete,
+   the default-route policy rule, and policy-routed DNS (a real DoH
+   `CONNECT` observed tunneling through a SOCKS5 upstream) - but that only
+   exercised the no-selector default rule. `getConnectionOwnerUid` itself is
+   no longer entirely unverified: §58 bound one app (Termux) explicitly to a
+   SOCKS5 upstream under broad capture and confirmed, via a relay-side log
+   and a negative control (an unbound app, Chrome, produced zero connections
+   on the same relay while loading a real page directly), that the flow
+   router's UID lookup correctly attributed traffic to the named app and
+   only that app. This is a single emulator, one API level, so the broader
+   API-level/OEM-variation concern is not closed - and §58.4 records an
+   unreconciled anomaly where a bound app's traffic once appeared to reach
+   its target despite the named upstream being unreachable, contradicted by
+   a controlled repeat that showed correct fail-closed behavior. Re-testing
+   cleanly (single relay process, no restarts mid-test) is needed before the
+   fail-closed axis specifically is considered closed. WireGuard specifically
+   remains device-unverified as a chain hop (only proven at the Go level,
    `TestWireGuardChainedOverSOCKS5`) - but chaining *itself* is no longer
    device-unverified: a real two-hop SOCKS5-over-SOCKS5 chain was set up on
    the emulator and traced end to end, including `VpnService.protect()`
