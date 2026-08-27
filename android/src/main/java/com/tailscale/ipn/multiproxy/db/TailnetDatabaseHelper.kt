@@ -7,7 +7,7 @@ import android.database.sqlite.SQLiteOpenHelper
 class TailnetDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
     companion object {
         const val DATABASE_NAME = "multiproxy_profiles.db"
-        const val DATABASE_VERSION = 3
+        const val DATABASE_VERSION = 4
         const val TABLE_PROFILES = "profiles"
         const val COL_ID = "id"
         const val COL_DISPLAY_NAME = "display_name"
@@ -31,6 +31,11 @@ class TailnetDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABA
         const val COL_UPSTREAM_KIND = "kind"
         const val COL_UPSTREAM_LABEL = "label"
         const val COL_UPSTREAM_VIA = "via"
+        // Only set for kind=EXITNODE: which existing tailnet the peer was picked
+        // from (informational - the exit-node upstream has its own dedicated node
+        // identity by then, see upstream_exitnode.go) and that peer's Tailscale IP.
+        const val COL_UPSTREAM_SOURCE_TAILNET = "source_tailnet_id"
+        const val COL_UPSTREAM_PEER_ADDR = "peer_addr"
 
         // Per-app upstream selection, keyed by package name rather than UID
         // because a UID is only stable until the app is reinstalled, whereas the
@@ -45,6 +50,8 @@ class TailnetDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABA
                 $COL_UPSTREAM_KIND TEXT NOT NULL,
                 $COL_UPSTREAM_LABEL TEXT NOT NULL,
                 $COL_UPSTREAM_VIA TEXT NOT NULL DEFAULT '',
+                $COL_UPSTREAM_SOURCE_TAILNET TEXT NOT NULL DEFAULT '',
+                $COL_UPSTREAM_PEER_ADDR TEXT NOT NULL DEFAULT '',
                 $COL_ENABLED INTEGER NOT NULL DEFAULT 1,
                 $COL_CREATED_AT INTEGER NOT NULL,
                 $COL_UPDATED_AT INTEGER NOT NULL
@@ -101,6 +108,19 @@ class TailnetDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABA
             try {
                 db.execSQL(CREATE_UPSTREAMS.trimIndent())
                 db.execSQL(CREATE_APP_BINDINGS.trimIndent())
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
+        }
+        if (oldVersion < 4) {
+            // Adds the two columns an EXITNODE-kind upstream needs; every existing
+            // row (SOCKS5, WireGuard) gets the column with its '' default, which
+            // reads as "not applicable" rather than requiring a nullable type.
+            db.beginTransaction()
+            try {
+                db.execSQL("ALTER TABLE $TABLE_UPSTREAMS ADD COLUMN $COL_UPSTREAM_SOURCE_TAILNET TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE $TABLE_UPSTREAMS ADD COLUMN $COL_UPSTREAM_PEER_ADDR TEXT NOT NULL DEFAULT ''")
                 db.setTransactionSuccessful()
             } finally {
                 db.endTransaction()

@@ -67,9 +67,16 @@ class UpstreamPolicyApplier(
       val id = entry.optString("id")
       val kind = entry.optString("kind")
       if (id.isEmpty() || id in keep) continue
-      if (kind != KIND_SOCKS5 && kind != KIND_WIREGUARD) continue
+      if (kind != KIND_SOCKS5 && kind != KIND_WIREGUARD && kind != KIND_EXITNODE) continue
       try {
-        engine.removeUpstream(id)
+        // An exit-node upstream has its own lifecycle (a dedicated node
+        // identity, not a plain registry entry - see upstream_exitnode.go) and
+        // removeUpstream/UnregisterUpstream cannot see it.
+        if (kind == KIND_EXITNODE) {
+          engine.forgetExitNodeUpstream(id)
+        } else {
+          engine.removeUpstream(id)
+        }
       } catch (e: Exception) {
         TSLog.e(TAG, "could not remove upstream $id: $e")
       }
@@ -90,9 +97,31 @@ class UpstreamPolicyApplier(
         when (upstream.kind) {
           UpstreamKind.SOCKS5 -> registerSocks5(engine, upstream, config)
           UpstreamKind.WIREGUARD -> engine.addWireGuardUpstream(upstream.id, config)
+          UpstreamKind.EXITNODE -> registerExitNode(engine, upstream, config)
         }
       } catch (e: Exception) {
         TSLog.e(TAG, "could not register upstream ${upstream.id}: $e")
+      }
+    }
+  }
+
+  /**
+   * Unlike SOCKS5/WireGuard, AddExitNodeUpstream is not replace-on-reregister (it errors on a
+   * duplicate id, matching AddTailnet's convention, since both stand up a real node identity that
+   * should not be silently recreated). A rebuild can reuse a live engine that already has this
+   * upstream from a previous apply(), so that error is expected and just means "make sure it's
+   * enabled" instead - the same fallback MultiProxySessionCoordinator uses for tailnets.
+   */
+  private fun registerExitNode(engine: MultiProxyEngine, upstream: Upstream, config: String) {
+    val authKey = JSONObject(config).optString("authKey")
+    try {
+      engine.addExitNodeUpstream(
+          upstream.id, upstream.sourceTailnetId, authKey, upstream.peerAddr, true)
+    } catch (e: Exception) {
+      if (e.message?.contains("already exists", ignoreCase = true) == true) {
+        engine.setExitNodeUpstreamEnabled(upstream.id, true)
+      } else {
+        throw e
       }
     }
   }
@@ -164,5 +193,6 @@ class UpstreamPolicyApplier(
     private const val TAG = "UpstreamPolicyApplier"
     private const val KIND_SOCKS5 = "socks5"
     private const val KIND_WIREGUARD = "wireguard"
+    private const val KIND_EXITNODE = "exitnode"
   }
 }

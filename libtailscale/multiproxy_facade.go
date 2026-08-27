@@ -71,6 +71,21 @@ func (e *MultiProxyEngine) SetTailnetEnabled(identifier string, enabled bool) er
 	return e.inner.SetTailnetEnabled(identifier, enabled)
 }
 
+// SetTailnetExitNode points a running tailnet upstream's own general internet
+// traffic at one of its peers, using that tailnet's existing node identity -
+// no extra auth, no extra device slot. Pass an empty peerAddr to clear it.
+//
+// This only supports one active exit node per tailnet at a time; for a
+// second, simultaneously-active exit node out of the same tailnet, use
+// AddExitNodeUpstream (multiproxy_policy_facade.go) instead, which is a
+// dedicated identity and does cost an extra device slot.
+func (e *MultiProxyEngine) SetTailnetExitNode(identifier, peerAddr string) error {
+	if e.inner == nil {
+		return errors.New("engine not initialized")
+	}
+	return e.inner.SetTailnetExitNode(identifier, peerAddr)
+}
+
 func MultiProxySyntheticIPv6Prefix() string       { return multiproxy.SyntheticIPv6Prefix.String() }
 func MultiProxySyntheticInterfaceAddress() string { return multiproxy.SyntheticIPv6Interface.String() }
 func MultiProxySyntheticDNSAddress() string       { return multiproxy.SyntheticIPv6DNS.String() }
@@ -125,6 +140,19 @@ func (e *MultiProxyEngine) GetTailnetStatesJSON() string {
 		return "[]"
 	}
 	return e.inner.GetTailnetStatesJSON()
+}
+
+// GetExitNodeStatesJSON is GetTailnetStatesJSON's counterpart for exit-node
+// upstreams (upstream_exitnode.go): the observed tsnet backend state of each
+// one's own dedicated node identity, not the peer it routes through. Needed
+// because AddExitNodeUpstream's EditPrefs call succeeds locally regardless
+// of whether that identity is actually approved/logged in on its tailnet -
+// this is the only way to see a stuck NeedsMachineAuth/NeedsLogin state.
+func (e *MultiProxyEngine) GetExitNodeStatesJSON() string {
+	if e == nil || e.inner == nil {
+		return "[]"
+	}
+	return e.inner.GetExitNodeStatesJSON()
 }
 
 func (e *MultiProxyEngine) ClearTailnetAuthKey(identifier string) {

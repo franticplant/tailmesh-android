@@ -2520,6 +2520,158 @@ emulator, Multi-Tailnet mode, broad capture on, one SOCKS5 upstream, one
 explicit `AppBinding` (Termux), relay-side logs and on-device curl/Chrome
 output both captured.
 
+## 59. Added: exit-node-as-upstream, two ways (2026-08-27)
+
+`CURRENT CODE`
+
+A user flagged that Multi-Tailnet mode had no way to select an exit node,
+despite `upstreams_and_policy.md` §1.3 naming that as an original
+requirement. Investigation confirmed two real gaps: STANDARD mode's
+exit-node picker had no Multi-Tailnet equivalent, and the engine's legacy
+`Engine.SetExitNode(tailnetID)` fallback was dead code, never called from
+Kotlin.
+
+The fix has two paths, because Tailscale's exit-node mechanism
+(`ipn.Prefs.ExitNodeIP`, applied via `(*local.Client).EditPrefs`) is a
+whole-node preference: one `tsnet.Server` can only have one exit node active
+at a time, so simultaneity across several exit nodes from the *same*
+tailnet genuinely requires a second node identity, while a single exit node
+per tailnet does not.
+
+**Path A - free, in place (`upstream_tailnet.go`, `Engine.SetTailnetExitNode`).**
+Calls `EditPrefs` directly on an already-authenticated tailnet's own
+`tsnet.Server`. Zero new auth, zero new device slot. One active exit node
+per tailnet, but any number of *different* tailnets can each have one, for
+free, simultaneously. Surfaced as an "Exit node" button on each tailnet's
+card in `MultiProxyView.kt`, opening a picker over
+`fetchExitNodeCandidates(tailnetId)` (backed by
+`Engine.GetExitNodeCandidatesJSON`, which lists that tailnet's peers with
+`ExitNodeOption` set via `LocalClient().Status`).
+
+**Path B - dedicated identity (`upstream_exitnode.go`,
+`Engine.AddExitNodeUpstream`).** Spins up a second, independently-auth'd
+`tsnet.Server` pinned to one peer, registered as a new `UpstreamKind.EXITNODE`
+upstream through the same registry every SOCKS5/WireGuard upstream uses -
+chainable via `via`, usable as a default route, its own row on the
+Upstreams screen. This is the only way to get two or more simultaneously-
+active exit nodes out of the same tailnet, and costs a real device slot in
+that tailnet's admin console (hence its own opt-in kind, `saveExitNode` on
+`UpstreamRoutingViewModel`, rather than something automatic).
+
+Both paths share the idempotent-registration convention already established
+for tailnets in `MultiProxySessionCoordinator`: `AddExitNodeUpstream` errors
+on a duplicate id by design (it stands up a real node identity, so
+`UpstreamPolicyApplier.registerExitNode` catches that specific error and
+falls back to `SetExitNodeUpstreamEnabled` on a rebuild that reuses a live
+engine).
+
+**Evidence:** `UNIT-TESTED` - 10 new Go tests in
+`upstream_exitnode_test.go` covering validation, duplicate/collision
+rejection, registry-visibility while disabled, snapshot listing, forgetting,
+the `RegisterUpstream` guard, and both `SetTailnetExitNode`'s and
+`GetExitNodeCandidatesJSON`'s not-running/invalid-input paths; the full
+pre-existing `multiproxy` suite (156s) stayed green. `ANDROID-BUILT` -
+`./gradlew compileDebugKotlin` and a full `assembleDebug` both succeed with
+the new `UpstreamKind.EXITNODE` case wired into every exhaustive `when` in
+`UpstreamsView.kt`, plus the new schema columns
+(`source_tailnet_id`, `peer_addr`, `TailnetDatabaseHelper` v3→v4 migration).
+
+**Not yet closed:** no `INSTRUMENTATION-OR-EMULATOR-TESTED` evidence for
+either path. Device verification was attempted this session and blocked by
+an unrelated problem: the test emulator now crashes any arm64-v8a app,
+including a freshly-installed debug build, with `Fatal signal 4 (SIGILL)`
+inside Go's own runtime (`internal/cpu.getMIDR.abi0`) during process start,
+before any app code - including anything from this change - runs. This
+reproduced on repeated clean launches and is not something this change
+introduced (nothing here touches CPU-feature detection); it looks like an
+emulator binary-translation regression since §58's session, on the same
+`sdk_gphone64_x86_64` device. Needs either a fixed/rebuilt emulator or a
+real arm64 device before Path A/B can be device-verified, including the one
+thing neither Go tests nor a compile can confirm: whether `saveExitNode`'s
+second `tsnet.Server` actually reaches `RUNNING` against a real tailnet.
+
+## 60. Hardening Path B against a real concern: "the backend may not handle multiple auths from the same tailnet" (2026-08-27)
+
+`CURRENT CODE`
+
+The user flagged, correctly, that standing up several dedicated node
+identities against the same tailnet (§59's Path B) is exactly the kind of
+thing that can silently half-work: each one is a brand new device the
+tailnet's control plane has to accept, and nothing forces that to succeed
+just because `AddExitNodeUpstream` returned without an error.
+
+**§59.1 - the workaround for continuing device testing at all.** §59's
+device-verification blocker (an emulator-wide `SIGILL` in Go's ARM64
+CPU-feature detection on every arm64-v8a launch) turned out to be
+sidestepable rather than a hard stop: `make libtailscale` already produces
+`libgojni.so` for every ABI gomobile bind targets, including `x86_64` - not
+only the `arm64-v8a` one prior sessions defaulted to. Building and installing
+with `-PtestAbi=x86_64` runs the app natively on this emulator with no
+translation layer involved, and no crash. Both the "Exit node" picker on a
+tailnet's card (`MultiProxyView.kt`) and the exitnode `Add upstream` dialog
+(`UpstreamsView.kt`, tailnet picker / peer picker / auth key field, help text
+about the device-slot cost) were exercised this way and render correctly with
+no tailnet configured (empty pickers, no crash) - see the screenshots taken
+during this session. Still not a real end-to-end auth: no credentials for a
+second tailnet identity exist in this sandbox, so whether a Path B identity
+actually reaches `RUNNING` against a real control plane remains unverified.
+**This ABI workaround is worth keeping for every future session on this
+emulator**, not just this feature.
+
+**§59.2 - three concrete problems identified and fixed, not just discussed:**
+
+1. **A stuck identity was invisible.** `AddExitNodeUpstream`'s `EditPrefs`
+   call is a local prefs write - it succeeds whether or not the new device
+   identity is actually approved on its source tailnet. A tailnet with
+   "require device approval" turned on, or a reused/already-consumed auth
+   key, would leave the identity sitting in `NeedsMachineAuth` or
+   `NeedsLogin` forever while the upstream's own state showed `RUNNING`
+   (because that state only reflected the local `EditPrefs` result). Fixed
+   by adding `Engine.GetExitNodeStatesJSON` (`runtime_state.go`), mirroring
+   the pattern `GetTailnetStatesJSON` already established for tailnets: a
+   live `LocalClient().Status()` poll per identity, reporting the real
+   `BackendState`. Wired into `MultiProxySessionCoordinator.refreshRuntimeState`
+   (merged into the same `runtimeStates` map tailnets already use - id
+   namespaces don't collide) and surfaced as a new "Identity: ..." line on
+   each EXITNODE-kind row in `UpstreamsView.kt`, with a specific message for
+   `NEEDS_MACHINE_AUTH` ("approve this device in the source tailnet's admin
+   console") and `NEEDS_LOGIN` ("its auth key may already be used up").
+2. **The fix above would have made the scaling problem worse.** The polling
+   that makes states visible (`refreshRuntimeState`) runs every second and,
+   before this pass, walked every runtime's `Status()` call sequentially
+   with an independent 2s timeout each - already a latent risk with several
+   tailnets, and directly compounded by adding a second sequential scan for
+   exit-node upstreams on top. Since wanting several *simultaneous* exit
+   nodes is the entire point of Path B, this is exactly the shape of
+   deployment most likely to trip it. Fixed by running each identity's probe
+   in its own goroutine (`sync.WaitGroup`) in both `GetTailnetStatesJSON` and
+   `GetExitNodeStatesJSON`, so N runtimes now cost one `Status()` round
+   trip's wall time, not N of them.
+3. **Nothing bounded how many dedicated identities could be created.** Each
+   one is a full `tsnet.Server` - its own netstack, magicsock, DERP
+   connections, control-plane session - real memory/CPU/battery cost on a
+   mobile device, independent of whether the tailnet's admin console has a
+   device-count limit. Added `maxExitNodeUpstreams = 8` (`upstream_exitnode.go`,
+   mirroring `chain.go`'s `maxChainDepth` convention) enforced in
+   `AddExitNodeUpstream`, with a clear rejection message rather than letting
+   the count grow unbounded.
+
+**Evidence:** `UNIT-TESTED` - `TestAddExitNodeUpstreamEnforcesCap` (cap
+enforcement and that forgetting one frees a slot) and
+`TestGetExitNodeStatesJSONReportsDisabled` (decodes the new JSON shape);
+`go vet` and `go build -race`-equivalent (`go test -race`) both clean on the
+parallelized probes, no data race. `INSTRUMENTATION-OR-EMULATOR-TESTED` for
+the UI rendering path only (§59.1's screenshots); the actual
+`NeedsMachineAuth` detection path itself is not yet device-verified against
+a real second identity, for the same credential-availability reason as §59.
+
+**Not yet closed:** whether Tailscale's control plane treats several new
+devices registering from the same account in quick succession as anomalous
+(rate limiting, extra verification) is still an open, real question this
+pass could not test - it would need actual multi-device credentials against
+a live tailnet, which this sandbox does not have. The three fixes above make
+the failure *visible and bounded* if it happens; they do not prove it won't.
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.

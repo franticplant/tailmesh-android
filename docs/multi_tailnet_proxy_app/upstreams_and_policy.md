@@ -870,3 +870,45 @@ correctness bug, not a behaviour change.
     this app (Android itself reported no internet access with the VPN
     stopped entirely), so gap #16's prediction that Strict mode breaks
     MagicDNS resolution remains untested rather than confirmed.
+11. ~~§1.3 named "exit-node selection for non-Tailnet traffic" as an original
+    requirement, but Multi-Tailnet's UI never wired it up: `Engine.SetExitNode`
+    (the legacy Tailnet-exit-node fallback used at the bottom of
+    `resolveFlow`'s ladder) was never called from Kotlin, and STANDARD mode's
+    own exit-node picker had no Multi-Tailnet equivalent.~~ **Closed** - see
+    `validation_and_gaps.md` §59. Two paths now exist, deliberately different
+    in cost: `Engine.SetTailnetExitNode` (`upstream_tailnet.go`) edits an
+    already-running tailnet's own `Prefs.ExitNodeIP` in place - no new auth,
+    no new device slot, but only one exit node active per tailnet at a time,
+    surfaced as an "Exit node" picker on each tailnet's card in the
+    Multi-Tailnet screen. `Engine.AddExitNodeUpstream`
+    (`upstream_exitnode.go`) stands up a second, independently-authenticated
+    `tsnet.Server` pinned to one peer via `EditPrefs`, registered as a new
+    `UpstreamKind.EXITNODE` upstream with full parity to SOCKS5/WireGuard
+    (chainable via `via`, poolable as a default route, its own row in the
+    Upstreams screen) - the only way to get two or more simultaneously-active
+    exit nodes out of the *same* tailnet, since one node identity can only
+    hold one `ExitNodeIP` preference. `UNIT-TESTED` (13 Go tests in
+    `upstream_exitnode_test.go`, full `multiproxy` suite still green) and
+    `ANDROID-BUILT` (`compileDebugKotlin` and a full `assembleDebug` both
+    succeed). Building with `-PtestAbi=x86_64` (this emulator's native ABI,
+    since `make libtailscale` produces every gomobile-bind ABI, not only
+    arm64-v8a) sidesteps a separate arm64-translation `SIGILL` crash and gave
+    `INSTRUMENTATION-OR-EMULATOR-TESTED` confirmation that both new dialogs
+    (the exitnode `Add upstream` form and the tailnet card's "Exit node"
+    picker) render correctly; a real second identity reaching `RUNNING`
+    against a live tailnet is still unverified - no multi-device credentials
+    exist in this sandbox. `validation_and_gaps.md` §60 also hardens Path B
+    directly against the concern that motivated it ("can the backend really
+    handle several new auths against the same tailnet"): a stuck
+    `NeedsMachineAuth`/`NeedsLogin` identity was previously indistinguishable
+    from a working one (`AddExitNodeUpstream`'s `EditPrefs` succeeds locally
+    regardless of control-plane approval) - now surfaced live via
+    `GetExitNodeStatesJSON` and an "Identity: ..." line per row; the
+    per-runtime status polling this relies on was parallelized so it does not
+    fall behind its own 1s poll interval as the number of simultaneous
+    identities grows; and `AddExitNodeUpstream` now enforces
+    `maxExitNodeUpstreams = 8` so a mistake or a script cannot spin up an
+    unbounded number of real tsnet.Server processes. Whether Tailscale's
+    control plane itself rate-limits or flags rapid multi-device registration
+    from one account remains untested - that needs real multi-device
+    credentials this sandbox does not have.

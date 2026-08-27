@@ -143,6 +143,12 @@ type Engine struct {
 
 	tailnets map[UpstreamID]*TailnetRuntime
 
+	// exitNodes holds every exit-node upstream: a dedicated tsnet.Server
+	// pinned to one peer of some tailnet via Prefs.ExitNodeIP. See
+	// upstream_exitnode.go. Guarded by mu, lifecycle guarded by
+	// tailnetLifecycleMu, same as tailnets.
+	exitNodes map[UpstreamID]*ExitNodeRuntime
+
 	// upstreams holds every non-tailnet upstream (SOCKS5, WireGuard, direct).
 	// Tailnets stay in the map above with their own lifecycle; lookupProvider
 	// presents both behind one interface.
@@ -221,6 +227,7 @@ func NewEngineWithStateStore(dataDir string, cb EngineCallback, stateStoreFor fu
 	e := &Engine{
 		state:         StateOpen,
 		tailnets:      make(map[UpstreamID]*TailnetRuntime),
+		exitNodes:     make(map[UpstreamID]*ExitNodeRuntime),
 		subnets:       make([]subnetRoute, 0),
 		dataDir:       dataDir,
 		stateStoreFor: stateStoreFor,
@@ -247,6 +254,10 @@ func NewEngineWithStateStore(dataDir string, cb EngineCallback, stateStoreFor fu
 	// tailnet machinery rather than the registry, so they plug in as a source
 	// instead of being registered. See upstream_tailnet.go.
 	e.upstreams.AddSource(&tailnetSource{engine: e})
+
+	// Exit-node upstreams have their own lifecycle too, for the same reason
+	// tailnets do - see upstream_exitnode.go.
+	e.upstreams.AddSource(&exitNodeSource{engine: e})
 
 	e.eventsWg.Add(1)
 	go e.dispatchEvents()
@@ -801,6 +812,10 @@ func (e *Engine) Close() {
 	for uid := range e.tailnets {
 		ids = append(ids, string(uid))
 	}
+	var exitIDs []string
+	for uid := range e.exitNodes {
+		exitIDs = append(exitIDs, string(uid))
+	}
 	e.mu.Unlock()
 
 	e.StopVPN()
@@ -818,6 +833,23 @@ func (e *Engine) Close() {
 			}
 			if rt.Wg != nil {
 				rt.Wg.Wait()
+			}
+			if rt.Srv != nil {
+				rt.Srv.Close()
+			}
+		}
+	}
+
+	for _, id := range exitIDs {
+		uid := UpstreamID(id)
+		e.mu.Lock()
+		rt := e.exitNodes[uid]
+		delete(e.exitNodes, uid)
+		e.mu.Unlock()
+
+		if rt.Enabled {
+			if rt.Cancel != nil {
+				rt.Cancel()
 			}
 			if rt.Srv != nil {
 				rt.Srv.Close()

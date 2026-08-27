@@ -6,10 +6,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tailscale.ipn.VpnRuntimeMode
+import com.tailscale.ipn.ui.viewModel.ExitNodeCandidate
 import com.tailscale.ipn.ui.viewModel.MultiProxyViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -30,6 +32,7 @@ fun MultiProxyView(
     var renameId by remember { mutableStateOf<String?>(null) }
     var renameValue by remember { mutableStateOf("") }
     var deleteId by remember { mutableStateOf<String?>(null) }
+    var exitNodeTailnetId by remember { mutableStateOf<String?>(null) }
 
     Scaffold(
         topBar = {
@@ -216,6 +219,10 @@ fun MultiProxyView(
                                     renameValue = state.profile.displayName
                                 },
                             ) { Text("Rename") }
+                            OutlinedButton(
+                                enabled = state.runtimeState == "RUNNING",
+                                onClick = { exitNodeTailnetId = state.profile.id },
+                            ) { Text("Exit node") }
                             Button(
                                 onClick = { deleteId = state.profile.id },
                                 colors = ButtonDefaults.buttonColors(
@@ -292,6 +299,66 @@ fun MultiProxyView(
                 },
                 dismissButton = {
                     TextButton(onClick = { renameId = null }) { Text("Cancel") }
+                },
+            )
+        }
+
+        exitNodeTailnetId?.let { tailnetId ->
+            val candidates = remember(tailnetId) { viewModel.fetchExitNodeCandidates(tailnetId) }
+            var selected by remember(tailnetId) { mutableStateOf<ExitNodeCandidate?>(null) }
+            AlertDialog(
+                onDismissRequest = { exitNodeTailnetId = null },
+                title = { Text("Exit node") },
+                text = {
+                    Column {
+                        Text(
+                            "Route this tailnet's own general internet traffic through one of its " +
+                                "peers, in place - no extra device or auth key needed. Only one can " +
+                                "be active per tailnet this way.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        if (candidates.isEmpty()) {
+                            Text(
+                                "No peers offer to be an exit node on this tailnet.",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        } else {
+                            candidates.forEach { candidate ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { selected = candidate }
+                                        .padding(vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    RadioButton(
+                                        selected = selected?.id == candidate.id,
+                                        onClick = { selected = candidate },
+                                    )
+                                    Text("${candidate.hostname} (${candidate.ip})")
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        enabled = selected != null,
+                        onClick = {
+                            viewModel.setTailnetExitNode(tailnetId, selected?.ip.orEmpty())
+                            exitNodeTailnetId = null
+                        },
+                    ) { Text("Use") }
+                },
+                dismissButton = {
+                    Row {
+                        TextButton(onClick = {
+                            viewModel.setTailnetExitNode(tailnetId, "")
+                            exitNodeTailnetId = null
+                        }) { Text("Clear") }
+                        TextButton(onClick = { exitNodeTailnetId = null }) { Text("Cancel") }
+                    }
                 },
             )
         }

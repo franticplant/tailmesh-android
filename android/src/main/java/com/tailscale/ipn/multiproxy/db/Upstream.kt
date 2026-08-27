@@ -16,7 +16,19 @@ package com.tailscale.ipn.multiproxy.db
  */
 enum class UpstreamKind {
   SOCKS5,
-  WIREGUARD;
+  WIREGUARD,
+
+  /**
+   * A dedicated node identity, logged into some tailnet, pinned to route through one of that
+   * tailnet's peers. Unlike a plain Tailnet upstream this exists purely to be dialed for ordinary
+   * internet traffic - see `upstream_exitnode.go`. It costs a real device slot in that tailnet's
+   * admin console, which is why it is its own opt-in kind rather than automatic.
+   *
+   * This is the "I want two+ exit nodes active from the same tailnet at once" path. Picking a
+   * single exit node for a tailnet you already have configured is cheaper and does not need a row
+   * here at all - see `ProfileRepository`/`MultiProxyEngine.setTailnetExitNode`.
+   */
+  EXITNODE;
 
   companion object {
     fun fromStorage(value: String): UpstreamKind? = entries.firstOrNull { it.name == value }
@@ -42,6 +54,10 @@ data class Upstream(
     val enabled: Boolean = true,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
+    /** kind=EXITNODE only: which tailnet the peer below was picked from. Informational. */
+    val sourceTailnetId: String = "",
+    /** kind=EXITNODE only: the chosen peer's Tailscale IP. */
+    val peerAddr: String = "",
 )
 
 /**

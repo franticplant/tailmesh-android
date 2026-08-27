@@ -32,6 +32,12 @@ const (
 	// UpstreamKindDirect dials from the device itself, bypassing every tunnel.
 	// It is how a policy expresses "this app does not go through the VPN".
 	UpstreamKindDirect UpstreamKind = "direct"
+
+	// UpstreamKindExitNode is a dedicated tsnet.Server pinned, via its own
+	// Prefs.ExitNodeIP, to route through one specific peer of some tailnet.
+	// See upstream_exitnode.go for why this needs its own node identity
+	// rather than reusing an existing Tailnet upstream's.
+	UpstreamKindExitNode UpstreamKind = "exitnode"
 )
 
 // ErrUpstreamNotReady is returned by a Provider whose transport exists but is
@@ -301,6 +307,9 @@ func (e *Engine) RegisterUpstream(p Provider) error {
 	}
 	if p != nil && p.Kind() == UpstreamKindTailnet {
 		return errors.New("multiproxy: register tailnets through the tailnet lifecycle")
+	}
+	if p != nil && p.Kind() == UpstreamKindExitNode {
+		return errors.New("multiproxy: register exit node upstreams through AddExitNodeUpstream")
 	}
 	return e.upstreams.Register(p)
 }

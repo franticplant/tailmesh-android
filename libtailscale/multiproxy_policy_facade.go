@@ -3,6 +3,7 @@ package libtailscale
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -109,8 +110,10 @@ func (e *MultiProxyEngine) GetUpstreamsJSON() string {
 
 // GetUpstreamStatsJSON reports live per-upstream dial and byte counters, as
 // [{"id","kind","ready","via","dialAttempts","dialSuccesses","dialFailures",
-//   "notReadyCount","bytesIn","bytesOut","lastLatencyMs","lastError",
-//   "lastErrorAtMillis","lastSuccessAtMillis","lastAttemptAtMillis"}...]
+//
+//	"notReadyCount","bytesIn","bytesOut","lastLatencyMs","lastError",
+//	"lastErrorAtMillis","lastSuccessAtMillis","lastAttemptAtMillis"}...]
+//
 // ordered by id. Every count is a real observation from an actual dial or
 // readiness check, not a sample or an estimate - see stats.go. An upstream
 // that has never been dialed appears with every counter at zero, not absent,
@@ -221,6 +224,53 @@ func MultiProxyWireGuardConfigFromQuick(conf string) (string, error) {
 // upstream chained behind it.
 func (e *MultiProxyEngine) RemoveUpstream(id string) error {
 	return e.inner.UnregisterUpstream(multiproxy.UpstreamID(id))
+}
+
+// GetExitNodeCandidatesJSON lists the peers of an already-configured, running
+// tailnet (named by tailnetIdentifier) that offer to be an exit node. Add one
+// as its own upstream with AddExitNodeUpstream.
+func (e *MultiProxyEngine) GetExitNodeCandidatesJSON(tailnetIdentifier string) string {
+	if e == nil || e.inner == nil {
+		return "[]"
+	}
+	return e.inner.GetExitNodeCandidatesJSON(tailnetIdentifier)
+}
+
+// AddExitNodeUpstream adds an exit-node upstream: a dedicated node identity,
+// logged into a tailnet with its own authKey, pinned to route through one
+// specific peer (peerAddr, that peer's Tailscale IP - see
+// GetExitNodeCandidatesJSON) rather than reach that tailnet's other peers.
+//
+// sourceTailnetID records which tailnet the peer was picked from for the UI's
+// benefit; it is not consulted again after this call. This upstream then
+// behaves like any other upstream a policy rule can name - SOCKS5 and
+// WireGuard included - for ordinary internet traffic, not just reaching that
+// one tailnet.
+//
+// This costs a real device slot in that tailnet's admin console: it is a
+// second node, not a reuse of an existing one.
+func (e *MultiProxyEngine) AddExitNodeUpstream(id, sourceTailnetID, authKey, peerAddr string, enabled bool) error {
+	if e == nil || e.inner == nil {
+		return errors.New("engine not initialized")
+	}
+	return e.inner.AddExitNodeUpstream(id, sourceTailnetID, authKey, peerAddr, enabled)
+}
+
+func (e *MultiProxyEngine) SetExitNodeUpstreamEnabled(id string, enabled bool) error {
+	if e == nil || e.inner == nil {
+		return errors.New("engine not initialized")
+	}
+	return e.inner.SetExitNodeUpstreamEnabled(id, enabled)
+}
+
+// ForgetExitNodeUpstream removes the exit-node upstream and deletes its local
+// state, including the node identity it logged in with. It does not remove
+// the device from the tailnet's admin console - that has to be done there.
+func (e *MultiProxyEngine) ForgetExitNodeUpstream(id string) error {
+	if e == nil || e.inner == nil {
+		return errors.New("engine not initialized")
+	}
+	return e.inner.ForgetExitNodeUpstream(id)
 }
 
 // MultiProxyDirectUpstreamID is the reserved id of the built-in upstream that

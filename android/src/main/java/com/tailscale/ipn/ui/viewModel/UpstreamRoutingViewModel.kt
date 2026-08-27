@@ -33,9 +33,17 @@ import org.json.JSONObject
 data class RoutableUpstream(
     val id: String,
     val label: String,
-    /** One of `tailnet`, `socks5`, `wireguard`, `direct`. */
+    /** One of `tailnet`, `socks5`, `wireguard`, `exitnode`, `direct`. */
     val kind: String,
     val enabled: Boolean,
+)
+
+/** One peer of some tailnet that offers to be an exit node. See [UpstreamRoutingViewModel.fetchExitNodeCandidates]. */
+data class ExitNodeCandidate(
+    val id: String,
+    val hostname: String,
+    val dnsName: String,
+    val ip: String,
 )
 
 /**
@@ -185,6 +193,102 @@ class UpstreamRoutingViewModel : ViewModel() {
     save(id, UpstreamKind.WIREGUARD, label, via, json)
   }
 
+  /**
+   * Adds an exit-node upstream: a dedicated node identity, logged into `sourceTailnetId` with its
+   * own `authKey`, pinned to route through `peerAddr` (a peer from
+   * [fetchExitNodeCandidates]'s result for that tailnet). This costs a real device slot in that
+   * tailnet's admin console - it is not a free operation the way picking a tailnet's own exit node
+   * in place is (see [setTailnetExitNode]).
+   *
+   * Only adding is supported, not editing: the peer and the node identity are set together at
+   * creation, and changing either is a new upstream (delete and re-add) rather than a mutation of a
+   * live node identity.
+   */
+  fun saveExitNode(label: String, sourceTailnetId: String, authKey: String, peerAddr: String) {
+    if (sourceTailnetId.isBlank()) {
+      errorMessage.value = "Choose which tailnet to pick an exit node from"
+      return
+    }
+    if (peerAddr.isBlank()) {
+      errorMessage.value = "Choose an exit node peer"
+      return
+    }
+    if (authKey.isBlank()) {
+      errorMessage.value = "An auth key is required for the exit node's own device identity"
+      return
+    }
+    // Checked here, not just left to the engine's own maxExitNodeUpstreams
+    // rejection (upstream_exitnode.go): UpstreamPolicyApplier.register()
+    // only logs an engine-side registration failure, it never reaches
+    // errorMessage, so without this check hitting the cap would silently
+    // save a row that can never actually come up.
+    val exitNodeCount = upstreams.value.count { it.kind == UpstreamKind.EXITNODE }
+    if (exitNodeCount >= MAX_EXIT_NODE_UPSTREAMS) {
+      errorMessage.value =
+          "At most $MAX_EXIT_NODE_UPSTREAMS exit-node upstreams may be configured at once " +
+              "(each is its own device identity). Delete one to add another."
+      return
+    }
+    val upstreamId = "upstream-${UUID.randomUUID()}"
+    val config = JSONObject().put("authKey", authKey).toString()
+    viewModelScope.launch {
+      withContext(Dispatchers.IO) { secrets.saveConfig(upstreamId, config) }
+      upstreamRepository.save(
+          Upstream(
+              id = upstreamId,
+              kind = UpstreamKind.EXITNODE,
+              label = label.ifBlank { upstreamId },
+              sourceTailnetId = sourceTailnetId,
+              peerAddr = peerAddr,
+          ))
+      applyNow()
+    }
+  }
+
+  /**
+   * Lists the peers of an already-running tailnet that offer to be an exit node. Empty if the
+   * tailnet named by tailnetId is not configured or not currently connected.
+   */
+  fun fetchExitNodeCandidates(tailnetId: String): List<ExitNodeCandidate> {
+    val json =
+        try {
+          session.engine?.getExitNodeCandidatesJSON(tailnetId) ?: "[]"
+        } catch (e: Exception) {
+          TSLog.e("UpstreamRoutingViewModel", "could not fetch exit node candidates: $e")
+          "[]"
+        }
+    return try {
+      val arr = org.json.JSONArray(json)
+      (0 until arr.length()).map { i ->
+        val o = arr.getJSONObject(i)
+        ExitNodeCandidate(
+            id = o.optString("id"),
+            hostname = o.optString("hostname"),
+            dnsName = o.optString("dnsName"),
+            ip = o.optString("ip"),
+        )
+      }
+    } catch (e: Exception) {
+      emptyList()
+    }
+  }
+
+  /**
+   * Points an already-running tailnet's own general internet traffic at one of its peers, using
+   * that tailnet's existing node identity - no extra auth, no extra device slot. Pass an empty
+   * peerAddr to clear it. Only one exit node can be active per tailnet this way; for a second,
+   * simultaneously-active exit node from the same tailnet, use [saveExitNode] instead.
+   */
+  fun setTailnetExitNode(tailnetId: String, peerAddr: String) {
+    viewModelScope.launch(Dispatchers.IO) {
+      try {
+        session.engine?.setTailnetExitNode(tailnetId, peerAddr)
+      } catch (e: Exception) {
+        errorMessage.value = e.message ?: "Could not set exit node"
+      }
+    }
+  }
+
   private fun save(
       id: String?,
       kind: UpstreamKind,
@@ -331,5 +435,8 @@ class UpstreamRoutingViewModel : ViewModel() {
 
     /** Matches multiproxy.DirectUpstreamID. */
     const val DIRECT_UPSTREAM_ID = "@direct"
+
+    /** Matches multiproxy.maxExitNodeUpstreams (upstream_exitnode.go). */
+    private const val MAX_EXIT_NODE_UPSTREAMS = 8
   }
 }

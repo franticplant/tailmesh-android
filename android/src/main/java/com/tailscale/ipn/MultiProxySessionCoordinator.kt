@@ -24,6 +24,25 @@ private data class TailnetRuntimeSnapshot(
 )
 
 /**
+ * An exit-node upstream's own dedicated node identity state, decoded from
+ * `Engine.GetExitNodeStatesJSON()`. Mirrors [TailnetRuntimeSnapshot] - see
+ * that method's doc comment for why this needs to exist as its own poll
+ * rather than being inferred from dial stats: EditPrefs succeeds locally
+ * regardless of whether this identity is actually approved on its source
+ * tailnet, so a stuck NeedsMachineAuth/NeedsLogin state is otherwise
+ * invisible.
+ */
+@Serializable
+private data class ExitNodeRuntimeSnapshot(
+    val id: String,
+    val sourceTailnetId: String = "",
+    val peerAddr: String = "",
+    val enabled: Boolean,
+    val state: String,
+    val machineName: String = "",
+)
+
+/**
  * Live per-upstream dial/byte counters, decoded from `Engine.GetUpstreamStatsJSON()`.
  *
  * Every count here is a real observation from an actual dial or readiness check made by the
@@ -272,10 +291,25 @@ object MultiProxySessionCoordinator {
             return
         }
 
-        _runtimeStates.value = snapshots.associate { it.tailnetId to normalizeRuntimeState(it.state) }
-        _machineNames.value = snapshots.mapNotNull { snapshot ->
-            snapshot.machineName.takeIf { it.isNotBlank() }?.let { snapshot.tailnetId to it }
-        }.toMap()
+        val exitNodeSnapshots =
+            try {
+                json.decodeFromString<List<ExitNodeRuntimeSnapshot>>(engine.getExitNodeStatesJSON())
+            } catch (e: Exception) {
+                TSLog.e("MultiProxySession", "Failed to decode exit node runtime state: ${e.message}")
+                emptyList()
+            }
+
+        _runtimeStates.value =
+            snapshots.associate { it.tailnetId to normalizeRuntimeState(it.state) } +
+                exitNodeSnapshots.associate { it.id to normalizeRuntimeState(it.state) }
+        _machineNames.value =
+            (snapshots.mapNotNull { snapshot ->
+                    snapshot.machineName.takeIf { it.isNotBlank() }?.let { snapshot.tailnetId to it }
+                } +
+                    exitNodeSnapshots.mapNotNull { snapshot ->
+                        snapshot.machineName.takeIf { it.isNotBlank() }?.let { snapshot.id to it }
+                    })
+                .toMap()
 
         // A Running backend proves tsnet has durable node state. Retire bootstrap
         // credentials at that point and complete provisioning.

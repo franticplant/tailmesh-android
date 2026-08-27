@@ -181,4 +181,49 @@ class MultiProxyViewModel : ViewModel() {
     fun renameProfile(id: String, displayName: String) {
         session?.let { MultiProxySessionCoordinator.rename(it, id, displayName) }
     }
+
+    /**
+     * Lists the peers of a running tailnet that offer to be an exit node, for picking one to
+     * route that tailnet's own general internet traffic through - at no extra auth cost, since it
+     * reuses the tailnet's existing node identity. See [setTailnetExitNode].
+     */
+    fun fetchExitNodeCandidates(tailnetId: String): List<ExitNodeCandidate> {
+        val jsonStr =
+            try {
+                session?.engine?.getExitNodeCandidatesJSON(tailnetId) ?: "[]"
+            } catch (e: Exception) {
+                TSLog.e("MultiProxyViewModel", "Failed to fetch exit node candidates: ${e.message}")
+                "[]"
+            }
+        return try {
+            val arr = org.json.JSONArray(jsonStr)
+            (0 until arr.length()).map { i ->
+                val o = arr.getJSONObject(i)
+                ExitNodeCandidate(
+                    id = o.optString("id"),
+                    hostname = o.optString("hostname"),
+                    dnsName = o.optString("dnsName"),
+                    ip = o.optString("ip"),
+                )
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    /**
+     * Points this tailnet's own traffic at one of its peers in place - no extra auth, no extra
+     * device slot. Pass an empty peerAddr to clear it. Only one exit node can be active per
+     * tailnet this way; use the Upstreams screen's "exit node" upstream kind for a second,
+     * simultaneously-active exit node from the same tailnet.
+     */
+    fun setTailnetExitNode(tailnetId: String, peerAddr: String) {
+        viewModelScope.launch {
+            try {
+                session?.engine?.setTailnetExitNode(tailnetId, peerAddr)
+            } catch (e: Exception) {
+                TSLog.e("MultiProxyViewModel", "Failed to set exit node: ${e.message}")
+            }
+        }
+    }
 }

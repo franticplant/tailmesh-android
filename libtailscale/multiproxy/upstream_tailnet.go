@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
+	"time"
 
+	"tailscale.com/ipn"
 	"tailscale.com/tsnet"
 )
 
@@ -65,6 +68,47 @@ func (p *tailnetProvider) PeerPathInfo(ctx context.Context, destIP string) strin
 		return "unknown"
 	}
 	return (&tsnetUpstream{srv: srv}).PeerPathInfo(ctx, destIP)
+}
+
+// SetTailnetExitNode points an already-running tailnet upstream's own general
+// (non-tailnet-destination) traffic at one of its peers, in place - no second
+// node identity, no extra device slot, unlike an exit-node upstream
+// (upstream_exitnode.go). This is the cheap path: it works for exactly one
+// active exit node per tailnet, because Prefs.ExitNodeIP is a whole-server
+// preference. Reach for AddExitNodeUpstream instead when a second,
+// simultaneously-active exit node is needed out of the same tailnet.
+//
+// An empty peerAddr clears the exit node, so the tailnet upstream goes back
+// to only being usable for its own peers.
+func (e *Engine) SetTailnetExitNode(tailnetIdentifier, peerAddr string) error {
+	e.mu.RLock()
+	rt, exists := e.tailnets[UpstreamID(tailnetIdentifier)]
+	e.mu.RUnlock()
+	if !exists || !rt.Enabled || rt.Srv == nil {
+		return fmt.Errorf("tailnet %q is not running", tailnetIdentifier)
+	}
+
+	lc, err := rt.Srv.LocalClient()
+	if err != nil {
+		return err
+	}
+
+	mp := &ipn.MaskedPrefs{
+		ExitNodeIDSet: true,
+		ExitNodeIPSet: true,
+	}
+	if peerAddr != "" {
+		addr, err := netip.ParseAddr(peerAddr)
+		if err != nil {
+			return fmt.Errorf("invalid exit node peer address %q: %w", peerAddr, err)
+		}
+		mp.Prefs.ExitNodeIP = addr
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err = lc.EditPrefs(ctx, mp)
+	return err
 }
 
 // tailnetSource exposes the Engine's configured tailnets to the registry.

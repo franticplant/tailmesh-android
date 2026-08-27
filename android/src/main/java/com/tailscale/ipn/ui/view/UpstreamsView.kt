@@ -43,6 +43,7 @@ import com.tailscale.ipn.R
 import com.tailscale.ipn.multiproxy.db.Upstream
 import com.tailscale.ipn.multiproxy.db.UpstreamKind
 import com.tailscale.ipn.ui.util.Lists
+import com.tailscale.ipn.ui.viewModel.ExitNodeCandidate
 import com.tailscale.ipn.ui.viewModel.RoutableUpstream
 import com.tailscale.ipn.ui.viewModel.UpstreamRoutingViewModel
 
@@ -66,6 +67,7 @@ fun UpstreamsView(
   val broadCaptureEnabled by model.broadCaptureEnabled.collectAsState()
   val lanExclusionEnabled by model.lanExclusionEnabled.collectAsState()
   val liveStats by MultiProxySessionCoordinator.upstreamStats.collectAsState()
+  val runtimeStates by MultiProxySessionCoordinator.runtimeStates.collectAsState()
 
   var editing by remember { mutableStateOf<Upstream?>(null) }
   var creating by remember { mutableStateOf(false) }
@@ -109,6 +111,8 @@ fun UpstreamsView(
         existing = editing,
         initialConfig = editing?.let { model.configFor(it.id) },
         chainCandidates = routable.filter { it.id != editing?.id },
+        tailnetCandidates = routable.filter { it.kind == "tailnet" },
+        fetchExitNodeCandidates = model::fetchExitNodeCandidates,
         onDismiss = {
           creating = false
           editing = null
@@ -120,6 +124,11 @@ fun UpstreamsView(
         },
         onSaveWireGuard = { id, label, config, via ->
           model.saveWireGuard(id, label, config, via)
+          creating = false
+          editing = null
+        },
+        onSaveExitNode = { label, sourceTailnetId, authKey, peerAddr ->
+          model.saveExitNode(label, sourceTailnetId, authKey, peerAddr)
           creating = false
           editing = null
         },
@@ -222,6 +231,9 @@ fun UpstreamsView(
                     )
                   }
                   UpstreamHealthLine(upstream.enabled, stats)
+                  if (upstream.kind == UpstreamKind.EXITNODE) {
+                    ExitNodeIdentityLine(upstream.enabled, runtimeStates[upstream.id])
+                  }
                 }
               },
               trailingContent = {
@@ -274,6 +286,30 @@ private fun UpstreamHealthLine(enabled: Boolean, stats: UpstreamStatSnapshot?) {
       Text(stats.lastError, color = color, fontSize = fontSize)
     }
   }
+}
+
+/**
+ * One line under an EXITNODE-kind upstream showing its own dedicated node identity's state -
+ * distinct from [UpstreamHealthLine]'s dial stats, and the only way to see a stuck identity: a
+ * second auth that needs approval on its source tailnet, or whose auth key was already consumed
+ * elsewhere, registers fine locally (`AddExitNodeUpstream`'s `EditPrefs` call succeeds regardless)
+ * but never actually carries traffic. See `Engine.GetExitNodeStatesJSON`'s doc comment.
+ */
+@Composable
+private fun ExitNodeIdentityLine(enabled: Boolean, state: String?) {
+  if (!enabled || state.isNullOrEmpty()) return
+  val fontSize = MaterialTheme.typography.bodySmall.fontSize
+  val needsAttention = state == "NEEDS_MACHINE_AUTH" || state == "NEEDS_LOGIN" || state == "ERROR"
+  val color = if (needsAttention) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondary
+  val text =
+      when (state) {
+        "RUNNING" -> stringResource(R.string.upstream_exitnode_identity_running)
+        "NEEDS_MACHINE_AUTH" -> stringResource(R.string.upstream_exitnode_identity_needs_auth)
+        "NEEDS_LOGIN" -> stringResource(R.string.upstream_exitnode_identity_needs_login)
+        "STARTING" -> stringResource(R.string.upstream_exitnode_identity_starting)
+        else -> stringResource(R.string.upstream_exitnode_identity_other, state)
+      }
+  Text(text, color = color, fontSize = fontSize)
 }
 
 /** A row that shows the current upstream choice and opens a menu of the alternatives. */
@@ -346,9 +382,12 @@ fun UpstreamEditorDialog(
     existing: Upstream?,
     initialConfig: String?,
     chainCandidates: List<RoutableUpstream>,
+    tailnetCandidates: List<RoutableUpstream>,
+    fetchExitNodeCandidates: (String) -> List<ExitNodeCandidate>,
     onDismiss: () -> Unit,
     onSaveSocks5: (String?, String, String, String, String, String) -> Unit,
     onSaveWireGuard: (String?, String, String, String) -> Unit,
+    onSaveExitNode: (String, String, String, String) -> Unit,
 ) {
   val initial = remember(initialConfig) { parseInitialConfig(initialConfig) }
 
@@ -361,6 +400,20 @@ fun UpstreamEditorDialog(
   var wireGuardConfig by remember { mutableStateOf(if (existing?.kind == UpstreamKind.WIREGUARD) initialConfig.orEmpty() else "") }
   var kindMenuOpen by remember { mutableStateOf(false) }
   var viaMenuOpen by remember { mutableStateOf(false) }
+
+  // Exit-node fields. Only creation is supported (see saveExitNode's doc
+  // comment) - the peer and node identity are set together once, so editing
+  // an existing exit-node row shows them read-only instead of pickers.
+  var exitSourceTailnetId by remember { mutableStateOf(existing?.sourceTailnetId ?: "") }
+  var exitPeerAddr by remember { mutableStateOf(existing?.peerAddr ?: "") }
+  var exitAuthKey by remember { mutableStateOf("") }
+  var exitTailnetMenuOpen by remember { mutableStateOf(false) }
+  var exitPeerMenuOpen by remember { mutableStateOf(false) }
+  val exitPeerCandidates =
+      remember(exitSourceTailnetId) {
+        if (exitSourceTailnetId.isBlank()) emptyList()
+        else fetchExitNodeCandidates(exitSourceTailnetId)
+      }
 
   AlertDialog(
       onDismissRequest = onDismiss,
@@ -435,6 +488,73 @@ fun UpstreamEditorDialog(
                   minLines = 6,
               )
             }
+            UpstreamKind.EXITNODE -> {
+              if (existing != null) {
+                Text(
+                    stringResource(
+                        R.string.upstream_exitnode_readonly, exitPeerAddr, exitSourceTailnetId),
+                    color = MaterialTheme.colorScheme.secondary,
+                    fontSize = MaterialTheme.typography.bodySmall.fontSize,
+                )
+              } else {
+                Text(
+                    stringResource(R.string.upstream_exitnode_help),
+                    color = MaterialTheme.colorScheme.secondary,
+                    fontSize = MaterialTheme.typography.bodySmall.fontSize,
+                )
+                val tailnetLabel =
+                    tailnetCandidates.firstOrNull { it.id == exitSourceTailnetId }?.label
+                        ?: stringResource(R.string.upstream_exitnode_source_tailnet_unset)
+                TextButton(onClick = { exitTailnetMenuOpen = true }) {
+                  Text(stringResource(R.string.upstream_exitnode_source_tailnet, tailnetLabel))
+                }
+                DropdownMenu(
+                    expanded = exitTailnetMenuOpen,
+                    onDismissRequest = { exitTailnetMenuOpen = false }) {
+                      tailnetCandidates.forEach { candidate ->
+                        DropdownMenuItem(
+                            text = { Text(candidate.label) },
+                            onClick = {
+                              exitSourceTailnetId = candidate.id
+                              exitPeerAddr = ""
+                              exitTailnetMenuOpen = false
+                            },
+                        )
+                      }
+                    }
+
+                val peerLabel =
+                    exitPeerCandidates.firstOrNull { it.ip == exitPeerAddr }?.hostname
+                        ?: exitPeerAddr.ifEmpty {
+                          stringResource(R.string.upstream_exitnode_peer_unset)
+                        }
+                TextButton(
+                    onClick = { exitPeerMenuOpen = true },
+                    enabled = exitSourceTailnetId.isNotBlank(),
+                ) {
+                  Text(stringResource(R.string.upstream_exitnode_peer, peerLabel))
+                }
+                DropdownMenu(
+                    expanded = exitPeerMenuOpen, onDismissRequest = { exitPeerMenuOpen = false }) {
+                      exitPeerCandidates.forEach { candidate ->
+                        DropdownMenuItem(
+                            text = { Text("${candidate.hostname} (${candidate.ip})") },
+                            onClick = {
+                              exitPeerAddr = candidate.ip
+                              exitPeerMenuOpen = false
+                            },
+                        )
+                      }
+                    }
+
+                OutlinedTextField(
+                    value = exitAuthKey,
+                    onValueChange = { exitAuthKey = it },
+                    label = { Text(stringResource(R.string.upstream_exitnode_auth_key)) },
+                    singleLine = true,
+                )
+              }
+            }
           }
 
           val viaLabel =
@@ -465,12 +585,15 @@ fun UpstreamEditorDialog(
       },
       confirmButton = {
         TextButton(
+            enabled = kind != UpstreamKind.EXITNODE || existing == null,
             onClick = {
               when (kind) {
                 UpstreamKind.SOCKS5 ->
                     onSaveSocks5(existing?.id, label, address, username, password, via)
                 UpstreamKind.WIREGUARD ->
                     onSaveWireGuard(existing?.id, label, wireGuardConfig, via)
+                UpstreamKind.EXITNODE ->
+                    onSaveExitNode(label, exitSourceTailnetId, exitAuthKey, exitPeerAddr)
               }
             }) {
               Text(stringResource(R.string.save))

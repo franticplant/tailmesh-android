@@ -65,6 +65,8 @@ class UpstreamRepository(context: Context) {
                             cursor.getColumnIndexOrThrow(TailnetDatabaseHelper.COL_ENABLED)) == 1,
                     createdAt = long(TailnetDatabaseHelper.COL_CREATED_AT),
                     updatedAt = long(TailnetDatabaseHelper.COL_UPDATED_AT),
+                    sourceTailnetId = string(TailnetDatabaseHelper.COL_UPSTREAM_SOURCE_TAILNET),
+                    peerAddr = string(TailnetDatabaseHelper.COL_UPSTREAM_PEER_ADDR),
                 )
           }
         }
@@ -137,6 +139,8 @@ class UpstreamRepository(context: Context) {
         put(TailnetDatabaseHelper.COL_UPSTREAM_KIND, upstream.kind.name)
         put(TailnetDatabaseHelper.COL_UPSTREAM_LABEL, upstream.label)
         put(TailnetDatabaseHelper.COL_UPSTREAM_VIA, upstream.via)
+        put(TailnetDatabaseHelper.COL_UPSTREAM_SOURCE_TAILNET, upstream.sourceTailnetId)
+        put(TailnetDatabaseHelper.COL_UPSTREAM_PEER_ADDR, upstream.peerAddr)
         put(TailnetDatabaseHelper.COL_ENABLED, if (upstream.enabled) 1 else 0)
         put(TailnetDatabaseHelper.COL_CREATED_AT, upstream.createdAt)
         put(TailnetDatabaseHelper.COL_UPDATED_AT, upstream.updatedAt)
