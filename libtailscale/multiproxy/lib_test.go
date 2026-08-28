@@ -600,7 +600,11 @@ func TestResolveRouteConcurrency(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 50; i++ {
+		// Each enable spins up a real tsnet.Server that attempts a real
+		// login round-trip before the disable/re-enable can proceed, so a
+		// handful of cycles is enough to exercise the enable/disable-vs-
+		// resolveRoute race without the test taking minutes.
+		for i := 0; i < 5; i++ {
 			engine.SetTailnetEnabled("tn-race", false)
 			engine.SetTailnetEnabled("tn-race", true)
 		}

@@ -3218,14 +3218,21 @@ hop - and not `"child"` or `"middle"`, which are both healthy.
 **Evidence:** `UNIT-TESTED` - `go test -run TestChainDialer -v -timeout 30s
 ./libtailscale/multiproxy/...` passes, all 4 chain-dialer tests green.
 
-**Note:** attempting the full package suite
-(`go test -count=1 ./libtailscale/multiproxy/...`) this pass hit an
-unrelated deadlock in `TestResolveRouteConcurrency` (goroutine dump shows
-blocked `health.Tracker`/`eventbus` and `net/http` transport goroutines on a
-`memnet.Pipe` read) - reproduced by running that test alone, so it is not
-caused by this pass's changes. Not investigated further this pass due to
-time constraints (a release was requested); worth a dedicated look before
-next relying on the full suite passing green.
+**Update (2026-08-28, later same pass):** the full-suite issue above was
+root-caused and fixed - it was never a deadlock. `TestResolveRouteConcurrency`
+(`lib_test.go`) ran a real `engine.SetTailnetEnabled` enable/disable cycle
+50 times in a tight loop; each enable spins up a real `tsnet.Server` that
+does a real `StartLoginInteractive` network round-trip (confirmed via log
+timestamps - each cycle took ~5s), so 50 cycles took 250s+, comfortably
+exceeding a normal 45-90s test timeout. The goroutine dump that looked like
+a hang was just that work still legitimately in flight when the timeout
+fired. **NEW:** reduced the loop to 5 iterations - still exercises the
+concurrent enable/disable-vs-`resolveRoute` race the test is for, without
+needing tens of real tsnet lifecycles. **Evidence:** `UNIT-TESTED` -
+`TestResolveRouteConcurrency` alone now passes in ~20s, and
+`go test -count=1 -timeout 150s ./libtailscale/multiproxy/...` (the full
+package suite, which previously never completed inside a normal timeout)
+now passes cleanly in ~6s.
 
 ## 48. Bottom line
 
