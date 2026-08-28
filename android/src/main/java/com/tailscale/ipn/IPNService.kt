@@ -140,9 +140,23 @@ open class IPNService : VpnService(), libtailscale.IPNService {
     private fun publishRuntimeMode(mode: VpnRuntimeMode) {
       _runtimeMode.value = mode
     }
-    
+
     fun onUnderlyingDnsChanged(dns: String) {
         instance?.app?.multiProxySession?.onUnderlyingDnsChanged(dns)
+    }
+
+    // True when persisted intent (survives process death, unlike the
+    // in-memory runtimeMode StateFlow above, which resets to STOPPED on
+    // every fresh process) says Multi-Tailnet mode should be running. Lets
+    // the UI tell "the user stopped this" apart from "this was running and
+    // got killed - Android's own service-restart will bring it back, but on
+    // a repeat crash-loop that restart is throttled and can take a while" -
+    // see validation_and_gaps.md #76. Both states currently render as a bare
+    // "VPN is stopped" with no way to tell them apart.
+    fun persistedWantsMultiProxy(context: android.content.Context): Boolean {
+      val prefs = context.getSharedPreferences("vpn_mode", android.content.Context.MODE_PRIVATE)
+      return prefs.getBoolean("wantRunning", false) &&
+          prefs.getString("selectedMode", "STANDARD") == "MULTIPROXY"
     }
   }
 

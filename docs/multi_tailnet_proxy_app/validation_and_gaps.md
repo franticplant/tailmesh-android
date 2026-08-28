@@ -3368,6 +3368,92 @@ synthetic/mocked backend:
    exercises is separately established and device-verified elsewhere in
    this doc (§50, §58, §68), not something this pass touched.
 
+**Additional combinations tested on 2026-08-28** (against v0.0.6-alpha's
+own debug-signed twin, same code, on the same live `kurtaksi@outlook.com`
+tailnet, after the fresh install used for §74's testing):
+7. Switching the exit node from one already-selected peer to a different
+   one (`k3s-agent-3` -> `taksi1`) without clearing first - the card
+   updated to the new IP (`100.109.239.55`) in one step, and reopening the
+   picker showed the new selection, not the old one or both.
+8. Clearing an already-set exit node via the picker's "Clear" button - the
+   card's "Exit node:" line disappeared entirely, and reopening the picker
+   showed nothing selected again, matching the tailnet's actual state with
+   no stale radio button left checked.
+
+**Update, same day:** the user set up an exit-node-capable peer on
+`akkara.com.tr` (`hosting`, `100.69.60.20`), closing the gap above. With
+both tailnets enabled in the same running Multi-Tailnet session:
+9. Set `akkara`'s exit node to `hosting (100.69.60.20)` via its own
+   picker - the picker correctly listed only `akkara`'s own peer (no
+   leakage of `kurtaksi`'s candidate list), and the card updated to show
+   it.
+10. Set `kurtaksi`'s exit node to `k3s-agent-3 (100.119.103.112)`
+    afterward, in the same session, with `akkara`'s already set - its
+    picker independently showed its own 5 real candidates, unaffected by
+    `akkara`'s selection.
+11. Both cards simultaneously showed their own distinct exit node
+    (`akkara.com.tr -> 100.69.60.20`, `kurtaksi@outlook.com ->
+    100.119.103.112`), both `Runtime: RUNNING`, confirming per-tailnet
+    exit-node state doesn't cross-contaminate when two tailnets are active
+    at once. This also incidentally re-verified §74's fix a second time,
+    independently: `akkara` was imported and enabled mid-session (while
+    `kurtaksi` was already `RUNNING`) and reached `RUNNING` on the first
+    try, no `NEEDS_LOGIN`.
+
+**Update, same day - App routing combined with exit nodes:** with both
+`kurtaksi` (exit node `k3s-agent-3`) and `akkara` (exit node `hosting`)
+running simultaneously as above, tested the interaction between per-app
+routing and exit nodes directly, using real network requests (not just
+UI/DB state) via Chrome (`am start -a android.intent.action.VIEW -d
+<url> -p com.android.chrome`):
+12. App routing screen (`AppRoutingView`) lists both tailnets as explicit
+    per-app routing targets alongside `Default (Unchanged (subnet routes,
+    then exit node))` and `Direct (bypass the VPN)` - confirming the
+    stated policy order is subnet/tailnet routes first, exit node only as
+    fallback, which is the behavior this combination needs. Bound Gmail
+    to `kurtaksi@outlook.com` explicitly through this UI; a `DNS via` and
+    a `Tunnel LAN traffic for this app` control appeared once bound,
+    confirming the per-app config is richer than a single upstream
+    picker.
+13. With no explicit per-app binding (Default policy), Chrome reached
+    `k3s-agent-3` directly at its own tailnet IP
+    (`http://100.119.103.112/` -> real `404 page not found`, i.e. an
+    actual HTTP response from that host) even though that same peer is
+    also `kurtaksi`'s active exit node - intra-tailnet resource access
+    was not swallowed by the exit-node route.
+14. Same check against `akkara`'s exit node peer
+    (`http://100.69.60.20/` -> `ERR_CONNECTION_RESET`, a real TCP-level
+    response, not a timeout) - reachable the same way.
+15. General internet access through Chrome continued to work
+    unconditionally (`http://1.1.1.1/` and `http://icanhazip.com/` both
+    loaded real pages; egress IP `31.155.141.171`) - confirming the
+    "keep tailnet resources reachable, exit node only carries the
+    general-internet path" combination the user asked about holds,
+    without breaking general connectivity.
+
+**Not verified, an honest gap:** which of the two active exit nodes (if
+either) actually carried that general-internet request. Confirming exact
+exit-node attribution would need a second reference point (e.g. querying
+`k3s-agent-3` and `hosting`'s own public IPs independently) not available
+in this environment - this pass confirms the request succeeded and
+tailnet resources stayed reachable, not which exit node specifically
+carried it.
+
+**Remaining open gaps:**
+- The other exit-node mechanism entirely (`AddExitNodeUpstream` / Path B -
+  a dedicated second upstream identity from the Upstreams screen's "exit
+  node" upstream kind, chainable) - this pass was Path A only
+  (`SetTailnetExitNode`, in-place selection), per the explicit instruction
+  to finish with the existing-upstream path first.
+- Exit node state surviving a full VPN service restart/reboot (only
+  mid-session account toggling and full Multi-Tailnet stop/start were
+  exercised, both covered under §74, not specifically with an exit node
+  already set beforehand).
+- Gmail's explicit per-app binding to `kurtaksi` (item 12 above) was
+  confirmed in the UI/config layer but not exercised with live traffic,
+  since it requires a signed-in Google account not available in this
+  environment.
+
 Go: `go build ./libtailscale/multiproxy/...` and full
 `go test -count=1 -timeout 60s ./libtailscale/multiproxy/...` both pass.
 Kotlin: `compileDebugKotlin` passes.
@@ -3435,6 +3521,274 @@ same live tailnet (`kurtaksi@outlook.com`), fresh debug build with the fix:
 3. Repeated the Disable/Enable cycle a second time to rule out a fluke -
    same result, `RUNNING` both times, no `NEEDS_LOGIN` at any point.
 `compileDebugKotlin` and `assembleDebug` both pass.
+
+## 75. SOCKS5/WireGuard upstream and chaining validation, plus a real crash root-cause (2026-08-28)
+
+**Context:** continuation of §73/§74's exit-node validation pass, per the
+user's request to also exercise SOCKS5 and WireGuard upstreams, chaining,
+and per-app routing combined with exit nodes, on the same remote emulator
+used throughout this document.
+
+**"Route general internet traffic" toggle - confirmed it does what its
+label says.** With the toggle **off** (default), a real SOCKS5 test server
+was configured as the default-route upstream (`TestSocks`, reached over
+`adb reverse tcp:1080 tcp:1080` since the emulator runs on a remote host -
+`10.0.2.2`-style host aliases do not apply). Chrome loading
+`icanhazip.com` got the real, unproxied response, and the upstream's own
+live stats counter did not move for that request - confirming ordinary
+browser/internet traffic is *not* captured while this toggle is off, only
+Tailscale-scoped traffic is. With the toggle switched **on** (which
+restarts the VPN, confirmed by the stats counters resetting), the same
+Chrome request immediately produced a large burst of new connection
+attempts on `TestSocks` (stats jumped by ~60-180 in one page load) -
+confirming general/ordinary internet traffic now does route through the
+configured upstream, exactly as the toggle's help text describes. Many of
+these attempts failed (`socks5: connection refused`, `socks5: reading
+reply: EOF`) - this traces to bugs/limits in the throwaway single-file
+Python SOCKS5 test server used for validation (likely unhandled concurrent
+connections and/or sandbox DNS resolution failures for some of the many
+domains a real page load touches), not to the app; the app-side behavior
+(whether to send a given flow to the upstream) was the thing under test,
+and it behaved correctly in both toggle states.
+
+**Upstream chaining (`Reach it through:`) - confirmed real and functional.**
+Editing `TestSocks` and setting `Reach it through:` to a connected tailnet
+(`kurtaksi@outlook.com`) saved successfully, the upstream card then showed
+"Chained through kurtaksi@outlook.com", and traffic continued flowing
+(stats kept incrementing) after the change. Note: because the SOCKS5
+server's address (`127.0.0.1:1080`) was only reachable via the emulator's
+own loopback/adb-reverse tunnel rather than a real tailnet peer, this does
+not prove the outbound dial physically traversed the tailnet's WireGuard
+tunnel - only that the setting is accepted, persisted, displayed
+correctly, and does not break existing traffic. A stronger test would
+chain through a tailnet to a SOCKS5/WireGuard endpoint that is *only*
+reachable via that tailnet, so success/failure of the chain is
+unambiguous; not done this pass. The "Reach it through" picker also
+listed another configured upstream (`TestWG`) as a valid chain target, not
+just tailnets/device/direct - not explored further.
+
+**WireGuard upstream - config-acceptance verified, no live tunnel
+possible from this sandbox.** A real WireGuard keypair was generated on
+the host (`wg genkey`/`wg pubkey`, from the user-installed
+`wireguard-tools`). A full wg-quick-style config pasted into the "Add
+upstream" WireGuard form (`[Interface]`/`[Peer]` sections, including
+`PrivateKey`, `Address`, `DNS`, `PublicKey`, `Endpoint`, `AllowedIPs`) was
+accepted and saved, the upstream card showing status "Ready". No live
+handshake could be attempted: this sandbox has no root (`sudo -n true`
+fails) and therefore cannot load the `wireguard` kernel module, and no
+userspace fallback (`wireguard-go`, `boringtun`) is installed - a real
+peer endpoint was never reachable. This is therefore
+`INSTRUMENTATION-OR-EMULATOR-TESTED` for config parsing/acceptance only,
+**not** device-evidence of a real WireGuard tunnel carrying traffic (that
+claim already exists elsewhere in this doc from a prior, different pass -
+see the "WireGuard upstream" row in §2's capability matrix - this pass
+did not repeat or strengthen that evidence, it only re-confirmed the UI
+accepts hand-written configs).
+
+**gotcha, not a bug:** entering a multi-line config via
+`adb shell input text "<multi-line string>"` fails - the remote shell
+splits on the embedded newlines and tries to run each config line as a
+separate command (`inaccessible or not found` per line). Fix: send each
+line as its own `input text` call, separated by `input keyevent 66`
+(Enter), to produce real newlines inside the field.
+
+**Real crash found and root-caused - environmental, not app code.** While
+switching between exit nodes and upstream settings, the user hit a native
+crash (`SIGABRT`, `VK_ERROR_DEVICE_LOST`, in `libhwui.so`'s RenderThread -
+Android's system Vulkan/Skia UI renderer). The backtrace contains zero
+frames from this app; it is Android's graphics stack reporting the GPU
+driver lost its device, which happens in `libhwui.so`/RenderThread
+regardless of what app is on screen. Reproduced independently: driving
+repeated Chrome launches for routing tests, `adb logcat -b all` showed
+```
+lowmemorykiller: Kill 'com.tailscale.ipn.multiproxy' (454), uid 10243,
+  oom_score_adj 50 to free 1091772kB rss, 1049664kB swap; reason: device
+  is low on swap (512kB < 151408kB) and thrashing (302%)
+ActivityManager: Process com.tailscale.ipn.multiproxy (pid 454) has died
+ActivityManager: Start proc 6024:com.tailscale.ipn.multiproxy ... (restart)
+```
+i.e. Android's own low-memory killer, not this app, killed the process
+because the remote emulator ran critically low on memory - worsened by
+this testing session itself accumulating dozens of Chrome tabs from
+repeated `am start -a VIEW` calls (each opened a new tab rather than
+reusing one). This lines up exactly with what the user observed ("worked
+for a little tiny window, then DNS or IP traffic stopped working"): while
+the VPN process is dead, all VPN-routed traffic and DNS necessarily stop,
+until Android restarts it. Confirmed the recovery side too: after the
+OS-triggered restart, general internet traffic (`1.1.1.1` in Chrome)
+worked normally again with no further intervention needed. Mitigation
+applied for the rest of this session: cleared Chrome's app data
+(`pm clear com.android.chrome`) to drop the accumulated tabs and free
+memory. **Not filed as an app bug** - there is no code path in this app
+that causes or could prevent an OS-level low-memory kill; the fix, if
+any, belongs to test hygiene (don't accumulate tabs/processes on a
+memory-constrained remote emulator) rather than to the app.
+
+**Open gap, explicitly requested by the user, not started this pass:**
+the "Network diagnostics" screen currently only surfaces relay/DERP
+latency. The user asked for materially more detailed network statistics
+there. Note that a *different* screen (Proxies & tunnels) already shows
+real per-upstream live counters (succeeded/failed connection counts, last
+error text) discovered earlier this session - but this does not cover
+what the user is asking for on the diagnostics screen specifically (e.g.
+per-tailnet/per-peer throughput, latency breakdowns beyond relay,
+historical trends). Filed here as a real, user-requested feature gap for
+future work; not attempted this pass due to the session's time budget.
+
+Go/Kotlin: no source changes made this pass (validation and one crash
+investigation only); `MultiProxySessionCoordinator.kt`'s §74 fix is the
+only code change carried in the currently-shipped build (`v0.0.7-alpha`).
+
+## 76. Real-phone crash follow-up: reproduced a genuine crash-loop under memory pressure, systematic path sweep (2026-08-28)
+
+**Context:** user reported the §75 crash (`VK_ERROR_DEVICE_LOST`/RenderThread abort)
+happened on a **real phone** (osVersion string: Pixel `shiba`), not the
+emulator, while enabling an exit node and navigating between screens - and
+asked for a systematic sweep of exit-node-related navigation paths to find
+the trigger, since "there should be dozens" of paths worth trying.
+
+**Systematic path sweep, Multi-Tailnet and Standard modes:** exercised
+combinations of exit-node select/switch/clear crossed with navigation to
+every reachable settings screen (DNS settings, Network Diagnostics,
+Upstreams, Proxies & tunnels, App routing, Proxy-Only Mode toggle, Local
+Proxy Listener toggle), the Standard-mode exit-node picker (a second,
+separate exit-node UI at the top-level `MainView`, distinct from the
+Multi-Tailnet per-tailnet picker), and the account switcher. No crash
+during roughly a dozen of these combinations while the device had
+sufficient free memory - `com.tailscale.ipn.multiproxy`'s pid stayed
+stable throughout.
+
+**Reproduced a real crash immediately upon selecting a Multi-Tailnet exit
+node once free memory was low**, and this time captured the full picture
+via a persistent `adb logcat -b all` capture running for the whole sweep:
+
+```text
+06:12:40 lowmemorykiller kills the app (pid 6024), device out of swap,
+         thrashing 303%
+06:12:43 Android's own service-restart mechanism (START_STICKY) spins the
+         process back up specifically to redeliver IPNService's last
+         start command
+06:12:47-58 the app's own auto-resume logic (IPNService.onStartCommand's
+         null-intent branch, reading the persisted wantRunning/
+         selectedMode prefs) correctly restarts Multi-Tailnet mode with
+         no user action - both tailnets reach Running, full peer netmaps
+         reload
+06:13:18 lowmemorykiller kills it AGAIN (pid 8055), same reason, only
+         ~20s after it had just finished successfully reconnecting
+06:13:56+ next restart is only for the Activity (foreground UI), not the
+         service - the UI shows "VPN is stopped" and stays that way
+         indefinitely; the service's own next sticky-restart is
+         throttled by Android's crash-loop backoff (the same log stream
+         shows scheduled restart delays as long as 1543623ms after a
+         kill, rescheduled shorter each time something else nudges it,
+         but not instant)
+```
+
+**Why this matters and what it explains:** the app's auto-resume design is
+*correct* - `IPNService`'s null-intent path really does restore
+Multi-Tailnet mode from persisted state with no user action needed, and it
+demonstrably worked once, unprompted, during this test. But **Multi-Tailnet
+mode is memory-heavy enough (two full concurrent `tsnet.Server`s, each
+loading a complete netmap for a large shared tailnet - 80+ peers in this
+test) that on a device already near its memory ceiling, it can be killed
+again within seconds of successfully restarting, before the user notices
+anything worked** - and Android's own backoff on repeatedly-crashing
+services means the *next* automatic recovery attempt is not immediate. To
+the user this looks exactly like the report: "worked for a little tiny
+window, then... stopped working," recoverable only by manually reopening
+the app and tapping Start Multi-Tailnet again. This is the same
+memory-pressure signature as §75's finding, now with a second, independently
+reproduced instance and, critically, evidence of the *loop* (works briefly,
+dies again fast, stays down) rather than a single isolated event.
+
+**Scope honestly stated:** this specific emulator has a very constrained
+2GB total RAM budget (`MemTotal: 2018812 kB`) that is almost certainly
+tighter than the user's real Pixel phone - so the *frequency* seen here
+(re-killed within ~20-35s of a successful restart) is likely
+emulator-specific and should not be read as "this will happen every 20
+seconds on your phone." What transfers is the *mechanism*: Multi-Tailnet
+mode's peak memory footprint scales with (number of enabled tailnets) x
+(size of each tailnet's netmap), and a real phone under its own memory
+pressure (many background apps, a large shared tailnet, other proxy
+upstreams) can hit the identical failure mode - kill, silent-but-correct
+auto-resume, re-kill before stabilizing, then an indefinite-looking stall
+until the user manually intervenes.
+
+**Not fixed this pass - candidate directions for a real fix, not yet
+implemented or evidenced:**
+1. Reduce Multi-Tailnet mode's peak memory footprint - e.g., avoid
+   holding the full decoded peer list in Kotlin (`MultiProxyViewModel._peers`)
+   when no UI is actually observing it, and check whether the Go engine
+   keeps more than one netmap copy alive at once during a reconnect.
+2. Make the recovery visible instead of silent - if the service is
+   killed and Android's restart is delayed by backoff, the user currently
+   has no in-app signal that anything is wrong beyond "VPN is stopped";
+   a one-time low-memory warning or an explicit "reconnecting" state
+   (rather than a bare stopped state indistinguishable from a deliberate
+   stop) would at least tell the user what's happening instead of
+   looking like silent failure.
+3. Investigate whether `startForeground()`'s priority boost is being
+   applied early enough in the auto-resume path relative to the two
+   tsnet servers' netmap-loading work - the two kills in this test had
+   different `oom_score_adj` values (0 then 100), consistent with the
+   second restart running as a backgrounded service with no visible
+   Activity (normal Android behavior, not necessarily a bug), but worth
+   confirming deliberately rather than inferring from one sample.
+
+None of these three are implemented; this section is the diagnostic
+handoff, not a fix. `INSTRUMENTATION-OR-EMULATOR-TESTED`, not real-phone
+evidence - the mechanism match to the user's real-phone report is
+circumstantial, not proven identical, since the real phone's own logs were
+never captured.
+
+## 77. Fixed: an interrupted Multi-Tailnet session looked identical to a deliberate stop (2026-08-28)
+
+**BEFORE:** as found in §76, when the app process is killed while
+Multi-Tailnet mode is active (low-memory kill being the reproduced trigger,
+but any process death has the same effect) and Android's own
+crash-loop backoff delays the automatic service restart, the UI's "Active
+VPN mode" label (`MultiProxyView.kt`) fell back to a bare "VPN is stopped"
+with a plain "Start Multi-Tailnet" button - **identical** to what the user
+sees after deliberately tapping "Stop Multi-Tailnet" themselves. Nothing
+distinguished "you stopped this" from "this was running and got killed out
+from under you." Root cause: `IPNService.runtimeMode` (`_runtimeMode`,
+`IPNService.kt`) is in-memory companion-object state that resets to
+`STOPPED` on every fresh process, so after a kill+restart it always reads
+`STOPPED` regardless of what was persisted, until the coroutine that
+actually resumes Multi-Tailnet mode finishes (which itself may be delayed
+by Android's backoff on a repeatedly-crashing service - see §76). The
+*persisted* intent (`SharedPreferences["vpn_mode"]`, `wantRunning` +
+`selectedMode`) survives process death fine and is exactly what the
+service's own null-intent auto-resume path already reads - the UI simply
+never consulted it.
+
+**NEW:** added `IPNService.persistedWantsMultiProxy(context)` (companion
+object, `IPNService.kt`), a small read of the same `wantRunning`/
+`selectedMode` SharedPreferences the service's auto-resume path already
+uses. `MultiProxyView.kt` now checks this whenever `activeMode ==
+STOPPED`: if persisted intent says Multi-Tailnet should be running, it
+shows "Multi-Tailnet was interrupted (e.g. low memory) - not stopped by
+you" in the error color, with a "Reconnect Multi-Tailnet" button (calls
+the same `startMultiProxy()` as before - no new codepath, just a clearer
+label and prompt); otherwise it shows the original plain "VPN is stopped"
+/ "Start Multi-Tailnet", unchanged for an actual deliberate stop. This does
+not fix Android's own restart backoff and does not reduce Multi-Tailnet
+mode's memory footprint (see §76's still-open candidate directions #1 and
+#3) - it only makes the already-correct persisted state visible instead of
+indistinguishable from user intent, and gives the user an immediate manual
+way to recover rather than waiting on a throttled automatic retry.
+
+**Evidence:** `INSTRUMENTATION-OR-EMULATOR-TESTED`, full round trip on a
+debug build: started Multi-Tailnet with both tailnets reaching `RUNNING`,
+killed the process (`adb shell am kill` + `am force-stop`, which does not
+clear `SharedPreferences` - confirmed the persisted flags survived it),
+reopened the app and navigated to Upstreams - screen showed the new red
+"Multi-Tailnet was interrupted..." label and "Reconnect Multi-Tailnet"
+button (not the plain stopped state, confirmed by a matching screenshot of
+the plain case immediately prior, from a real deliberate-stop scenario, for
+contrast). Tapped Reconnect - both tailnets returned to `RUNNING` within
+~8s, same machine identities. `compileDebugKotlin` and `assembleDebug` both
+pass.
 
 ## 48. Bottom line
 

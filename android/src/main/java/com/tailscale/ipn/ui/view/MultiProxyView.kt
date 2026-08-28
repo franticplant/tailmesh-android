@@ -9,7 +9,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.tailscale.ipn.IPNService
 import com.tailscale.ipn.VpnRuntimeMode
 import com.tailscale.ipn.ui.viewModel.ExitNodeCandidate
 import com.tailscale.ipn.ui.viewModel.MultiProxyViewModel
@@ -55,17 +58,37 @@ fun MultiProxyView(
         LazyColumn(contentPadding = padding, modifier = Modifier.fillMaxSize()) {
             item {
                 Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-                    val modeLabel = when (activeMode) {
-                        VpnRuntimeMode.MULTIPROXY -> "Active VPN mode: Multi-Tailnet"
-                        VpnRuntimeMode.STANDARD -> "Active VPN mode: Standard (single upstream)"
-                        VpnRuntimeMode.STOPPED -> "VPN is stopped"
+                    val context = LocalContext.current
+                    // Persisted intent survives process death; activeMode does not - it
+                    // is in-memory state that resets to STOPPED on every fresh process,
+                    // so it cannot by itself tell "user stopped this" apart from "this
+                    // was running and the process was killed (e.g. low memory) - Android
+                    // will restart the service, but a repeat crash-loop throttles that
+                    // restart and can leave this looking stuck for a while." See
+                    // validation_and_gaps.md #76.
+                    val stoppedUnexpectedly =
+                        remember(activeMode) {
+                            activeMode == VpnRuntimeMode.STOPPED &&
+                                IPNService.persistedWantsMultiProxy(context)
+                        }
+                    val modeLabel = when {
+                        activeMode == VpnRuntimeMode.MULTIPROXY -> "Active VPN mode: Multi-Tailnet"
+                        activeMode == VpnRuntimeMode.STANDARD -> "Active VPN mode: Standard (single upstream)"
+                        stoppedUnexpectedly -> "Multi-Tailnet was interrupted (e.g. low memory) - not stopped by you"
+                        else -> "VPN is stopped"
                     }
-                    Text(modeLabel, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        modeLabel,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = if (stoppedUnexpectedly) MaterialTheme.colorScheme.error else Color.Unspecified,
+                    )
                     Spacer(modifier = Modifier.height(8.dp))
                     if (activeMode == VpnRuntimeMode.MULTIPROXY) {
                         OutlinedButton(onClick = viewModel::stopMultiProxy) { Text("Stop Multi-Tailnet") }
                     } else {
-                        Button(onClick = viewModel::startMultiProxy) { Text("Start Multi-Tailnet") }
+                        Button(onClick = viewModel::startMultiProxy) {
+                            Text(if (stoppedUnexpectedly) "Reconnect Multi-Tailnet" else "Start Multi-Tailnet")
+                        }
                     }
                 }
             }

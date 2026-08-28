@@ -385,6 +385,21 @@ object MultiProxySessionCoordinator {
         }
     }
 
+    // Only the fields UpstreamHealthLine (UpstreamsView.kt) actually renders:
+    // ready/dialAttempts/dialSuccesses/dialFailures/lastError. Every
+    // UpstreamStatSnapshot also carries byte counters and millisecond
+    // timestamps (lastAttemptAtMillis in particular) that the Go side updates
+    // on literally every dial - see stats.go's recordAttempt/recordSuccess/
+    // recordFailure - so those fields differ on almost every 1s poll tick
+    // whenever there is any traffic on any upstream. Comparing the full data
+    // class would make _upstreamStats emit a "new" map (and force every
+    // visible upstream row to recompose/redraw) roughly every second for as
+    // long as the Proxies & tunnels screen stays open with any live traffic,
+    // even though nothing the UI actually shows changed. Comparing only the
+    // rendered subset keeps StateFlow's conflation meaningful.
+    private fun renderedStatsKey(s: UpstreamStatSnapshot) =
+        listOf(s.ready, s.dialAttempts, s.dialSuccesses, s.dialFailures, s.lastError)
+
     private fun refreshUpstreamStats(session: MultiProxySession) {
         val engine = session.engine
         if (engine == null) {
@@ -393,7 +408,13 @@ object MultiProxySessionCoordinator {
         }
         try {
             val snapshots = json.decodeFromString<List<UpstreamStatSnapshot>>(engine.upstreamStatsJSON)
-            _upstreamStats.value = snapshots.associateBy { it.id }
+            val next = snapshots.associateBy { it.id }
+            val current = _upstreamStats.value
+            val unchanged = current.keys == next.keys &&
+                current.all { (id, old) -> renderedStatsKey(old) == renderedStatsKey(next.getValue(id)) }
+            if (!unchanged) {
+                _upstreamStats.value = next
+            }
         } catch (e: Exception) {
             TSLog.e("MultiProxySession", "Failed to decode upstream stats: ${e.message}")
         }
