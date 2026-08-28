@@ -36,7 +36,17 @@ type MultiProxyEngine struct {
 }
 
 func NewMultiProxyEngine(dataDir string, cb MultiProxyCallback) *MultiProxyEngine {
-	return &MultiProxyEngine{inner: multiproxy.NewEngine(dataDir, cb)}
+	e := multiproxy.NewEngine(dataDir, cb)
+	// The built-in @direct upstream must leave through the same
+	// VpnService-protected dialer every other upstream uses (see
+	// AddSOCKS5UpstreamVia/AddWireGuardUpstream below), or a "direct" dial
+	// loops back into the TUN once broad capture has the VPN intercepting
+	// ordinary internet traffic. protectedDialContext checks the published
+	// dialer on every call, so wiring it in now is correct even though
+	// setUpstreamProtectedDialer (backend.go) publishes the real one later,
+	// once netmon exists.
+	e.SetDirectDialer(protectedDialContext)
+	return &MultiProxyEngine{inner: e}
 }
 
 // NewMultiProxyEngineForApp uses tsnet's established per-upstream file stores.

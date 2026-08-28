@@ -6,6 +6,7 @@ import (
 	"net"
 	"sort"
 	"sync"
+	"sync/atomic"
 )
 
 // UpstreamKind names the transport an upstream provides. The datapath never
@@ -101,11 +102,20 @@ const DirectUpstreamID UpstreamID = "@direct"
 
 // directProvider dials straight from the device, outside every tunnel.
 //
-// Note this leaves the VPN: the resulting socket is protected from the TUN by
-// the Android side (VpnService.protect) exactly as the tailnet upstreams' own
-// sockets are, so it does not loop back into gVisor.
+// This must leave through a VpnService-protected socket, exactly like every
+// other upstream's own dials (SOCKS5, WireGuard, tailnet) - otherwise, once
+// broad capture (RoutingSettings.broadCaptureEnabled) has the VPN intercepting
+// ordinary internet traffic, a "direct" dial's own packets get swept back into
+// the TUN it was trying to leave, re-enter gVisor as a new, unrelated flow,
+// and the original socket sees that as a reset - so the connection dies
+// almost immediately after "succeeding" and the caller (an app's own retry
+// logic) reconnects in a tight loop. protectedDial is nil until the Android
+// side has installed one (see SetDirectDialer); before that, dialing falls
+// back to a plain, unprotected net.Dialer; broad capture is off by default,
+// so that window matters only if this upstream is dialed before startup
+// finishes wiring up the real one.
 type directProvider struct {
-	dialer net.Dialer
+	protectedDial atomic.Pointer[UpstreamDialer]
 }
 
 func (p *directProvider) ID() UpstreamID     { return DirectUpstreamID }
@@ -114,7 +124,11 @@ func (p *directProvider) Ready() bool        { return true }
 func (p *directProvider) Close() error       { return nil }
 
 func (p *directProvider) Dial(ctx context.Context, network, address string) (net.Conn, error) {
-	return p.dialer.DialContext(ctx, network, address)
+	if d := p.protectedDial.Load(); d != nil {
+		return (*d)(ctx, network, address)
+	}
+	var dialer net.Dialer
+	return dialer.DialContext(ctx, network, address)
 }
 
 func (p *directProvider) PeerPathInfo(context.Context, string) string { return "direct-bypass" }
@@ -146,12 +160,28 @@ type upstreamRegistry struct {
 	mu        sync.RWMutex
 	providers map[UpstreamID]Provider
 	sources   []providerSource
+	direct    *directProvider
 }
 
 func newUpstreamRegistry() *upstreamRegistry {
-	r := &upstreamRegistry{providers: make(map[UpstreamID]Provider)}
-	r.providers[DirectUpstreamID] = &directProvider{}
+	direct := &directProvider{}
+	r := &upstreamRegistry{providers: make(map[UpstreamID]Provider), direct: direct}
+	r.providers[DirectUpstreamID] = direct
 	return r
+}
+
+// SetDirectDialer installs the dial function the built-in @direct upstream
+// uses to leave the device. On Android this must be a VpnService-protected
+// dialer (see directProvider's doc comment for why) - the same one every
+// other upstream already uses. Passing nil reverts to a plain, unprotected
+// net.Dialer, which is only correct when the VPN is not capturing ordinary
+// internet traffic (broad capture off).
+func (e *Engine) SetDirectDialer(dial UpstreamDialer) {
+	if dial == nil {
+		e.upstreams.direct.protectedDial.Store(nil)
+		return
+	}
+	e.upstreams.direct.protectedDial.Store(&dial)
 }
 
 // AddSource plugs in a provider source. Sources are consulted after the
