@@ -3879,6 +3879,48 @@ That would confirm or rule out the empty-upstream-on-restart hypothesis
 directly, instead of guessing from emulator conditions that can't currently
 reproduce the held-open state the bug needs.
 
+## 79. Attempted fix for #78's race, not yet confirmed against the real symptom (2026-08-28)
+
+Shipped the diagnostic log line from §78 (`applyUpstreamDNS: dohUrl=...
+lastUnderlyingDns=... -> resolved=...`), then went further and closed the
+race it was built to detect, rather than just observe it: added
+`NetworkChangeCallback.snapshotIfEmpty(connectivityManager)`, which reads
+the connectivity state Android already has via synchronous getters
+(`ConnectivityManager.allNetworks`, `getNetworkCapabilities`,
+`getLinkProperties` - none of these need to wait on a callback) and seeds
+`currentDnsServerStr` from them, but only if the async network callback
+registered in `App.onCreate` hasn't already set it. Called once, right
+before the DNS branch in `IPNService.startMultiProxyVPNLocked`. No-op once
+the callback has fired for real, so it changes nothing about the working
+case - it only fills the gap between "process just (re)started" and "the
+callback's first delivery has actually landed."
+
+**What I verified:** compiles clean. Two independent full-process
+restart-and-reconnect cycles on-device (genuinely different PIDs, confirmed
+via logcat) both resolved DNS correctly - no regression.
+
+**What I did NOT verify:** whether this fixes the user's actual reported
+symptom. I still have not managed to reproduce the original bug at all -
+see §78 - so there was nothing broken to confirm fixed against. I also
+could not deliberately land in the race window itself: it's the gap
+between a callback being *registered* and its first *delivery*, which is
+typically sub-second, and every way I have of driving the UI (an
+`adb shell input tap` plus a `uiautomator dump` round trip to confirm it
+landed) takes multiple seconds - by the time I can tap "Reconnect" the
+callback has essentially always already fired. Both restart cycles I
+captured show `snapshotIfEmpty` never even firing its log line (meaning
+`currentDnsServerStr` was already non-null by the time it ran) - direct
+confirmation that manual UI interaction cannot reliably hit this timing
+window, not evidence the fix is unnecessary.
+
+This is a principled fix for a real, code-confirmed race, not a confirmed
+fix for the user's reported bug. The next real signal is the diagnostic log
+line, watched during an actual repro on hardware that can hold a
+Multi-Tailnet session open - if `lastUnderlyingDns` is ever still empty in
+that log after this change, the hypothesis was wrong (or incomplete) and
+symptom 3 (other-tailnet unreachability) in particular remains completely
+unexplained regardless of this fix's outcome.
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.
