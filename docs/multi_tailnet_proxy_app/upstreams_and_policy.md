@@ -955,26 +955,23 @@ correctness bug, not a behaviour change.
     reproducing the multi-auth-churn concern this whole feature pass was
     trying to guard against.
 
-12. **The encrypted Kotlin-side secret store still keeps the raw auth key
-    forever.** `UpstreamSecretStore` (`android/.../multiproxy/UpstreamSecretStore.kt`)
-    persists an exit-node upstream's full config JSON - including the
-    bootstrap `authKey` - in `EncryptedSharedPreferences`, with no code path
-    that ever strips the key back out after the identity is confirmed
-    running. `registerExitNode` (`UpstreamPolicyApplier.kt`) reads that same
-    stored config and passes the key to `AddExitNodeUpstream` again on every
-    VPN rebuild, which is why it has to still be there - tsnet only actually
-    needs the key on first login and should ignore it once the state
-    directory already holds a valid one, but nothing on the Kotlin side
-    currently distinguishes "still needed" from "already provisioned,
-    keeping this around is just unnecessary secret retention." Closing this
-    properly needs a small Go-side API change (an `AddExitNodeUpstream`
-    variant, or an added query, that lets Kotlin tell whether the key is
-    still required) plus a live `Running` signal reaching the Kotlin secret
-    store (`OnTailnetStateChange` already exists as an event but is
-    currently just logged, not wired to anything - see `IPNService.kt`) to
-    know when to actually purge the field. Deliberately not attempted
-    tonight: it changes a public Go/gomobile method signature other callers
-    depend on, and verifying it does not break re-registration after a real
-    app restart needs live auth credentials this sandbox does not have -
-    the same recurring constraint as the items above. Flagged here rather
-    than rushed.
+12. ~~The encrypted Kotlin-side secret store still keeps the raw auth key
+    forever.~~ **Closed** - see `validation_and_gaps.md` §72. Turned out no
+    Go-side API change was needed: `GetExitNodeStatesJSON`'s existing
+    per-second poll (`runtime_state.go`) already confirms real `Running`
+    state and already clears the Go engine's own in-memory copy of the auth
+    key at that point (`validation_and_gaps.md` §61). The missing piece was
+    entirely on the Kotlin side - `MultiProxySessionCoordinator.refreshRuntimeState`
+    decodes that same poll response already, so it now also calls
+    `UpstreamSecretStore.clearAuthKey(id)` there, mirroring the adjacent
+    tailnet-profile bootstrap-key retirement in the same function. `authKey`
+    is stripped back to `""` in the stored config JSON once `Running` is
+    observed; `registerExitNode` (`UpstreamPolicyApplier.kt`) keeps reading
+    and passing that field unchanged, it just carries an empty string after
+    the first successful login, since `AddExitNodeUpstream`'s state
+    directory is deterministic and reused across restarts. `ANDROID-BUILT`
+    (`compileDebugKotlin` succeeds); not yet device-verified that
+    re-registration with the now-empty key still succeeds against a real,
+    already-logged-in tailnet identity - needs live credentials this sandbox
+    does not have, the same recurring constraint as the other exit-node
+    items above.

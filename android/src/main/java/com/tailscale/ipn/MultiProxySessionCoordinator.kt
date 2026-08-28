@@ -311,6 +311,19 @@ object MultiProxySessionCoordinator {
                     })
                 .toMap()
 
+        // Mirrors the tailnet bootstrap-key retirement below, for an exit-node
+        // upstream's own dedicated identity: once a live poll (not just a
+        // locally-successful EditPrefs, see GetExitNodeStatesJSON's doc
+        // comment) confirms Running, the stored config's authKey is dead
+        // weight - strip it so it stops being carried in the encrypted store
+        // and stops being re-sent on every future VPN rebuild
+        // (registerExitNode, UpstreamPolicyApplier.kt).
+        for (snapshot in exitNodeSnapshots) {
+            if (normalizeRuntimeState(snapshot.state) == "RUNNING") {
+                session.upstreamSecretStore.clearAuthKey(snapshot.id)
+            }
+        }
+
         // A Running backend proves tsnet has durable node state. Retire bootstrap
         // credentials at that point and complete provisioning.
         for (snapshot in snapshots) {

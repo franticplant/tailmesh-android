@@ -4,6 +4,7 @@
 package com.tailscale.ipn.multiproxy
 
 import android.content.SharedPreferences
+import org.json.JSONObject
 
 /**
  * Holds upstream configurations, which are secrets.
@@ -30,6 +31,31 @@ class UpstreamSecretStore(private val encryptedPrefs: SharedPreferences) {
 
   fun deleteConfig(upstreamId: String) {
     encryptedPrefs.edit().remove(key(upstreamId)).apply()
+  }
+
+  /**
+   * Strips a stored exit-node upstream's bootstrap `authKey` back out of its config JSON, leaving
+   * every other field untouched.
+   *
+   * An exit-node's auth key is only needed for its first login; once its dedicated tsnet identity
+   * has actually reached Running, the key is dead weight - re-registering it on a later VPN rebuild
+   * reuses the persisted state directory and never reads the key again (see
+   * `libtailscale/multiproxy/upstream_exitnode.go`'s `AddExitNodeUpstream` doc comment). Callers
+   * should only call this once a live state poll has confirmed Running, not merely that
+   * registration succeeded - a stuck `NeedsMachineAuth`/`NeedsLogin` identity still needs the key
+   * to complete login on a future attempt.
+   */
+  fun clearAuthKey(upstreamId: String) {
+    val configJson = getConfig(upstreamId) ?: return
+    val obj =
+        try {
+          JSONObject(configJson)
+        } catch (e: Exception) {
+          return
+        }
+    if (obj.optString("authKey").isEmpty()) return
+    obj.put("authKey", "")
+    saveConfig(upstreamId, obj.toString())
   }
 
   private fun key(upstreamId: String) = "upstream_config_$upstreamId"

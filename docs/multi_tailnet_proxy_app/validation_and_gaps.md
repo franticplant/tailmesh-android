@@ -3268,6 +3268,44 @@ matching the exact, already-proven-correct pattern used elsewhere in this
 codebase for the same field combination, not by observing a real
 `ipnstate.Status` post-edit.
 
+## 72. Fixed: exit-node upstream auth keys were kept forever in the encrypted Kotlin store (2026-08-28)
+
+**BEFORE:** `UpstreamSecretStore` (`android/.../multiproxy/UpstreamSecretStore.kt`)
+persisted an exit-node upstream's full config JSON - including its bootstrap
+`authKey` - in `EncryptedSharedPreferences` with no code path that ever
+stripped the key back out. `registerExitNode` (`UpstreamPolicyApplier.kt`)
+read that same stored config and re-passed the key to `AddExitNodeUpstream`
+on every VPN rebuild. The key is only actually needed for a dedicated exit-
+node identity's first login - `AddExitNodeUpstream` (`upstream_exitnode.go`)
+derives a deterministic, persisted state directory from the upstream's
+identifier, so a later rebuild's `tsnet.Server` reuses that state and never
+reads the key again - but nothing on the Kotlin side distinguished "still
+needed" from "already provisioned, this is now unnecessary secret
+retention." This was `upstreams_and_policy.md` gap #12.
+
+**NEW:** no Go-side change was needed. `MultiProxySessionCoordinator.
+refreshRuntimeState` already decodes `GetExitNodeStatesJSON`'s per-second
+poll, which already confirms real `Running` state via a live `Status()`
+call (not just a locally-successful `EditPrefs`) and already clears the Go
+engine's own in-memory `AuthKey` copy at that point (§61). Added a matching
+loop there that calls a new `UpstreamSecretStore.clearAuthKey(id)` once a
+snapshot normalizes to `RUNNING`, mirroring the adjacent tailnet-profile
+bootstrap-key retirement in the same function (which calls
+`credentialStore.deleteAuthKey`). `clearAuthKey` rewrites the stored config
+JSON with `authKey` set to `""`, leaving every other field untouched;
+`registerExitNode` keeps working exactly as before, it just re-sends an
+empty key after first login instead of the real one.
+
+**Evidence:** `ANDROID-BUILT` - `compileDebugKotlin` succeeds. Not yet
+device-verified that re-registration with the now-empty key still succeeds
+against a real, already-`Running` exit-node identity - needs a live tailnet
+login this sandbox has not had for this feature area. (The user separately
+provided two reusable Tailscale auth keys this session for re-provisioning
+test tailnets after an accidental wipe - see the `tailmesh-reusable-authkeys`
+memory entry for where they're kept - which may make device verification of
+this and other previously-credential-blocked exit-node items possible going
+forward.)
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.
