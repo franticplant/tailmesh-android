@@ -86,6 +86,38 @@ func TestChainDialerRoutesThroughParent(t *testing.T) {
 	}
 }
 
+// In a multi-hop chain, a failure at an inner hop must name that hop
+// specifically, not the outermost upstream the caller actually dialed -
+// otherwise "upstream X is down" isn't actionable when X is really three
+// hops downstream of a working X.
+func TestChainDialerNamesTheFailingInnerHopNotTheOutermostUpstream(t *testing.T) {
+	e := NewEngine(t.TempDir(), &MockCallback{})
+
+	// child -> middle -> grandparent, where grandparent is never registered.
+	middle := newChainFake("middle", "grandparent", true)
+	middle.dialer = e.chainDialer(middle.via, nil)
+	if err := e.RegisterUpstream(middle); err != nil {
+		t.Fatal(err)
+	}
+	child := newChainFake("child", "middle", true)
+	child.dialer = e.chainDialer(child.via, nil)
+	if err := e.RegisterUpstream(child); err != nil {
+		t.Fatal(err)
+	}
+
+	d := e.chainDialer("child", nil)
+	_, err := d(context.Background(), "tcp", "target.example:443")
+	if !errors.Is(err, ErrUpstreamNotReady) {
+		t.Fatalf("got %v, want ErrUpstreamNotReady", err)
+	}
+	if !strings.Contains(err.Error(), `"grandparent"`) {
+		t.Fatalf("error %q should name the failing inner hop \"grandparent\", not an outer one", err)
+	}
+	if strings.Contains(err.Error(), `"child"`) || strings.Contains(err.Error(), `"middle"`) {
+		t.Fatalf("error %q wrongly names a working hop as the failure", err)
+	}
+}
+
 // A chained upstream whose parent is missing or disabled must fail rather than
 // leave from the device: the point of the chain is that its traffic does not.
 func TestChainDialerFailsClosedOnUnusableParent(t *testing.T) {
@@ -101,6 +133,12 @@ func TestChainDialerFailsClosedOnUnusableParent(t *testing.T) {
 		if !errors.Is(err, ErrUpstreamNotReady) {
 			t.Fatalf("got %v, want ErrUpstreamNotReady", err)
 		}
+		// The error must name the specific hop that failed, not just "some
+		// upstream in the chain" - with chains up to 8 hops deep, "not ready"
+		// alone isn't actionable.
+		if !strings.Contains(err.Error(), `"nope"`) {
+			t.Fatalf("error %q does not name the failing hop", err)
+		}
 	})
 
 	t.Run("not ready", func(t *testing.T) {
@@ -110,6 +148,9 @@ func TestChainDialerFailsClosedOnUnusableParent(t *testing.T) {
 		_, err := e.chainDialer("down", base)(context.Background(), "tcp", "x:1")
 		if !errors.Is(err, ErrUpstreamNotReady) {
 			t.Fatalf("got %v, want ErrUpstreamNotReady", err)
+		}
+		if !strings.Contains(err.Error(), `"down"`) {
+			t.Fatalf("error %q does not name the failing hop", err)
 		}
 	})
 }

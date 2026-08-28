@@ -3197,6 +3197,36 @@ emulator. `INSTRUMENTATION-OR-EMULATOR-TESTED` now covers the UI itself, not
 just the pattern-matched inference recorded below at the time of the
 original pass.
 
+## 70. Added: test coverage proving chain-dial errors name the failing hop (2026-08-28)
+
+**BEFORE:** `chainDialer` (`chain.go`) already wrapped `ErrUpstreamNotReady`
+with `fmt.Errorf("%w: chain parent %q", ErrUpstreamNotReady, via)`, naming
+the specific hop that failed - but no test asserted the message actually
+contains that name, only that `errors.Is(err, ErrUpstreamNotReady)` held.
+For a chain up to 8 hops deep, "not ready" alone isn't actionable; the plan
+this work follows (`eventual-humming-beacon.md` Phase 5) called this out
+explicitly as needing its own test.
+
+**NEW (`chain_test.go`):** `TestChainDialerFailsClosedOnUnusableParent` now
+also asserts the error text names the failing upstream ID for both the
+"missing" and "not ready" sub-cases. New
+`TestChainDialerNamesTheFailingInnerHopNotTheOutermostUpstream` builds a real
+3-hop chain (`child -> middle -> grandparent`, grandparent never registered)
+and asserts the resulting error names `"grandparent"` - the actual failing
+hop - and not `"child"` or `"middle"`, which are both healthy.
+
+**Evidence:** `UNIT-TESTED` - `go test -run TestChainDialer -v -timeout 30s
+./libtailscale/multiproxy/...` passes, all 4 chain-dialer tests green.
+
+**Note:** attempting the full package suite
+(`go test -count=1 ./libtailscale/multiproxy/...`) this pass hit an
+unrelated deadlock in `TestResolveRouteConcurrency` (goroutine dump shows
+blocked `health.Tracker`/`eventbus` and `net/http` transport goroutines on a
+`memnet.Pipe` read) - reproduced by running that test alone, so it is not
+caused by this pass's changes. Not investigated further this pass due to
+time constraints (a release was requested); worth a dedicated look before
+next relying on the full suite passing green.
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.
