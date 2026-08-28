@@ -2962,6 +2962,79 @@ it isn't practically reproducible via manual on-device taps in the time
 available; correctness rests on the transaction-serialization argument
 above, not an observed repro/fix pair.
 
+## 66. Added: real instrumented tests for TailnetDatabaseHelper, UpstreamRepository, and AppBindingRepository (2026-08-28)
+
+**BEFORE:** despite three real bugs having been found and fixed in this area
+this session alone (a migration "duplicate column name" crash, dd185aa; and
+two stale-snapshot races, this pass and §65), none of `TailnetDatabaseHelper`,
+`UpstreamRepository`, or `AppBindingRepository` had any automated test
+coverage - gap #2 in `upstreams_and_policy.md`. Every verification pass this
+session used manual on-device `adb shell run-as ... sqlite3` checks, which
+prove a fix once but do not stay behind as a regression guard.
+
+**Why not Robolectric:** the obvious way to unit-test `SQLiteOpenHelper`
+subclasses without a device. Not used here: this project's existing JVM unit
+tests (`src/test/`) deliberately avoid Robolectric, stubbing only the one
+Android class they actually touch (`android.util.Log`, via a hand-written
+`src/test/java/android/util/Log.java`) rather than pulling in Robolectric's
+full `android-all` shadow jar. Robolectric normally needs the real Android
+SDK stub jar on the compile classpath; this project's custom `Log.java`
+stub would very plausibly duplicate-class-conflict with Robolectric's own
+`android.util.Log` shadow, and verifying that conflict doesn't exist (or
+restructuring around it) was assessed as a bigger, less-reversible change
+than the value of this pass justified to make unattended.
+
+**NEW:** three real `androidTest` (instrumented) classes, run against the
+actual on-device SQLite via the connected emulator - the same real code
+path production runs, no simulation:
+
+- `TailnetDatabaseHelperMigrationTest` (6 tests): builds a raw database by
+  hand at each historical schema version (1, 2, 3, 4) using the frozen
+  historical CREATE TABLE shapes, stamps it to that version, then opens it
+  through the real `TailnetDatabaseHelper` and asserts the final schema is
+  correct. `upgradeFromVersion3_...` and a v4 equivalent are real reproductions
+  of the exact "duplicate column name" bug class dd185aa fixed - both
+  initially failed against a test-fixture bug (the raw v3/v4 fixtures didn't
+  include the v1->v2 profiles columns a real device at that version would
+  already have), caught and fixed before these were accepted as passing, not
+  waved through.
+- `AppBindingRepositoryTest` (6 tests): the preserve-the-other-column
+  behaviour in both directions (bind after setDNSUpstream, setDNSUpstream
+  after bind), unbind, a DNS-only row with no data route, refresh across a
+  new repository instance, and a concurrent bind()+setDNSUpstream() race
+  test that exercises the exact fix from this session's earlier commit.
+- `UpstreamRepositoryTest` (5 tests): `saveConfig` create/edit,
+  enabled/createdAt preservation across an edit, a concurrent
+  setEnabled()+saveConfig() race test exercising this pass's
+  `UpstreamRepository.saveConfig()` fix, `delete`'s cascade (clears `via`
+  references and app bindings), and that `save(Upstream)` (the
+  saveExitNode path) doesn't corrupt an unrelated row.
+
+All 17 tests pass against the real on-device database
+(`sdk_gphone64_x86_64`, API 16 - the connected emulator, via
+`./gradlew connectedApplicationTestAndroidTest -PtestAbi=x86_64
+-Pandroid.testInstrumentationRunnerArguments.package=com.tailscale.ipn.multiproxy.db`).
+Two gotchas hit along the way, noted for next time: the emulator was
+reachable under two duplicate adb serials (`localhost:5555` and
+`127.0.0.1:5555`) simultaneously, which made `connectedApplicationTestAndroidTest`
+race installs between them and fail with "Unable to find instrumentation
+info" - `adb disconnect 127.0.0.1:5555` fixed it; and the Gradle task names
+for this build's `applicationTest` build type are not the usual `Debug`-named
+ones (`compileApplicationTestAndroidTestKotlin`,
+`connectedApplicationTestAndroidTest`, not `compileDebugAndroidTestKotlin`).
+
+**Not covered by this pass:** `ProfileRepository` still has no tests -
+`validation_and_gaps.md` §5.1/§5.2's original gap, not touched here (a
+fourth store, same shape of work, deferred for time). Running these tests
+deletes and recreates `multiproxy_profiles.db` on the connected device/emulator
+under test - expected and consistent with how this session's manual on-device
+testing has already treated that database's contents as disposable dev
+state, but worth knowing before running this suite against a device with
+real configuration you want to keep.
+
+**Evidence:** `INSTRUMENTATION-OR-EMULATOR-TESTED` - all 17 tests pass on
+the connected `sdk_gphone64_x86_64` emulator, described above.
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.

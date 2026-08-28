@@ -793,10 +793,14 @@ correctness bug, not a behaviour change.
    coverage for the chained hop, `validation_and_gaps.md` §57.1. Chaining
    combined with UID-scoped attribution specifically (a chained rule that
    also names an app) is still untested.
-2. **No Android tests for the new stores.** `UpstreamRepository`,
-   `AppBindingRepository` and the v3 migration have no JVM tests. This is the
-   same gap `validation_and_gaps.md` §5.1 and §5.2 already record for
-   `ProfileRepository`, now widened.
+2. ~~No Android tests for the new stores.~~ **Closed, for `UpstreamRepository`
+   and `AppBindingRepository`** - see `validation_and_gaps.md` §66. 17
+   `androidTest` instrumented tests (real on-device SQLite, not Robolectric -
+   see that section for why) now cover every schema version's migration path,
+   the preserve-the-other-column upsert behaviour both repositories depend
+   on, and the two stale-snapshot races fixed in §65/this pass. `ProfileRepository`
+   still has none - `validation_and_gaps.md` §5.1/§5.2's original gap - and
+   is not covered by this pass.
 3. **No QR import for WireGuard.** A `.conf` can be pasted (§2.5), but the QR
    code providers print encodes the same text and would save the paste. Nothing
    in the design depends on how the text arrives.
