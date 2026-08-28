@@ -3921,6 +3921,76 @@ that log after this change, the hypothesis was wrong (or incomplete) and
 symptom 3 (other-tailnet unreachability) in particular remains completely
 unexplained regardless of this fix's outcome.
 
+## 80. Root cause found and fixed: general traffic silently bypassed (or hung on) an exit node in `tsnet`/`wgengine`, not an app-side race (2026-08-28)
+
+The user corrected §78/§79's restart-race hypothesis directly: the symptom
+is deterministic, not timing-dependent, and specifically tied to a
+Multi-Tailnet exit node being selected as the app's default route for
+general traffic and DNS (Settings -> Upstreams -> per-tailnet exit-node
+picker, plus that same tailnet set in Proxies & Tunnels -> Default route).
+
+**Root cause, found by testing the Go backend directly against real
+tailnets (no Android/emulator involved) rather than through the app UI:**
+`tsdial.Dialer.UseNetstackForIP` (`tailscale.com/net/tsdial`, vendored
+locally at `/mnt/android/ts_app_work/tailscale`, `replace tailscale.com =>
+../tailscale` in `go.mod`) only recognized this node's own tailnet peers as
+netstack-eligible. A general/non-peer destination - which is exactly what
+"route everything through this tailnet's exit node" means - fell through to
+`SystemDial`, silently bypassing Tailscale (and the configured exit node)
+entirely instead of routing through it, with no error or indication this
+happened.
+
+**Fix:** `tsnet.Server`'s `UseNetstackForIP` closure
+(`tailscale.com/tsnet/tsnet.go`) now also returns true for a non-peer
+destination when this node has an exit node configured
+(`Prefs.ExitNodeIP`/`ExitNodeID`), explicitly excluding loopback,
+link-local, and private (RFC1918) addresses - those were never covered by
+an exit node's `AllowedIPs` and must keep using `SystemDial`'s normal
+local-network handling, not get misrouted into the tailnet. Gated on Prefs
+rather than the resolved peer being reachable, so a configured-but-
+unreachable exit node fails closed through the real routing/timeout path
+instead of silently bypassing Tailscale.
+
+**Isolating the exact failure** (via a new real-network Go test,
+`TestExitNodeGeneralDial` in `libtailscale/multiproxy/`, gated behind
+`-short` and `TAILMESH_TEST_AUTHKEYS_FILE` so it never runs in normal `go
+test ./...`): a direct dial to the exit peer itself succeeds instantly
+(peer-to-peer needs no forwarding); a dial to a genuine general-internet
+destination through the same accepted exit node retransmitted the SYN on a
+classic TCP backoff schedule (1s/2s/4s/8s) and got zero replies, confirming
+the packet genuinely left via WireGuard but nothing came back - not a
+client-side eligibility bug once the fix above landed, but (for the first
+exit node tested, `hosting`) a real, separate infrastructure gap: Rocky
+Linux 10 with `iptables-nft` installed makes `tailscaled` default to a
+broken iptables mode (`xt_MARK` kernel module missing -
+[tailscale/tailscale#15743](https://github.com/tailscale/tailscale/issues/15743)),
+and even after forcing `TS_DEBUG_FIREWALL_MODE=nftables`, tailscaled did
+not install its own NAT masquerade rule on that distro
+([tailscale/tailscale#18872](https://github.com/tailscale/tailscale/issues/18872),
+[#15661](https://github.com/tailscale/tailscale/issues/15661) for the
+nftables-mode variant of the same gap). Confirmed the fix itself against a
+second, healthy exit node (`k3s-agent-3`) - both `TestExitNodeGeneralDial`
+(raw `tsnet.Server.Dial`) and a second test, `TestExitNodeAppPolicyRouting`,
+which drives the actual app routing/DNS code
+(`nat_router.go`'s `resolveFlow`/`applyPolicy`/`RouteDecision.Upstream.Dial`,
+`dns_policy.go`'s `dnsRouteFor`/`exchangePlainVia`) with a wildcard policy
+rule shaped exactly like "default route for traffic and DNS" - passed:
+general TCP traffic and a real DNS query for `example.com` both completed
+through the exit-node tailnet.
+
+**Device-verified end-to-end**, real emulator, real app UI, exact bug-report
+scenario (Multi-Tailnet mode, `akkara.com.tr` set as default route for
+traffic and DNS, its own exit node `hosting` selected): Chrome loaded
+`https://example.com` (DNS + HTTPS) and `http://1.1.1.1` (no DNS involved at
+all) both successfully, with the VPN key icon in the status bar confirming
+genuine system-level capture. Incidentally this also re-confirmed `hosting`
+itself now works after the NAT/forwarding fixes applied to it during this
+investigation.
+
+Full test suites for the three touched vendored packages (`tsnet`,
+`net/tsdial`, `wgengine/netstack`) and this app's own `multiproxy` package
+pass with no regressions.
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.
