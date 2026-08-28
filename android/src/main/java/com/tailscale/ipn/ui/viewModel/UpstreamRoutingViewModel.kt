@@ -331,6 +331,7 @@ class UpstreamRoutingViewModel : ViewModel() {
       upstreamRepository.delete(id)
       withContext(Dispatchers.IO) { secrets.deleteConfig(id) }
       if (defaultUpstreamId.value == id) setDefaultUpstream("")
+      if (defaultDNSUpstreamId.value == id) setDefaultDNSUpstream("")
       applyNow()
     }
   }

@@ -2828,6 +2828,38 @@ session and blocked on exactly that (no tailnet to pick a peer from). This
 is a code-trace-verified fix, not a device-verified one; flagging that
 distinction explicitly rather than overstating confidence.
 
+## 63. Fixed: deleting an upstream left a dangling DNS default (2026-08-28)
+
+Small but real inconsistency, found during a later audit pass that traced
+`RoutingSettings`'s two "default route" settings end to end.
+`UpstreamRoutingViewModel.deleteUpstream` already cleared `defaultUpstreamId`
+back to empty when the deleted upstream was the current default route, but
+had no equivalent check for `defaultDNSUpstreamId` (the separate "DNS for
+unbound apps" setting added by the DNS-versatility work, §55) - deleting an
+upstream that was set as the DNS default left the setting pointing at a now
+-gone id.
+
+Not a crash: `UpstreamPickerRow` already renders a dangling id as
+`"Missing: <id>"` (`R.string.upstream_missing`) rather than silently
+failing, and a policy rule naming a missing upstream fails closed at
+dial/DNS-resolution time by existing design (the same "fails closed, not
+silently rerouted" invariant `RemoveUpstream`'s own doc comment already
+states for per-app bindings). But it is a real, avoidable rough edge: the
+DNS default should self-clear the same way the data-path default already
+does, rather than requiring the user to notice "Missing: ..." and manually
+reset it. Not exit-node-specific - applies to deleting any upstream kind
+that happened to be the DNS default.
+
+**Fix:** `deleteUpstream` now also clears `defaultDNSUpstreamId` when it
+matches the deleted id, mirroring the existing `defaultUpstreamId` check.
+Per-app bindings are deliberately left untouched by this and unaffected by
+the fix - that fail-closed-not-cleared behavior for individual app routes
+remains intentional, unchanged, and out of scope here.
+
+**Verification:** `./gradlew compileDebugKotlin -PtestAbi=x86_64` succeeds.
+No Go-side change, no new Go test needed - this is Kotlin state-management
+logic with no engine behavior change.
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.
