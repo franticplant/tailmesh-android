@@ -398,7 +398,7 @@ func (e *Engine) handleTCPConnection(r *tcp.ForwarderRequest) {
 	}()
 }
 
-func pumpUDPAssociation(dst, src net.Conn, touch func()) error {
+func pumpUDPAssociation(dst, src net.Conn, touch func(), onBytes func(n int)) error {
 	buf := make([]byte, 64*1024)
 	for {
 		n, err := src.Read(buf)
@@ -418,6 +418,9 @@ func pumpUDPAssociation(dst, src net.Conn, touch func()) error {
 			return io.ErrShortWrite
 		}
 		touch()
+		if onBytes != nil {
+			onBytes(written)
+		}
 	}
 }
 
@@ -425,7 +428,13 @@ func pumpUDPAssociation(dst, src net.Conn, touch func()) error {
 // in either direction refreshes the deadline for the whole association. The
 // first terminal error or idle timeout closes both sides, which unblocks the
 // opposite pump, and the function waits for both pumps before returning.
-func runUDPAssociation(a, b net.Conn, idleTimeout time.Duration) error {
+//
+// stats may be nil (existing tests exercise the timeout/activity/close
+// behaviour directly over net.Pipe with no real Engine or upstream involved);
+// a is the app/gVisor side and b is the upstream side, matching the TCP path's
+// addBytesOut/addBytesIn direction convention (app->upstream is "out",
+// upstream->app is "in").
+func runUDPAssociation(a, b net.Conn, idleTimeout time.Duration, stats *UpstreamStats) error {
 	touch := func() {
 		deadline := time.Now().Add(idleTimeout)
 		_ = a.SetDeadline(deadline)
@@ -433,9 +442,15 @@ func runUDPAssociation(a, b net.Conn, idleTimeout time.Duration) error {
 	}
 	touch()
 
+	var onOut, onIn func(n int)
+	if stats != nil {
+		onOut = func(n int) { stats.addBytesOut(int64(n)) }
+		onIn = func(n int) { stats.addBytesIn(int64(n)) }
+	}
+
 	errCh := make(chan error, 2)
-	go func() { errCh <- pumpUDPAssociation(b, a, touch) }()
-	go func() { errCh <- pumpUDPAssociation(a, b, touch) }()
+	go func() { errCh <- pumpUDPAssociation(b, a, touch, onOut) }()
+	go func() { errCh <- pumpUDPAssociation(a, b, touch, onIn) }()
 
 	firstErr := <-errCh
 	_ = a.Close()
@@ -508,7 +523,7 @@ func (e *Engine) handleUDPConnection(r *udp.ForwarderRequest) bool {
 		defer tsnetConn.Close()
 
 		log.Printf("[flow-%d] UDP upstream dial %s %s success", flowID, decision.UpstreamID, dialAddr)
-		err = runUDPAssociation(gvisorConn, tsnetConn, udpAssociationIdleTimeout)
+		err = runUDPAssociation(gvisorConn, tsnetConn, udpAssociationIdleTimeout, e.statsFor(decision.UpstreamID))
 		log.Printf("[flow-%d] UDP closed: %v", flowID, err)
 	}()
 

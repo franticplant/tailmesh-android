@@ -3043,6 +3043,53 @@ suite against a device with real configuration you want to keep.
 **Evidence:** `INSTRUMENTATION-OR-EMULATOR-TESTED` - all 22 tests pass on
 the connected `sdk_gphone64_x86_64` emulator, described above.
 
+## 67. Added: UDP association byte counts (2026-08-28)
+
+**BEFORE:** §52's stats infrastructure counted bytes for TCP flows only.
+`runUDPAssociation`/`pumpUDPAssociation` (`nat_router.go`) forwarded UDP
+associations without touching `UpstreamStats` at all - a SOCKS5 or
+WireGuard upstream carrying only UDP traffic (e.g. a game, a VoIP call)
+would show dial attempts/successes but always 0 bytes in the Proxies &
+tunnels screen, even while actively moving data.
+
+**NEW:** `pumpUDPAssociation` takes an `onBytes func(n int)` callback,
+invoked with the real number of bytes written on every successful forward -
+exactly the same "read from the raw pump, no conn-wrapping" approach the
+TCP path already used, for the same reason (stats.go's `Dial` doc comment:
+wrapping the dialed `net.Conn` breaks `miekg/dns`'s UDP/TCP framing
+detection and the TCP pump's `CloseWrite()` type assertion).
+`runUDPAssociation` gained a `stats *UpstreamStats` parameter (nil-safe, so
+the three existing hardening tests that exercise it directly over
+`net.Pipe()` with no real `Engine` pass `nil` unchanged) and wires
+`addBytesOut`/`addBytesIn` in the same direction convention the TCP path
+uses: `a` (app/gVisor side) to `b` (upstream side) is "out", the reverse is
+"in". `handleUDPConnection` passes `e.statsFor(decision.UpstreamID)`.
+
+DNS forwarding byte counts were considered and deliberately not added in
+this pass: `exchangePlainVia`/`exchangeDoHVia` (`dns_policy.go`) work at
+the `dns.Msg` level, not raw bytes, so a count there would have to come
+from `dns.Msg.Len()` - an estimate of wire size, not the real count. That
+conflicts with this file's own stated design ("Counters are real counts of
+what happened, not samples or estimates" - stats.go's package doc comment),
+so it was left out rather than added as a rough approximation. Dial
+attempts/successes/failures/latency for DNS exchanges are already counted
+via the existing `readyProvider` → `statsProvider.Dial()` path regardless -
+only the byte counts are missing.
+
+**Evidence:** `UNIT-TESTED` -
+`TestRunUDPAssociationRecordsByteCounts` (new, `hardening_test.go`) drives a
+real UDP association over `net.Pipe()` with a real `*UpstreamStats`, writes
+a known payload in each direction, waits for both pumps to fully exit (the
+same close-one-side-terminates-both-pumps behaviour
+`TestRunUDPAssociationCloseOneSideTerminatesBothPumps` already proves), and
+asserts the exact byte counts landed on the right counter in the right
+direction. Full suite: `go test -count=1 ./libtailscale/multiproxy/...`
+passes (`go vet` also clean) via `/home/druid/go_sdk/go/bin` - this
+environment's default `PATH` does not include a `go` binary, worth noting
+for next time. Not separately device-verified this pass (no new UI surface
+- the existing byte-count display already reads whichever counter is
+nonzero).
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -51,7 +52,7 @@ func TestRunUDPAssociationIdleTimeout(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- runUDPAssociation(a, b, 30*time.Millisecond)
+		done <- runUDPAssociation(a, b, 30*time.Millisecond, nil)
 	}()
 
 	select {
@@ -70,7 +71,7 @@ func TestRunUDPAssociationActivityRefreshesLifetime(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- runUDPAssociation(a, b, 80*time.Millisecond)
+		done <- runUDPAssociation(a, b, 80*time.Millisecond, nil)
 	}()
 
 	for i := 0; i < 3; i++ {
@@ -104,7 +105,7 @@ func TestRunUDPAssociationCloseOneSideTerminatesBothPumps(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- runUDPAssociation(a, b, time.Second)
+		done <- runUDPAssociation(a, b, time.Second, nil)
 	}()
 
 	if err := aPeer.Close(); err != nil {
@@ -115,6 +116,54 @@ func TestRunUDPAssociationCloseOneSideTerminatesBothPumps(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("closing one side did not terminate both UDP pumps")
+	}
+}
+
+// Regression test for the stats.go pass that added byte counting to UDP
+// associations (previously TCP-only). a is the app/gVisor side, b is the
+// upstream side - see runUDPAssociation's doc comment for the direction
+// convention this asserts.
+func TestRunUDPAssociationRecordsByteCounts(t *testing.T) {
+	a, aPeer := net.Pipe()
+	b, bPeer := net.Pipe()
+
+	stats := &UpstreamStats{}
+	done := make(chan error, 1)
+	go func() {
+		done <- runUDPAssociation(a, b, time.Second, stats)
+	}()
+
+	outPayload := []byte("app-to-upstream")
+	if _, err := aPeer.Write(outPayload); err != nil {
+		t.Fatalf("write out: %v", err)
+	}
+	gotOut := make([]byte, len(outPayload))
+	if _, err := io.ReadFull(bPeer, gotOut); err != nil {
+		t.Fatalf("read forwarded out: %v", err)
+	}
+
+	inPayload := []byte("upstream-to-app")
+	if _, err := bPeer.Write(inPayload); err != nil {
+		t.Fatalf("write in: %v", err)
+	}
+	gotIn := make([]byte, len(inPayload))
+	if _, err := io.ReadFull(aPeer, gotIn); err != nil {
+		t.Fatalf("read forwarded in: %v", err)
+	}
+
+	// Wait for both pumps to fully exit (proven safe by
+	// TestRunUDPAssociationCloseOneSideTerminatesBothPumps above) before
+	// reading stats, so there's no race between the pump's onBytes callback
+	// and this assertion.
+	_ = aPeer.Close()
+	_ = bPeer.Close()
+	<-done
+
+	if got := atomic.LoadUint64(&stats.bytesOut); got != uint64(len(outPayload)) {
+		t.Fatalf("bytesOut = %d, want %d (app-to-upstream traffic)", got, len(outPayload))
+	}
+	if got := atomic.LoadUint64(&stats.bytesIn); got != uint64(len(inPayload)) {
+		t.Fatalf("bytesIn = %d, want %d (upstream-to-app traffic)", got, len(inPayload))
 	}
 }
 

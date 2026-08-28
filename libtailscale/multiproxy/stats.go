@@ -195,8 +195,14 @@ func (e *Engine) wrapWithStats(p Provider) Provider {
 // was caught by TestForwardedQueryFollowsTheAppsRoute failing (UDP DNS
 // forwarding tried to speak length-prefixed TCP framing over a real UDP
 // socket once wrapped). Byte counters are instead fed from nat_router.go's
-// TCP pump, which already knows exactly how many bytes crossed in each
-// direction without needing to touch the conn's type at all.
+// TCP pump and UDP association pump, both of which already know exactly how
+// many bytes crossed in each direction without needing to touch the conn's
+// type at all. DNS forwards (dns_policy.go) are not counted this way: unlike
+// the raw pumps, exchangePlainVia/exchangeDoHVia only see whole dns.Msg
+// values, not a byte count from the wire - approximating one via
+// dns.Msg.Len() would be an estimate, not the real count this file's
+// counters are meant to be (see the package doc comment above), so it was
+// deliberately left out rather than added as a rough approximation.
 func (s *statsProvider) Dial(ctx context.Context, network, address string) (net.Conn, error) {
 	s.stats.recordAttempt()
 	start := time.Now()

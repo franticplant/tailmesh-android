@@ -839,8 +839,12 @@ correctness bug, not a behaviour change.
    Proxies & tunnels screen. `UNIT-OR-RACE-TESTED` and
    `INSTRUMENTATION-OR-EMULATOR-TESTED`: a SOCKS5 upstream pointed at a
    closed port went from "Ready" to a live "N succeeded, M failed" with the
-   real dial error, on-device. Byte counts currently cover TCP flows only,
-   not DNS forwards or UDP associations.
+   real dial error, on-device. Byte counts now cover TCP flows and UDP
+   associations both (`validation_and_gaps.md` §67); DNS forwards remain
+   uncounted deliberately - `exchangePlainVia`/`exchangeDoHVia` only see
+   whole `dns.Msg` values, not a wire byte count, and estimating one via
+   `dns.Msg.Len()` would conflict with these counters' "real counts, not
+   estimates" design.
 9. ~~With broad capture on, LAN destinations (a printer, a NAS, a dev
    server) would follow whatever route an app or the default route pointed
    at, same as any other destination - there was no way to keep LAN
