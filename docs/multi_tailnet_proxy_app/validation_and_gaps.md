@@ -3023,16 +3023,24 @@ for this build's `applicationTest` build type are not the usual `Debug`-named
 ones (`compileApplicationTestAndroidTestKotlin`,
 `connectedApplicationTestAndroidTest`, not `compileDebugAndroidTestKotlin`).
 
-**Not covered by this pass:** `ProfileRepository` still has no tests -
-`validation_and_gaps.md` §5.1/§5.2's original gap, not touched here (a
-fourth store, same shape of work, deferred for time). Running these tests
-deletes and recreates `multiproxy_profiles.db` on the connected device/emulator
-under test - expected and consistent with how this session's manual on-device
-testing has already treated that database's contents as disposable dev
-state, but worth knowing before running this suite against a device with
-real configuration you want to keep.
+**Update (same day, later session):** `ProfileRepository` - the fourth
+store, left uncovered above - now has 5 tests too
+(`ProfileRepositoryTest`): `createProfile`'s defaults, `importRegularProfile`'s
+idempotency on `source_profile_id` (which is `UNIQUE` in the schema - a
+naive re-insert on a second import of the same tailnet would throw;
+`importRegularProfile` checks first instead), `updateProfile`, `deleteProfile`,
+and refresh across a new repository instance. This closes
+`validation_and_gaps.md`'s original §5.1/§5.2 gap and
+`upstreams_and_policy.md` gap #2 in full - all four stores in this package
+now have real on-device coverage. 22 tests total pass together.
 
-**Evidence:** `INSTRUMENTATION-OR-EMULATOR-TESTED` - all 17 tests pass on
+Running this test suite deletes and recreates `multiproxy_profiles.db` on
+the connected device/emulator under test - expected and consistent with how
+this session's manual on-device testing has already treated that database's
+contents as disposable dev state, but worth knowing before running this
+suite against a device with real configuration you want to keep.
+
+**Evidence:** `INSTRUMENTATION-OR-EMULATOR-TESTED` - all 22 tests pass on
 the connected `sdk_gphone64_x86_64` emulator, described above.
 
 ## 48. Bottom line
