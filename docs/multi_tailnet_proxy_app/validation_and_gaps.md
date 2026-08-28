@@ -3234,6 +3234,40 @@ needing tens of real tsnet lifecycles. **Evidence:** `UNIT-TESTED` -
 package suite, which previously never completed inside a normal timeout)
 now passes cleanly in ~6s.
 
+## 71. Fixed: SetTailnetExitNode cleared the exit node it just set (2026-08-28)
+
+**BEFORE:** `Engine.SetTailnetExitNode` (`upstream_tailnet.go`) always built its
+`ipn.MaskedPrefs` with both `ExitNodeIDSet: true` and `ExitNodeIPSet: true`,
+regardless of whether a peer was being selected or cleared. When selecting a
+real exit node, only `Prefs.ExitNodeIP` was populated - `Prefs.ExitNodeID`
+was left at its zero value, but `ExitNodeIDSet: true` told the backend to
+apply it anyway. Tailscale's own `LocalBackend.adjustEditPrefsLocked`
+(`ipn/ipnlocal/local.go`) treats `ExitNodeIDSet` with an empty ID as an
+explicit "zero the exit node" request ("Zeroing the ExitNodeID via localAPI
+must also zero the prior exit node"). So the same `EditPrefs` call that set
+`ExitNodeIP` to the chosen peer also told the backend to clear the exit
+node - the selection was undone in the same edit that made it. User-visible
+symptom: picking an exit node in the "Exit node" picker on a tailnet's card
+(Multi-Tailnet screen) and confirming appeared to do nothing - the choice
+"blanked."
+
+**NEW:** only set `ExitNodeIDSet` for the explicit-clear case (empty
+`peerAddr`); when selecting a real peer, set only `ExitNodeIPSet` with
+`Prefs.ExitNodeIP`, leaving `ExitNodeIDSet` untouched so the backend
+resolves `ExitNodeID` from the netmap itself - the same pattern
+`ipn/conf.go` already uses elsewhere in this codebase for IP-based exit
+node selection (`mp.ExitNodeIP = ip; mp.ExitNodeIPSet = true`, nothing
+else).
+
+**Evidence:** `UNIT-TESTED` - existing `TestSetTailnetExitNodeRequiresRunningTailnet`,
+`TestSetTailnetExitNodeValidatesPeerAddr` still pass; full
+`go test -count=1 -timeout 60s ./libtailscale/multiproxy/...` passes in
+16s. Not device-verified against a real tailnet with a real exit node peer
+(no live tailnet credentials in this sandbox) - the fix is verified by
+matching the exact, already-proven-correct pattern used elsewhere in this
+codebase for the same field combination, not by observing a real
+`ipnstate.Status` post-edit.
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.

@@ -93,16 +93,25 @@ func (e *Engine) SetTailnetExitNode(tailnetIdentifier, peerAddr string) error {
 		return err
 	}
 
-	mp := &ipn.MaskedPrefs{
-		ExitNodeIDSet: true,
-		ExitNodeIPSet: true,
-	}
-	if peerAddr != "" {
+	// Setting ExitNodeIDSet alongside ExitNodeIPSet is how localAPI callers
+	// explicitly *clear* the exit node (ipnlocal's adjustEditPrefsLocked
+	// treats ExitNodeIDSet+empty-ID as "zero the exit node"), so it must only
+	// be set for the clear case. Selecting a real exit node by IP must set
+	// only ExitNodeIPSet and leave ExitNodeIDSet unset, letting the backend
+	// resolve ExitNodeID from the netmap - the same pattern ipn/conf.go uses
+	// for IP-based exit node selection. Setting both together (as this code
+	// used to) stamped ExitNodeID back to "" in the same edit that set the
+	// IP, so the selection was cleared the instant it was made.
+	mp := &ipn.MaskedPrefs{}
+	if peerAddr == "" {
+		mp.ExitNodeIDSet = true
+	} else {
 		addr, err := netip.ParseAddr(peerAddr)
 		if err != nil {
 			return fmt.Errorf("invalid exit node peer address %q: %w", peerAddr, err)
 		}
 		mp.Prefs.ExitNodeIP = addr
+		mp.ExitNodeIPSet = true
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
