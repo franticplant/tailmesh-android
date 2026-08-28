@@ -57,6 +57,7 @@ data class TailnetProfileUiState(
     val runtimeState: String,
     val machineName: String = "",
     val lastError: String? = null,
+    val exitNodeIp: String = "",
 )
 
 class MultiProxyViewModel : ViewModel() {
@@ -112,7 +113,8 @@ class MultiProxyViewModel : ViewModel() {
                 MultiProxySessionCoordinator.runtimeStates,
                 MultiProxySessionCoordinator.machineNames,
                 MultiProxySessionCoordinator.lastErrors,
-            ) { profiles, runtimeStates, machineNames, errors ->
+                MultiProxySessionCoordinator.exitNodeIps,
+            ) { profiles, runtimeStates, machineNames, errors, exitNodeIps ->
                 profiles.map { profile ->
                     TailnetProfileUiState(
                         profile = profile,
@@ -120,6 +122,7 @@ class MultiProxyViewModel : ViewModel() {
                             ?: if (profile.enabled) "NOT_LOADED" else "STOPPED",
                         machineName = machineNames[profile.id].orEmpty(),
                         lastError = errors[profile.id],
+                        exitNodeIp = exitNodeIps[profile.id].orEmpty(),
                     )
                 }
             }.collect { _uiStates.value = it }

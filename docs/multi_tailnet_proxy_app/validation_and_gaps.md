@@ -3262,11 +3262,11 @@ else).
 **Evidence:** `UNIT-TESTED` - existing `TestSetTailnetExitNodeRequiresRunningTailnet`,
 `TestSetTailnetExitNodeValidatesPeerAddr` still pass; full
 `go test -count=1 -timeout 60s ./libtailscale/multiproxy/...` passes in
-16s. Not device-verified against a real tailnet with a real exit node peer
-(no live tailnet credentials in this sandbox) - the fix is verified by
-matching the exact, already-proven-correct pattern used elsewhere in this
-codebase for the same field combination, not by observing a real
-`ipnstate.Status` post-edit.
+16s. **Update, same day:** now also `INSTRUMENTATION-OR-EMULATOR-TESTED`
+against a real tailnet - see §73, which device-verifies this exact fix
+(selecting a real peer as exit node, on a live `kurtaksi@outlook.com`
+tailnet, actually sticks) as part of a broader pass that also fixed a
+second, independent bug in the same feature.
 
 ## 72. Fixed: exit-node upstream auth keys were kept forever in the encrypted Kotlin store (2026-08-28)
 
@@ -3305,6 +3305,72 @@ test tailnets after an accidental wipe - see the `tailmesh-reusable-authkeys`
 memory entry for where they're kept - which may make device verification of
 this and other previously-credential-blocked exit-node items possible going
 forward.)
+
+## 73. Fixed: the Exit node picker never showed what was actually selected, even after §71's fix (2026-08-28)
+
+**BEFORE:** §71 fixed the backend so `SetTailnetExitNode` no longer clears
+the selection it just made. But the picker dialog itself
+(`MultiProxyView.kt`) had a second, independent bug: `var selected by
+remember(tailnetId) { mutableStateOf<ExitNodeCandidate?>(null) }` always
+initialized to `null` on every dialog open, with nothing reading back the
+tailnet's actual current exit node. Neither the Go engine nor the JSON
+polled by the UI (`GetTailnetStatesJSON`) exposed that value at all - there
+was no field to read even if the UI had tried. So even with §71's fix
+correctly persisting the selection server-side, the picker looked blank
+every single time it was reopened, and the tailnet's card showed no
+indication an exit node was active. This is very likely what the user was
+actually hitting when they reported the fix "still doesn't work" even on
+v0.0.5-alpha, which does contain §71's backend fix.
+
+**NEW:** two-part fix, Go then Kotlin:
+- `libtailscale/multiproxy/runtime_state.go`: `observedTailnetState` now
+  also reads `status.ExitNodeStatus` off the same live `Status()` call it
+  already makes, returning the active exit node's IP (first entry of
+  `TailscaleIPs`) as a new `exitNodeIP` value. Threaded into
+  `TailnetRuntimeExport.ExitNodeIP` (JSON `exitNodeIp`), part of the
+  existing 1s `GetTailnetStatesJSON` poll - no new API surface needed.
+- `android/.../MultiProxySessionCoordinator.kt`: new `exitNodeIps`
+  `StateFlow<Map<String, String>>`, populated in `refreshRuntimeState`
+  alongside the existing `runtimeStates`/`machineNames`, cleared in the same
+  two places those are.
+- `android/.../ui/viewModel/MultiProxyViewModel.kt`: `TailnetProfileUiState`
+  gained `exitNodeIp`, wired through the `combine()` block.
+- `android/.../ui/view/MultiProxyView.kt`: the tailnet card now shows
+  "Exit node: <ip>" when one is set; the picker's `selected` state is now
+  seeded from the live `exitNodeIp` (matched against the fetched candidate
+  list) the first time candidates load for that tailnet, via a
+  `LaunchedEffect` guarded on `selected == null` so it never overwrites an
+  in-progress local pick.
+
+**Evidence:** `INSTRUMENTATION-OR-EMULATOR-TESTED` - full end-to-end pass on
+the real emulator against a live tailnet (`kurtaksi@outlook.com`), not a
+synthetic/mocked backend:
+1. Enabled kurtaksi for Multi mode, started Multi-Tailnet VPN, waited for
+   `Runtime: RUNNING`.
+2. Opened the Exit node picker - `k3s-agent-3 (100.119.103.112)` appeared
+   as a real candidate alongside 4 other real peers, confirming
+   `GetExitNodeCandidatesJSON` sees this tailnet's actual netmap.
+3. Selected it, tapped Use - the tailnet's card immediately showed
+   "Exit node: 100.119.103.112" (the new display line).
+4. Reopened the picker - `k3s-agent-3` showed pre-selected (radio button
+   set), not blank. This is the actual regression test for both §71's
+   backend fix and this section's UI fix landing together.
+5. Re-checked several minutes and multiple screen navigations later - the
+   selection was still shown as active, confirming this is durable state,
+   not a one-shot UI artifact.
+6. Bound a test app (`com.google.android.apps.wellbeing`) to kurtaksi as
+   its data-route upstream via App routing; confirmed the binding
+   persisted correctly in `multiproxy_profiles.db`'s `app_bindings` table
+   (`com.google.android.apps.wellbeing|regular-3b64`). Did not confirm a
+   live egress-IP change through k3s-agent-3 for this specific app, since
+   it has no launchable UI in this build to generate real traffic on
+   demand - the underlying per-app routing/policy mechanism this binding
+   exercises is separately established and device-verified elsewhere in
+   this doc (§50, §58, §68), not something this pass touched.
+
+Go: `go build ./libtailscale/multiproxy/...` and full
+`go test -count=1 -timeout 60s ./libtailscale/multiproxy/...` both pass.
+Kotlin: `compileDebugKotlin` passes.
 
 ## 48. Bottom line
 

@@ -15,6 +15,14 @@ type TailnetRuntimeExport struct {
 	Enabled     bool   `json:"enabled"`
 	State       string `json:"state"`
 	MachineName string `json:"machineName,omitempty"`
+	// ExitNodeIP is the peer address SetTailnetExitNode currently has this
+	// tailnet pointed at, or empty if none is set. Read back from a live
+	// Status() call (status.ExitNodeStatus), the same source of truth
+	// EditPrefs writes to and the only place that can say what is *actually*
+	// active, as opposed to what a picker UI last had selected before it was
+	// closed and its local state discarded - see GetExitNodeCandidatesJSON's
+	// doc comment for why the UI otherwise has no way to know this.
+	ExitNodeIP string `json:"exitNodeIp,omitempty"`
 }
 
 type tailnetStateProbe struct {
@@ -23,27 +31,30 @@ type tailnetStateProbe struct {
 	srv     *tsnet.Server
 }
 
-func observedTailnetState(enabled bool, srv *tsnet.Server) (state, machineName string) {
+func observedTailnetState(enabled bool, srv *tsnet.Server) (state, machineName, exitNodeIP string) {
 	if !enabled || srv == nil {
-		return "STOPPED", ""
+		return "STOPPED", "", ""
 	}
 	lc, err := srv.LocalClient()
 	if err != nil {
-		return "ERROR", ""
+		return "ERROR", "", ""
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	status, err := lc.Status(ctx)
 	if err != nil || status == nil {
-		return "STARTING", ""
+		return "STARTING", "", ""
 	}
 	if status.BackendState == "" {
-		return "STARTING", ""
+		return "STARTING", "", ""
 	}
 	if status.Self != nil {
 		machineName = status.Self.HostName
 	}
-	return status.BackendState, machineName
+	if status.ExitNodeStatus != nil && len(status.ExitNodeStatus.TailscaleIPs) > 0 {
+		exitNodeIP = status.ExitNodeStatus.TailscaleIPs[0].Addr().String()
+	}
+	return status.BackendState, machineName, exitNodeIP
 }
 
 // GetTailnetStatesJSON returns a stable snapshot of registered Tailnet runtimes
@@ -73,12 +84,13 @@ func (e *Engine) GetTailnetStatesJSON() string {
 		wg.Add(1)
 		go func(i int, p tailnetStateProbe) {
 			defer wg.Done()
-			state, machineName := observedTailnetState(p.enabled, p.srv)
+			state, machineName, exitNodeIP := observedTailnetState(p.enabled, p.srv)
 			out[i] = TailnetRuntimeExport{
 				TailnetID:   p.id,
 				Enabled:     p.enabled,
 				State:       state,
 				MachineName: machineName,
+				ExitNodeIP:  exitNodeIP,
 			}
 		}(i, p)
 	}
@@ -149,7 +161,7 @@ func (e *Engine) GetExitNodeStatesJSON() string {
 		wg.Add(1)
 		go func(i int, p exitNodeStateProbe) {
 			defer wg.Done()
-			state, machineName := observedTailnetState(p.enabled, p.srv)
+			state, machineName, _ := observedTailnetState(p.enabled, p.srv)
 			out[i] = ExitNodeRuntimeExport{
 				ID:              p.id,
 				SourceTailnetID: p.sourceTailnetID,

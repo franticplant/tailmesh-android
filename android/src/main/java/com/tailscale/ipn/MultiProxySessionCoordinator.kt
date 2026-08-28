@@ -21,6 +21,7 @@ private data class TailnetRuntimeSnapshot(
     val enabled: Boolean,
     val state: String,
     val machineName: String = "",
+    val exitNodeIp: String = "",
 )
 
 /**
@@ -79,6 +80,15 @@ object MultiProxySessionCoordinator {
 
     private val _machineNames = MutableStateFlow<Map<String, String>>(emptyMap())
     val machineNames: StateFlow<Map<String, String>> = _machineNames.asStateFlow()
+
+    // The peer address SetTailnetExitNode currently has each tailnet pointed
+    // at, keyed by tailnet id - empty/absent means no exit node is set. Read
+    // back from the same live GetTailnetStatesJSON poll as runtimeStates, so
+    // the "Exit node" picker (MultiProxyView.kt) can show what's actually
+    // active instead of always opening blank regardless of what was
+    // previously selected.
+    private val _exitNodeIps = MutableStateFlow<Map<String, String>>(emptyMap())
+    val exitNodeIps: StateFlow<Map<String, String>> = _exitNodeIps.asStateFlow()
 
     // Address crossovers: a real (non-synthetic) Tailscale IP was claimed by
     // more than one active tailnet at once and the engine picked one
@@ -258,6 +268,7 @@ object MultiProxySessionCoordinator {
                     session.credentialStore.deleteAuthKey(id)
                     session.profileRepository.deleteProfile(id)
                     _runtimeStates.value = _runtimeStates.value - id
+                    _exitNodeIps.value = _exitNodeIps.value - id
                     clearError(id)
                 } catch (e: Exception) {
                     setError(id, e.message ?: "Failed to forget Tailnet")
@@ -281,6 +292,7 @@ object MultiProxySessionCoordinator {
         if (engine == null) {
             _runtimeStates.value = emptyMap()
             _machineNames.value = emptyMap()
+            _exitNodeIps.value = emptyMap()
             return
         }
 
@@ -310,6 +322,10 @@ object MultiProxySessionCoordinator {
                         snapshot.machineName.takeIf { it.isNotBlank() }?.let { snapshot.id to it }
                     })
                 .toMap()
+        _exitNodeIps.value =
+            snapshots.mapNotNull { snapshot ->
+                snapshot.exitNodeIp.takeIf { it.isNotBlank() }?.let { snapshot.tailnetId to it }
+            }.toMap()
 
         // Mirrors the tailnet bootstrap-key retirement below, for an exit-node
         // upstream's own dedicated identity: once a live poll (not just a

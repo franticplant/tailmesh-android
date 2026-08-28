@@ -197,6 +197,9 @@ fun MultiProxyView(
                         if (state.machineName.isNotBlank()) {
                             Text("Machine: " + state.machineName)
                         }
+                        if (state.exitNodeIp.isNotBlank()) {
+                            Text("Exit node: " + state.exitNodeIp)
+                        }
                         state.lastError?.let {
                             Text(
                                 "Error: $it",
@@ -315,6 +318,18 @@ fun MultiProxyView(
                 candidates = withContext(Dispatchers.IO) { viewModel.fetchExitNodeCandidates(tailnetId) }
             }
             var selected by remember(tailnetId) { mutableStateOf<ExitNodeCandidate?>(null) }
+            // Pre-select whichever candidate matches the tailnet's actual,
+            // currently-active exit node IP (from the live runtime poll -
+            // see MultiProxySessionCoordinator.exitNodeIps) once candidates
+            // load, so reopening this dialog shows real state instead of
+            // always starting blank. Only runs while nothing has been
+            // clicked locally yet, so it doesn't clobber an in-progress pick.
+            val currentExitNodeIp = uiStates.firstOrNull { it.profile.id == tailnetId }?.exitNodeIp.orEmpty()
+            LaunchedEffect(tailnetId, candidates, currentExitNodeIp) {
+                if (selected == null && currentExitNodeIp.isNotBlank()) {
+                    selected = candidates.firstOrNull { it.ip == currentExitNodeIp }
+                }
+            }
             AlertDialog(
                 onDismissRequest = { exitNodeTailnetId = null },
                 title = { Text("Exit node") },
