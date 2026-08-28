@@ -3180,16 +3180,22 @@ on the connected emulator, including 3 new ones for `setTunnelLAN`'s
 preserve-the-other-columns behaviour and its default value, plus updated
 migration tests covering the v5->v6 and v4->v6 (both branches in one call)
 upgrade paths. `ANDROID-BUILT` - `compileDebugKotlin` and a full
-`assembleDebug` both succeed.
+`assembleDebug` both succeed. The UI itself was also manually clicked
+through on the emulator - see the update below.
 
-**Not done this pass:** the new UI toggle itself was not manually clicked
-through on-device (no multiproxy debug build was installed at the time -
-only the androidTest instrumentation, which targets and wipes the same
-database, ran). Build- and instrumented-DB-level verification is real, but
-"the switch actually renders and toggles correctly in the running app" is
-inferred from the pattern being identical to the already-device-verified
-DNS picker (§64) and global LAN toggle (§54), not independently observed
-this pass.
+**Update (2026-08-28, later same pass):** manually verified on-device.
+Installed the debug APK on the emulator, navigated Settings → Proxies &
+tunnels, added a test SOCKS5 upstream ("TestUpstream"), confirmed "Keep LAN
+traffic direct" is on by default, then went to App routing and bound one app
+(`com.google.android.adservices.api`) to it. The "Tunnel LAN traffic for
+this app" switch appeared exactly as designed - present only for the bound
+app, absent for the other 90 unbound apps in the same list - defaulted to
+off, and toggling it on visibly flipped state and persisted (confirmed via a
+follow-up screenshot after re-rendering the row). Cleaned up afterward by
+uninstalling the test build rather than leaving stray state on the shared
+emulator. `INSTRUMENTATION-OR-EMULATOR-TESTED` now covers the UI itself, not
+just the pattern-matched inference recorded below at the time of the
+original pass.
 
 ## 48. Bottom line
 
