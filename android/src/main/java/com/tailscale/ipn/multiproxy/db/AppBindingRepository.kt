@@ -40,6 +40,8 @@ class AppBindingRepository(context: Context) {
               cursor.getColumnIndexOrThrow(TailnetDatabaseHelper.COL_BINDING_UPSTREAM)
           val dnsUpstreamIndex =
               cursor.getColumnIndexOrThrow(TailnetDatabaseHelper.COL_BINDING_DNS_UPSTREAM)
+          val tunnelLanIndex =
+              cursor.getColumnIndexOrThrow(TailnetDatabaseHelper.COL_BINDING_TUNNEL_LAN)
           val createdIndex = cursor.getColumnIndexOrThrow(TailnetDatabaseHelper.COL_CREATED_AT)
           val updatedIndex = cursor.getColumnIndexOrThrow(TailnetDatabaseHelper.COL_UPDATED_AT)
           while (cursor.moveToNext()) {
@@ -49,6 +51,7 @@ class AppBindingRepository(context: Context) {
                     packageName = packageName,
                     upstreamId = cursor.getString(upstreamIndex),
                     dnsUpstreamId = cursor.getString(dnsUpstreamIndex),
+                    tunnelLan = cursor.getInt(tunnelLanIndex) == 1,
                     createdAt = cursor.getLong(createdIndex),
                     updatedAt = cursor.getLong(updatedIndex),
                 )
@@ -97,6 +100,10 @@ class AppBindingRepository(context: Context) {
                                 cursor.getString(
                                     cursor.getColumnIndexOrThrow(
                                         TailnetDatabaseHelper.COL_BINDING_DNS_UPSTREAM)),
+                            tunnelLan =
+                                cursor.getInt(
+                                    cursor.getColumnIndexOrThrow(
+                                        TailnetDatabaseHelper.COL_BINDING_TUNNEL_LAN)) == 1,
                             createdAt =
                                 cursor.getLong(
                                     cursor.getColumnIndexOrThrow(
@@ -108,6 +115,9 @@ class AppBindingRepository(context: Context) {
                 put(TailnetDatabaseHelper.COL_BINDING_PACKAGE, packageName)
                 put(TailnetDatabaseHelper.COL_BINDING_UPSTREAM, existing?.upstreamId ?: "")
                 put(TailnetDatabaseHelper.COL_BINDING_DNS_UPSTREAM, existing?.dnsUpstreamId ?: "")
+                put(
+                    TailnetDatabaseHelper.COL_BINDING_TUNNEL_LAN,
+                    if (existing?.tunnelLan == true) 1 else 0)
                 put(TailnetDatabaseHelper.COL_CREATED_AT, existing?.createdAt ?: now)
                 put(TailnetDatabaseHelper.COL_UPDATED_AT, now)
               }
@@ -132,6 +142,17 @@ class AppBindingRepository(context: Context) {
    */
   suspend fun setDNSUpstream(packageName: String, dnsUpstreamId: String) =
       upsert(packageName) { put(TailnetDatabaseHelper.COL_BINDING_DNS_UPSTREAM, dnsUpstreamId) }
+
+  /**
+   * Sets whether this app's LAN-destined traffic should keep following its own upstream binding
+   * even while the global "keep LAN traffic direct" setting is on. Only takes effect while the app
+   * also has a non-empty upstream binding - see COL_BINDING_TUNNEL_LAN's doc comment - but is
+   * stored regardless, same as [setDNSUpstream].
+   */
+  suspend fun setTunnelLAN(packageName: String, tunnelLan: Boolean) =
+      upsert(packageName) {
+        put(TailnetDatabaseHelper.COL_BINDING_TUNNEL_LAN, if (tunnelLan) 1 else 0)
+      }
 
   /** Removes an app's binding entirely - both its data route and any DNS override. */
   suspend fun unbind(packageName: String) =

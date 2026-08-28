@@ -11,10 +11,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -51,6 +53,7 @@ fun AppRoutingView(
   val bindings by model.bindings.collectAsState()
   val routable by model.routableUpstreams.collectAsState()
   val defaultUpstreamId by model.defaultUpstreamId.collectAsState()
+  val lanExclusionEnabled by model.lanExclusionEnabled.collectAsState()
 
   val defaultLabel =
       routable.firstOrNull { it.id == defaultUpstreamId }?.label
@@ -119,6 +122,22 @@ fun AppRoutingView(
                 candidates = routable,
                 onSelect = { id -> model.setAppDNSUpstream(app.packageName, id) },
                 buttonFormatRes = R.string.app_dns_via,
+            )
+          }
+          // Only meaningful with both a data route to tunnel LAN traffic through
+          // (same constraint as the DNS picker above) and the global exclusion
+          // actually on - with it off, LAN traffic already follows the app's
+          // normal binding, so there is nothing for this to override.
+          if (!binding?.upstreamId.isNullOrEmpty() && lanExclusionEnabled) {
+            ListItem(
+                modifier = Modifier.fillMaxWidth(),
+                headlineContent = { Text(stringResource(R.string.app_tunnel_lan_title)) },
+                trailingContent = {
+                  Switch(
+                      checked = binding?.tunnelLan == true,
+                      onCheckedChange = { model.setAppTunnelLAN(app.packageName, it) },
+                  )
+                },
             )
           }
           Lists.ItemDivider()

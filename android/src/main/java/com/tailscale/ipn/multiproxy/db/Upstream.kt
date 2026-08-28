@@ -74,6 +74,11 @@ data class AppBinding(
     // means "same as upstreamId", today's auto-follow behaviour. Only takes
     // effect alongside a non-empty upstreamId - see COL_BINDING_DNS_UPSTREAM.
     val dnsUpstreamId: String = "",
+    // Keeps this app's LAN-destined traffic on upstreamId even while the
+    // global "keep LAN traffic direct" setting is on for everyone else. Only
+    // takes effect alongside a non-empty upstreamId - see
+    // COL_BINDING_TUNNEL_LAN.
+    val tunnelLan: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
 )

@@ -17,9 +17,10 @@ import org.junit.runner.RunWith
 
 /**
  * Exercises [AppBindingRepository] against a real on-device database. In particular, proves the
- * "preserve the other column" behaviour its `upsert` helper depends on: [AppBindingRepository.bind]
- * and [AppBindingRepository.setDNSUpstream] each write only one column but must never clobber the
- * other, which is exactly what a plain column-keyed `INSERT OR REPLACE` would do.
+ * "preserve the other column" behaviour its `upsert` helper depends on: [AppBindingRepository.bind],
+ * [AppBindingRepository.setDNSUpstream], and [AppBindingRepository.setTunnelLAN] each write only one
+ * column but must never clobber the others, which is exactly what a plain column-keyed
+ * `INSERT OR REPLACE` would do.
  */
 @RunWith(AndroidJUnit4::class)
 class AppBindingRepositoryTest {
@@ -105,5 +106,37 @@ class AppBindingRepositoryTest {
     assertTrue(binding != null)
     assertEquals("upstream-a", binding?.upstreamId)
     assertEquals("upstream-b", binding?.dnsUpstreamId)
+  }
+
+  @Test
+  fun setTunnelLAN_preservesTheDataRouteAndDNSOverride() = runBlocking {
+    repo.bind("com.example.app", "upstream-a")
+    repo.setDNSUpstream("com.example.app", "upstream-b")
+
+    repo.setTunnelLAN("com.example.app", true)
+
+    val binding = repo.getAllImmediate()["com.example.app"]
+    assertEquals("upstream-a", binding?.upstreamId)
+    assertEquals("upstream-b", binding?.dnsUpstreamId)
+    assertEquals(true, binding?.tunnelLan)
+  }
+
+  @Test
+  fun bind_afterSetTunnelLAN_preservesTheTunnelLANOverride() = runBlocking {
+    repo.bind("com.example.app", "upstream-a")
+    repo.setTunnelLAN("com.example.app", true)
+
+    repo.bind("com.example.app", "upstream-c")
+
+    val binding = repo.getAllImmediate()["com.example.app"]
+    assertEquals("upstream-c", binding?.upstreamId)
+    assertEquals(true, binding?.tunnelLan)
+  }
+
+  @Test
+  fun newBinding_defaultsTunnelLANToFalse() = runBlocking {
+    repo.bind("com.example.app", "upstream-a")
+
+    assertEquals(false, repo.getAllImmediate()["com.example.app"]?.tunnelLan)
   }
 }

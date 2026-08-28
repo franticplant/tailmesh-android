@@ -7,7 +7,7 @@ import android.database.sqlite.SQLiteOpenHelper
 class TailnetDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
     companion object {
         const val DATABASE_NAME = "multiproxy_profiles.db"
-        const val DATABASE_VERSION = 5
+        const val DATABASE_VERSION = 6
         const val TABLE_PROFILES = "profiles"
         const val COL_ID = "id"
         const val COL_DISPLAY_NAME = "display_name"
@@ -50,6 +50,13 @@ class TailnetDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABA
         // when upstream_id is empty, so a DNS-only override with no data route
         // has no rule to attach to.
         const val COL_BINDING_DNS_UPSTREAM = "dns_upstream_id"
+        // Asks for this app's LAN-destined traffic to keep following its own
+        // upstream binding even while the global "keep LAN traffic direct"
+        // setting (RoutingSettings.lanExclusionEnabled) is on for everyone
+        // else. Only meaningful alongside a non-empty upstream_id - same
+        // constraint as dns_upstream_id, and for the same reason: there is
+        // nothing to route LAN traffic through otherwise.
+        const val COL_BINDING_TUNNEL_LAN = "tunnel_lan"
 
         private const val CREATE_UPSTREAMS = """
             CREATE TABLE IF NOT EXISTS $TABLE_UPSTREAMS (
@@ -89,6 +96,7 @@ class TailnetDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABA
                 $COL_BINDING_PACKAGE TEXT PRIMARY KEY,
                 $COL_BINDING_UPSTREAM TEXT NOT NULL,
                 $COL_BINDING_DNS_UPSTREAM TEXT NOT NULL DEFAULT '',
+                $COL_BINDING_TUNNEL_LAN INTEGER NOT NULL DEFAULT 0,
                 $COL_CREATED_AT INTEGER NOT NULL,
                 $COL_UPDATED_AT INTEGER NOT NULL
             )
@@ -178,6 +186,18 @@ class TailnetDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABA
             db.beginTransaction()
             try {
                 db.execSQL("ALTER TABLE $TABLE_APP_BINDINGS ADD COLUMN $COL_BINDING_DNS_UPSTREAM TEXT NOT NULL DEFAULT ''")
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
+        }
+        if (oldVersion < 6) {
+            // Adds the per-app "still tunnel LAN traffic" override column;
+            // every existing binding gets 0 (follow the global LAN-exclusion
+            // setting, today's behaviour).
+            db.beginTransaction()
+            try {
+                db.execSQL("ALTER TABLE $TABLE_APP_BINDINGS ADD COLUMN $COL_BINDING_TUNNEL_LAN INTEGER NOT NULL DEFAULT 0")
                 db.setTransactionSuccessful()
             } finally {
                 db.endTransaction()

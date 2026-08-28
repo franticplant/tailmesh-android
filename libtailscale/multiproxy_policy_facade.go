@@ -354,6 +354,12 @@ func BuildAppBindingPolicyJSON(bindingsJSON, defaultUpstream, defaultDNSUpstream
 		AppUID      int32  `json:"appUid"`
 		Upstream    string `json:"upstream"`
 		DNSUpstream string `json:"dnsUpstream"`
+		// TunnelLAN asks for this app's LAN-destined traffic to keep following
+		// its own binding even while excludeLAN is on for everyone else - see
+		// the per-app override rule below. Only meaningful alongside a
+		// non-empty Upstream, same constraint as DNSUpstream: there is nothing
+		// to route LAN traffic through otherwise.
+		TunnelLAN bool `json:"tunnelLan"`
 	}
 	if bindingsJSON != "" {
 		if err := json.Unmarshal([]byte(bindingsJSON), &bindings); err != nil {
@@ -362,6 +368,28 @@ func BuildAppBindingPolicyJSON(bindingsJSON, defaultUpstream, defaultDNSUpstream
 	}
 
 	policy := multiproxy.Policy{}
+
+	// Per-app "still tunnel LAN traffic for this app" overrides come first,
+	// ahead of the global LAN-exclusion rule below, so they win over it in
+	// this flat first-match-wins list. Each one re-asserts the app's own
+	// binding but scoped to LAN destinations specifically - it does not
+	// change anything about excludeLAN being off (the plain per-app rule
+	// further down already covers LAN destinations for that case) or about
+	// an app with no override (which falls through to the global exclusion
+	// rule normally).
+	for _, b := range bindings {
+		if !b.TunnelLAN || b.Upstream == "" {
+			continue
+		}
+		policy.Rules = append(policy.Rules, multiproxy.Rule{
+			Name:        fmt.Sprintf("app %d tunnels LAN", b.AppUID),
+			Selector:    multiproxy.Selector{AppUIDs: []int32{b.AppUID}, DstPrefixes: multiproxy.DefaultLANPrefixes()},
+			Action:      multiproxy.ActionRoute,
+			Upstream:    multiproxy.UpstreamID(b.Upstream),
+			DNSUpstream: multiproxy.UpstreamID(b.DNSUpstream),
+		})
+	}
+
 	if excludeLAN {
 		policy.Rules = append(policy.Rules, multiproxy.Rule{
 			Name:     "LAN traffic stays direct",

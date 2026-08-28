@@ -306,3 +306,57 @@ func TestLANExclusionRuleWinsOverLaterAppBinding(t *testing.T) {
 		t.Fatalf("action = %q, want direct (LAN rule should win over the later app binding)", rule.Action)
 	}
 }
+
+// A per-app "still tunnel LAN traffic for this app" override must win over
+// the global LAN-exclusion rule for that app specifically, while the global
+// rule still wins for every other app - this is the ordering
+// BuildAppBindingPolicyJSON produces: [per-app LAN overrides] ->
+// [global LAN exclusion] -> [regular per-app bindings] -> [default].
+func TestPerAppLANOverrideWinsOverGlobalExclusionForThatAppOnly(t *testing.T) {
+	e := NewEngine(t.TempDir(), &MockCallback{})
+	p := Policy{
+		Rules: []Rule{
+			{
+				Name:     "app 1000 tunnels LAN",
+				Selector: Selector{AppUIDs: []int32{1000}, DstPrefixes: DefaultLANPrefixes()},
+				Action:   ActionRoute,
+				Upstream: "proxy",
+			},
+			{
+				Name:     "LAN traffic stays direct",
+				Selector: Selector{DstPrefixes: DefaultLANPrefixes()},
+				Action:   ActionDirect,
+			},
+			{
+				Name:     "app 1000",
+				Selector: Selector{AppUIDs: []int32{1000}},
+				Action:   ActionRoute,
+				Upstream: "proxy",
+			},
+		},
+	}
+	if err := e.SetPolicy(p); err != nil {
+		t.Fatalf("SetPolicy: %v", err)
+	}
+
+	// The overridden app's LAN traffic routes through its own upstream, not
+	// direct.
+	rule, _, ok := e.matchPolicy(flow("tcp", "192.168.1.5:443", 1000))
+	if !ok || rule.Action != ActionRoute || rule.Upstream != "proxy" {
+		t.Fatalf("overridden app's LAN traffic: rule=%+v ok=%v, want ActionRoute via proxy", rule, ok)
+	}
+
+	// A different app, with no override, still gets the global exclusion -
+	// the override must not leak to apps that didn't ask for it.
+	rule, _, ok = e.matchPolicy(flow("tcp", "192.168.1.5:443", 2000))
+	if !ok || rule.Action != ActionDirect {
+		t.Fatalf("non-overridden app's LAN traffic: rule=%+v ok=%v, want ActionDirect (global exclusion)", rule, ok)
+	}
+
+	// The overridden app's non-LAN traffic is unaffected by any of this -
+	// still routes via its regular per-app binding rule.
+	rule, _, ok = e.matchPolicy(flow("tcp", "9.9.9.9:443", 1000))
+	if !ok || rule.Action != ActionRoute || rule.Upstream != "proxy" {
+		t.Fatalf("overridden app's non-LAN traffic: rule=%+v ok=%v, want ActionRoute via proxy", rule, ok)
+	}
+}

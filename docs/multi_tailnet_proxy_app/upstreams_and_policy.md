@@ -862,10 +862,18 @@ correctness bug, not a behaviour change.
    guard) and `ANDROID-BUILT`; the toggle itself is
    `INSTRUMENTATION-OR-EMULATOR-TESTED` (renders correctly, correct
    defaults), but a live device trace of the rule winning over a
-   *configured, non-Direct* default upstream was not done. Still only a
-   **global** on/off, not the per-app override ("still tunnel LAN traffic
-   for this one app") the original plan described - that needs a schema
-   change to `AppBinding` and was scoped out of this pass.
+   *configured, non-Direct* default upstream was not done. **Closed in
+   full** - see `validation_and_gaps.md` §69 - with the per-app override
+   ("still tunnel LAN traffic for this one app") the original plan
+   described: `AppBinding` gained a `tunnelLan` column (schema v6), a
+   per-app "Tunnel LAN traffic for this app" switch on the App routing
+   screen (shown only once the app has a data route *and* the global
+   exclusion is on - otherwise there's nothing to override), and
+   `BuildAppBindingPolicyJSON` now emits per-app override rules ahead of
+   the global exclusion rule, ahead of the regular per-app binding rules,
+   ahead of the default - the ordering the original plan called out as
+   needing explicit test coverage, which it now has
+   (`TestPerAppLANOverrideWinsOverGlobalExclusionForThatAppOnly`).
 10. ~~DNS/data split has no per-app UI yet~~ **Closed** - see
     `validation_and_gaps.md` §64. `AppBinding` gained a `dnsUpstreamId`
     column (the schema change this gap and gap 9 both pointed at), and

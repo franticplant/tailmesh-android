@@ -3133,6 +3133,64 @@ available in this session) rather than left silent.
 **Evidence:** `UNIT-TESTED` - `go test -count=1 ./libtailscale/multiproxy/...`
 passes, including the new test in isolation and as part of the full suite.
 
+## 69. Added: per-app LAN-tunnel override, closing gap #9 in full (2026-08-28)
+
+**BEFORE:** `RoutingSettings.lanExclusionEnabled` (§54) was global only -
+turning it on kept every app's LAN traffic direct, with no way for one app
+that legitimately needs a remote LAN reached through a tunnel (the example
+the original plan gave) to opt back in. Closing this needed a schema change
+to `AppBinding` the §54 pass explicitly scoped out.
+
+**NEW, Go side (`multiproxy_policy_facade.go`):** `BuildAppBindingPolicyJSON`
+now reads a `tunnelLan` field per binding. When set (and only alongside a
+non-empty `Upstream` - same constraint `DNSUpstream` already has, since
+there is nothing to route LAN traffic through otherwise), it emits a rule
+*ahead of* the global LAN-exclusion rule: `Selector{AppUIDs: [uid],
+DstPrefixes: DefaultLANPrefixes()}`, routing to that app's own upstream.
+Because `Selector`'s fields are conjunctive (AND, not OR - confirmed by
+reading `Selector.matches` in `policy.go`), this matches only that app's
+LAN-destined traffic, leaving every other app's LAN traffic to fall through
+to the global exclusion rule as before. Full rule order:
+[per-app LAN overrides] → [global LAN exclusion] → [regular per-app
+bindings] → [default] - exactly the ordering the original plan called for.
+
+**NEW, Kotlin side:** `AppBinding` gained a `tunnelLan: Boolean` field
+(schema v6 - `COL_BINDING_TUNNEL_LAN`, `ALTER TABLE ... ADD COLUMN
+tunnel_lan INTEGER NOT NULL DEFAULT 0`, following the same frozen-historical-
+constant migration pattern as `dns_upstream_id` before it).
+`AppBindingRepository.setTunnelLAN()` goes through the same race-safe
+`upsert()` as `bind()`/`setDNSUpstream()` (§65's fix), so it can't be
+clobbered by a concurrent edit to either of the other two columns.
+`AppRoutingView` shows a "Tunnel LAN traffic for this app" switch per app,
+gated on two conditions: the app has a non-empty data route (same gating as
+the DNS picker - `BuildAppBindingPolicyJSON` skips a binding rule entirely
+otherwise) *and* the global "Keep LAN traffic direct" setting is actually
+on (with it off, LAN traffic already follows the app's normal binding, so
+the override would have nothing to do).
+
+**Evidence:** `UNIT-TESTED` (Go) -
+`TestPerAppLANOverrideWinsOverGlobalExclusionForThatAppOnly`
+(`policy_test.go`) proves the ordering directly against `multiproxy.Policy`/
+`resolveFlow` (the facade function itself lives in `package libtailscale`,
+which - as established earlier this session - cannot be built or tested in
+this host environment at all; this is the same limitation §68 documents,
+not new). `go test -count=1 ./libtailscale/multiproxy/...` passes in full.
+`INSTRUMENTATION-OR-EMULATOR-TESTED` (Kotlin) - 26 `androidTest` tests pass
+on the connected emulator, including 3 new ones for `setTunnelLAN`'s
+preserve-the-other-columns behaviour and its default value, plus updated
+migration tests covering the v5->v6 and v4->v6 (both branches in one call)
+upgrade paths. `ANDROID-BUILT` - `compileDebugKotlin` and a full
+`assembleDebug` both succeed.
+
+**Not done this pass:** the new UI toggle itself was not manually clicked
+through on-device (no multiproxy debug build was installed at the time -
+only the androidTest instrumentation, which targets and wipes the same
+database, ran). Build- and instrumented-DB-level verification is real, but
+"the switch actually renders and toggles correctly in the running app" is
+inferred from the pattern being identical to the already-device-verified
+DNS picker (§64) and global LAN toggle (§54), not independently observed
+this pass.
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.

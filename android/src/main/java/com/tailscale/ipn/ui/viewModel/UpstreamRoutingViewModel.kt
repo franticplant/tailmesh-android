@@ -409,6 +409,18 @@ class UpstreamRoutingViewModel : ViewModel() {
     }
   }
 
+  /**
+   * Sets whether this app's LAN-destined traffic should keep following its own data route even
+   * while "Keep LAN traffic direct" is on globally. Only takes effect once the app also has a
+   * non-empty upstream binding - see AppBindingRepository.setTunnelLAN's doc comment.
+   */
+  fun setAppTunnelLAN(packageName: String, tunnelLan: Boolean) {
+    viewModelScope.launch {
+      bindingRepository.setTunnelLAN(packageName, tunnelLan)
+      applyNow()
+    }
+  }
+
   fun bindingFor(packageName: String): AppBinding? = bindingRepository.getAllImmediate()[packageName]
 
   /**

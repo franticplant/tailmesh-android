@@ -171,7 +171,8 @@ class UpstreamPolicyApplier(
           JSONObject()
               .put("appUid", uid)
               .put("upstream", binding.upstreamId)
-              .put("dnsUpstream", binding.dnsUpstreamId))
+              .put("dnsUpstream", binding.dnsUpstreamId)
+              .put("tunnelLan", binding.tunnelLan))
     }
 
     // Broad capture (RoutingSettings.broadCaptureEnabled) hands the engine

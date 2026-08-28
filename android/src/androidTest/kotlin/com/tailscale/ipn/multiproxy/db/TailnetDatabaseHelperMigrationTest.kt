@@ -117,6 +117,11 @@ class TailnetDatabaseHelperMigrationTest {
             "ALTER TABLE ${TailnetDatabaseHelper.TABLE_UPSTREAMS} ADD COLUMN " +
                 "${TailnetDatabaseHelper.COL_UPSTREAM_PEER_ADDR} TEXT NOT NULL DEFAULT ''")
       }
+      if (version >= 5) {
+        it.execSQL(
+            "ALTER TABLE ${TailnetDatabaseHelper.TABLE_APP_BINDINGS} ADD COLUMN " +
+                "${TailnetDatabaseHelper.COL_BINDING_DNS_UPSTREAM} TEXT NOT NULL DEFAULT ''")
+      }
       it.version = version
     }
   }
@@ -140,7 +145,10 @@ class TailnetDatabaseHelperMigrationTest {
                     TailnetDatabaseHelper.COL_UPSTREAM_PEER_ADDR)))
     assertTrue(
         columnNames(db, TailnetDatabaseHelper.TABLE_APP_BINDINGS)
-            .contains(TailnetDatabaseHelper.COL_BINDING_DNS_UPSTREAM))
+            .containsAll(
+                setOf(
+                    TailnetDatabaseHelper.COL_BINDING_DNS_UPSTREAM,
+                    TailnetDatabaseHelper.COL_BINDING_TUNNEL_LAN)))
     assertTrue(
         columnNames(db, TailnetDatabaseHelper.TABLE_PROFILES)
             .containsAll(
@@ -199,8 +207,14 @@ class TailnetDatabaseHelperMigrationTest {
   }
 
   @Test
-  fun upgradeFromVersion4_appliesOnlyTheV5Branch() {
+  fun upgradeFromVersion4_appliesV5AndV6BranchesInOneCall() {
     createRawDatabaseAtVersion(4)
+    withHelper(context) { helper -> assertFinalSchema(helper.writableDatabase) }
+  }
+
+  @Test
+  fun upgradeFromVersion5_appliesOnlyTheV6Branch() {
+    createRawDatabaseAtVersion(5)
     withHelper(context) { helper -> assertFinalSchema(helper.writableDatabase) }
   }
 
@@ -233,13 +247,15 @@ class TailnetDatabaseHelperMigrationTest {
             assertEquals("", cursor.getString(1))
           }
       db.rawQuery(
-              "SELECT ${TailnetDatabaseHelper.COL_BINDING_DNS_UPSTREAM} FROM " +
+              "SELECT ${TailnetDatabaseHelper.COL_BINDING_DNS_UPSTREAM}, " +
+                  "${TailnetDatabaseHelper.COL_BINDING_TUNNEL_LAN} FROM " +
                   "${TailnetDatabaseHelper.TABLE_APP_BINDINGS} WHERE " +
                   "${TailnetDatabaseHelper.COL_BINDING_PACKAGE} = 'com.example.app'",
               null)
           .use { cursor ->
             assertTrue(cursor.moveToFirst())
             assertEquals("", cursor.getString(0))
+            assertEquals(0, cursor.getInt(1))
           }
     }
   }
