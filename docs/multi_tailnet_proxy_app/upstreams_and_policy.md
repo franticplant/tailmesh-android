@@ -792,7 +792,11 @@ correctness bug, not a behaviour change.
    the emulator and traced end to end, including `VpnService.protect()`
    coverage for the chained hop, `validation_and_gaps.md` §57.1. Chaining
    combined with UID-scoped attribution specifically (a chained rule that
-   also names an app) is still untested.
+   also names an app) now has Go-level coverage proving the two compose
+   correctly through the real `resolveFlow` path -
+   `validation_and_gaps.md` §68 - but still lacks the device-level evidence
+   §58 gave the non-chained case (that combination needs a live tailnet
+   login this pass didn't have credentials to set up).
 2. ~~No Android tests for the new stores.~~ **Closed** - see
    `validation_and_gaps.md` §66. 22 `androidTest` instrumented tests (real
    on-device SQLite, not Robolectric - see that section for why) now cover

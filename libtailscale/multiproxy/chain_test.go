@@ -301,3 +301,52 @@ func TestUpstreamSnapshotReportsVia(t *testing.T) {
 		t.Fatal("snapshot is missing the built-in direct upstream")
 	}
 }
+
+// A UID-scoped policy rule and a chained upstream are each tested separately
+// elsewhere (TestPerAppRuleSelectsUpstreamPerUID; the rest of this file) but
+// never together - flagged as an untested combination in
+// upstreams_and_policy.md gap #1 and validation_and_gaps.md §57.1's "still
+// not verified" note (there, specifically because device-verifying it needs
+// real hardware setup this environment doesn't have). What this test can
+// prove without a device: that resolveFlow's decision.Upstream for a
+// UID-matched rule is the actual registered (and therefore actually
+// chained) provider, not some other object - i.e. the two mechanisms compose
+// correctly through the real code path, not just independently.
+func TestPerAppUIDScopedRuleSelectsAChainedUpstream(t *testing.T) {
+	e := NewEngine(t.TempDir(), &MockCallback{})
+
+	parent := newFake("parent", true)
+	if err := e.RegisterUpstream(parent); err != nil {
+		t.Fatal(err)
+	}
+	child := newChainFake("child", "parent", true)
+	child.dialer = e.chainDialer(child.via, nil)
+	if err := e.RegisterUpstream(child); err != nil {
+		t.Fatal(err)
+	}
+
+	const boundUID = int32(10123)
+	if err := e.SetPolicy(Policy{Rules: []Rule{
+		{Name: "app", Selector: Selector{AppUIDs: []int32{boundUID}}, Action: ActionRoute, Upstream: "child"},
+	}}); err != nil {
+		t.Fatalf("SetPolicy: %v", err)
+	}
+
+	decision, ok := e.resolveFlow(tcpFlow("10.0.0.1:443", boundUID))
+	if !ok || decision.UpstreamID != "child" {
+		t.Fatalf("bound app should resolve to child, got %+v ok=%v", decision, ok)
+	}
+
+	if _, err := decision.Upstream.Dial(context.Background(), "tcp", "10.0.0.1:443"); err == nil {
+		t.Fatal("expected the parent's error (no real network in this test)")
+	}
+	if len(parent.dials) != 1 || parent.dials[0] != "tcp|child.upstream:1080" {
+		t.Fatalf("the UID-selected upstream's dial did not traverse its chain parent: parent saw %v", parent.dials)
+	}
+
+	// Negative control, same shape as §58.3's device test: an unrelated UID
+	// must not also resolve to the bound app's upstream.
+	if d, ok := e.resolveFlow(tcpFlow("10.0.0.1:443", boundUID+1)); ok && d.UpstreamID == "child" {
+		t.Fatal("an unrelated app must not resolve to another app's UID-scoped, chained upstream")
+	}
+}

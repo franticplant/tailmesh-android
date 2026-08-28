@@ -3090,6 +3090,49 @@ for next time. Not separately device-verified this pass (no new UI surface
 - the existing byte-count display already reads whichever counter is
 nonzero).
 
+## 68. Go-level test: UID-scoped rules and chaining compose correctly (2026-08-28)
+
+**Context:** gap #1 in `upstreams_and_policy.md` named "chaining combined
+with UID-scoped attribution" as untested - a policy rule that both names an
+app (`Selector.AppUIDs`) and points at a chained upstream (one with `via`
+set). §58 device-verified UID attribution alone; §57.1 device-verified
+chaining alone; nothing exercised both together. A full device-level
+version of this combination (the way §58 tested plain UID attribution)
+needs a live tailnet login to drive real traffic from a real app - this
+pass had no credentials to set that up, and was not attempted rather than
+guessed at.
+
+**What was actually addable without a device:** whether `resolveFlow`
+returns, for a UID-matched rule, the *actual registered* provider object -
+the same one whose `Dial()` really chains through its parent - rather than
+some other stand-in. This is a real question, not a formality: `readyProvider`
+(`upstream.go`) wraps whatever was registered for stats before returning it,
+so a bug here would specifically look like "policy correctly names the
+upstream, but the object actually reached does not have its chaining
+wired" - a mismatch between what the policy engine intends and what the
+datapath receives.
+
+**New test:** `TestPerAppUIDScopedRuleSelectsAChainedUpstream`
+(`chain_test.go`). Registers a plain `parent` upstream and a `child`
+upstream chained through it (`via: "parent"`), sets a policy with a single
+`Selector.AppUIDs`-scoped rule pointing at `child`, resolves a flow for the
+bound UID through the real `resolveFlow`, and dials
+`decision.Upstream.Dial(...)` directly (no test-only shortcut) - asserting
+the dial actually reached `parent`, proving the object `resolveFlow` handed
+back really is the chained one. A negative control (an adjacent, unbound
+UID) mirrors §58.3's device-side negative control at the Go level.
+
+**What this does and doesn't close:** closes the "do these two mechanisms
+compose through the real code path" question - they do, and now provably
+so, not just by code-reading inference. Does **not** close the device-level
+half of gap #1 (real hardware, a real bound app, real traffic, combined
+with a real chain) - that remains open, same as before, now with a
+specific, named reason it wasn't attempted (no live tailnet credentials
+available in this session) rather than left silent.
+
+**Evidence:** `UNIT-TESTED` - `go test -count=1 ./libtailscale/multiproxy/...`
+passes, including the new test in isolation and as part of the full suite.
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.
