@@ -214,6 +214,22 @@ object MultiProxySessionCoordinator {
                             engine.setTailnetEnabled(id, true)
                         } catch (e: Exception) {
                             if (e.message?.contains("not found", ignoreCase = true) == true) {
+                                // A profile imported from an already-authenticated regular
+                                // account (profile.sourceProfileId != null) has no auth key of
+                                // its own - its multiproxy identity comes from cloning that
+                                // account's persisted tsnet state via prepareRegularProfileForMultiProxy,
+                                // which startMultiProxyVPNLocked (IPNService.kt) normally does for
+                                // every enabled imported profile when the whole session starts.
+                                // Toggling a single profile back on while the session is already
+                                // running skips that full-session bootstrap, so redo it here too -
+                                // otherwise the tailnet gets re-added with an empty auth key and
+                                // gets stuck at NEEDS_LOGIN until the entire session is restarted.
+                                val sourceProfileId = profile.sourceProfileId
+                                if (sourceProfileId != null) {
+                                    Libtailscale.prepareRegularProfileForMultiProxy(
+                                        session.app.filesDir.absolutePath, session.app, sourceProfileId, id,
+                                    )
+                                }
                                 val key = session.credentialStore.getAuthKey(id) ?: ""
                                 engine.addTailnet(id, key, true)
                             } else {

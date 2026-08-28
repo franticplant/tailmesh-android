@@ -3372,6 +3372,70 @@ Go: `go build ./libtailscale/multiproxy/...` and full
 `go test -count=1 -timeout 60s ./libtailscale/multiproxy/...` both pass.
 Kotlin: `compileDebugKotlin` passes.
 
+## 74. Fixed: re-enabling an imported account mid-session got stuck at NEEDS_LOGIN (2026-08-28)
+
+**BEFORE:** found while device-testing §73 against a second real tailnet
+(`kurtaksi@outlook.com`, imported into Multi mode via "Add to Multi" from an
+already-logged-in regular account, not a fresh auth key). After toggling
+its per-account "Enable" button while Multi-Tailnet mode was already
+running, its Runtime got stuck at `NEEDS_LOGIN` and stayed there through
+several more Disable/Enable cycles - `adb logcat` showed a real `tsnet`
+server repeatedly printing `To start this tsnet server, restart with
+TS_AUTHKEY set, or go to: https://login.tailscale.com/a/...`, an
+interactive login URL the multiproxy UI has no way to surface or complete.
+
+Root cause: an account imported from an already-authenticated regular
+login has no auth key of its own - `ProfileRepository.importRegularProfile`
+just inserts a DB row (`android/.../multiproxy/db/ProfileRepository.kt`).
+Its multiproxy identity instead comes from *cloning* that regular account's
+already-registered tsnet state via `Libtailscale.prepareRegularProfileForMultiProxy`
+(`libtailscale/multiproxy_facade.go`), which copies the regular profile's
+persisted `ipn.StateStore` - node key, machine key, control-plane
+registration, everything - into a fresh per-upstream file store before the
+tsnet.Server for that upstream is ever created. `IPNService.kt`'s
+`startMultiProxyVPNLocked` does call this, but only in its loop over every
+enabled imported profile when the *whole* Multi-Tailnet session starts.
+`MultiProxySessionCoordinator.setEnabled` - the per-account Enable/Disable
+toggle used while the session is already running - never called it: on
+"tailnet not found" it fell straight to `engine.addTailnet(id,
+credentialStore.getAuthKey(id) ?: "", true)`, and for an imported profile
+that stored key is always empty, so the tsnet.Server it creates has no
+credentials at all and can only reach `NEEDS_LOGIN`.
+
+Reported live, mid-session, by the user ("when you disable and enable that
+needs login gets resolved... or when you toggle off multi and toggle on
+multi too") - both empirically true, because *only* a full session
+stop/start re-runs `startMultiProxyVPNLocked`'s prepare loop; toggling the
+single account's Enable/Disable button does not, which is exactly the
+asymmetry this fix closes.
+
+**NEW:** `MultiProxySessionCoordinator.setEnabled` (`android/.../MultiProxySessionCoordinator.kt`)
+now mirrors `startMultiProxyVPNLocked`'s special case: on the same "tailnet
+not found" fallback, if the profile has a non-null `sourceProfileId` (i.e.
+it was imported, not auth-keyed), it calls
+`Libtailscale.prepareRegularProfileForMultiProxy` first, before
+`engine.addTailnet`, so the clone happens regardless of whether this is a
+fresh session start or a mid-session re-enable.
+
+**Evidence:** `INSTRUMENTATION-OR-EMULATOR-TESTED` - reproduced the bug
+first (kurtaksi stuck at `NEEDS_LOGIN` through repeated per-account
+Disable/Enable on the running session, confirmed via `adb logcat` showing
+the unauthenticated `tsnet` login-URL message), then confirmed the
+documented workaround (stop Multi-Tailnet entirely, start it again) does
+resolve it, which pinpointed the missing call to the full-start-only code
+path. Applied the fix, then re-verified on the real emulator against the
+same live tailnet (`kurtaksi@outlook.com`), fresh debug build with the fix:
+1. Started Multi-Tailnet with kurtaksi enabled - reached `RUNNING`
+   (`Machine: mp-5cc39120c97f3fc40637664330b45931`).
+2. Tapped Disable (session stayed running, only this account stopped) then
+   Enable again, without touching "Stop Multi-Tailnet" at all - Runtime
+   went `STOPPED` -> `STARTING` -> `RUNNING` within a few seconds, same
+   machine identity reused, "Discovered Peers" populated with kurtaksi's
+   real netmap again.
+3. Repeated the Disable/Enable cycle a second time to rule out a fluke -
+   same result, `RUNNING` both times, no `NEEDS_LOGIN` at any point.
+`compileDebugKotlin` and `assembleDebug` both pass.
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.
