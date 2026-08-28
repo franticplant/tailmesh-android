@@ -3790,6 +3790,95 @@ contrast). Tapped Reconnect - both tailnets returned to `RUNNING` within
 ~8s, same machine identities. `compileDebugKotlin` and `assembleDebug` both
 pass.
 
+## 78. New report: DNS breaks and other tailnets become unreachable once an exit node is active (2026-08-28, unresolved - investigation notes only)
+
+User's report, verbatim: "with V7 even if exit node upstreaming gets workable
+despite all the crashes. app cannot do DNS resolving at all. same tailnet
+resources remains accessible and resolvable. other tailnet sources don't
+seem accessible when you select upstream.. in this case an exit node in one
+of the tailnets.."
+
+Three symptoms, once a Multi-Tailnet per-tailnet exit node (the
+`SetTailnetExitNode` picker in `MultiProxyView.kt`, not the separate
+Upstreams-registry exit-node type) is active on one tailnet:
+1. General DNS resolution stops working entirely.
+2. The exit-node tailnet's own resources (peers, MagicDNS names) keep
+   working.
+3. The *other* tailnet's resources stop being reachable.
+
+**What I ruled out by reading the code.** `SetTailnetExitNode`
+(`upstream_tailnet.go`) only calls `EditPrefs` on the one `tsnet.Server`
+belonging to the tailnet the picker was used on - each tailnet has its own
+isolated `tsnet.Server`, so this can't directly reach into another
+tailnet's server. The forwarded-DNS path (`dns.go`'s `handleDNSMsg`,
+`dialUpstreamDNS`/`plainDNSDialer`) dials out via `netns.NewDialer`, which
+bypasses every `tsnet.Server` entirely and goes straight to the device's
+real network through `VpnService.protect()` - so it shouldn't be affected
+by any tailnet's exit-node prefs either. `dns_policy.go`'s app-routed DNS
+forwarding is gated on `Engine.policy` having rules, which requires
+configuring App routing - not something this user has set up, so that path
+almost certainly isn't in play.
+
+**The one concrete lead.** `IPNService.kt` (`startMultiProxyVPNLocked`,
+around line 273-281) calls `session.applyUpstreamDNS()` immediately when
+Multi-Tailnet (re)starts, using whatever
+`NetworkChangeCallback.currentUnderlyingDnsServer()` returns *at that
+instant* - and `NetworkChangeCallback` is process-global state that resets
+to null on every fresh process. If that value is still null at the moment
+`applyUpstreamDNS()` runs (before Android has replayed the current network's
+`LinkProperties` to the freshly re-registered callback), `engine.setUpstreamDNS("")`
+gets called, which sets `Engine.upstreamDNS = ""` - and per `dns.go` line
+530-536, an empty `upstreamDNS` makes every non-synthetic DNS query return
+SERVFAIL outright, while synthetic (own-tailnet peer) names keep resolving
+locally out of `e.dnsTable`, untouched by any of this. That matches symptoms
+1 and 2 exactly. Whether this self-heals a few seconds later (once the
+network callback replay fires and calls `applyUpstreamDNS()` again for
+real) or stays stuck is what I wasn't able to confirm live. This mechanism
+is triggered by *any* Multi-Tailnet process restart, not specifically by
+setting an exit node - the connection to exit nodes is almost certainly
+indirect, via **§76**: enabling an exit node and navigating the app is
+exactly the kind of session that reproducibly triggers the memory-pressure
+crash-loop, so "exit node active" and "just restarted after a kill" are
+heavily correlated in the user's own usage, even though the DNS breakage
+itself is plausibly caused by the restart, not the exit node.
+
+I have not yet found a code-level explanation for symptom 3 (other tailnet
+unreachable) tied to exit-node state specifically. The closest related
+mechanism is `real_ip.go`'s cross-tailnet real-IP conflict resolution
+(`chooseRealIPCandidate` - Tailscale's CGNAT range is independently
+assigned per tailnet, so the same 100.x address can legitimately belong to
+peers in two different tailnets at once, and only one deterministically
+"wins" for direct real-IP connections) - but that conflict is pre-existing
+and IP-address-based, not obviously toggled by exit-node state, so I'm not
+confident it's what the user is seeing. Needs more investigation.
+
+**Why this wasn't confirmed by live reproduction.** I set up the exact
+scenario (two tailnets running under Multi-Tailnet, `akkara.com.tr` and
+`kurtaksi@outlook.com`, both `RUNNING`) and worked through Settings ->
+Upstreams -> Exit node -> select peer -> Use multiple times. Every attempt,
+including immediately after a full `adb reboot` to clear memory, the
+`com.tailscale.ipn.multiproxy` process was killed by `lowmemorykiller`
+within roughly 30-90 seconds of both tailnets coming up (confirmed in
+logcat: `device is low on swap (...) and thrashing (300%+)`, killing not
+just this app but nearly every other running app system-wide, including
+system services). This is the same crash mechanism documented in §76,
+independently reconfirmed here even right after a clean boot - this
+emulator's memory/swap budget cannot currently sustain two live tailnet
+sessions long enough to complete a clean before/after DNS test. I was not
+able to get a stable enough window to run: (a) general DNS resolution, (b)
+same-tailnet reachability, (c) other-tailnet reachability, all three before
+the process died again.
+
+**Suggested next step** (not yet done): add a `TSLog` line at the top of
+`applyUpstreamDNS()` in `IPNService.kt` logging the resolved `dohUrl` /
+`lastUnderlyingDns` / final value handed to `engine.setUpstreamDNS(...)`,
+ship a debug build with that logging to the user's real phone (which has
+enough memory to hold a Multi-Tailnet session open, unlike this emulator),
+and have them reproduce the reported sequence once with logcat running.
+That would confirm or rule out the empty-upstream-on-restart hypothesis
+directly, instead of guessing from emulator conditions that can't currently
+reproduce the held-open state the bug needs.
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.
