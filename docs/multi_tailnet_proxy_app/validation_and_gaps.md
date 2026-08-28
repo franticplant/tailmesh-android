@@ -2940,31 +2940,27 @@ SQLite's own transaction/file locking then serializes the two calls: the
 second call's `SELECT` cannot observe pre-write state once the first call's
 transaction has committed, so its merge is now correct.
 
-**Not fixed, same session:** `UpstreamRepository`'s edit-and-save path
-(`UpstreamRoutingViewModel.save()`, ~line 305) has the identical shape -
-`val existing = upstreamRepository.getImmediate(upstreamId)` reads the
-in-memory snapshot to preserve `enabled`/`createdAt` before calling
-`upstreamRepository.save()` with a full replacement row. This could race
-against `UpstreamRepository.setEnabled()` for the same upstream id (e.g. a
-background edit dialog submitted just after the upstream's enabled switch
-was toggled elsewhere), reverting the toggle. Left open rather than fixed
-this session: the trigger requires a backgrounded edit dialog plus a
-concurrent toggle on the same row, which is less likely than two adjacent
-pickers on one always-visible list row (the AppBinding case), and a correct
-fix means restructuring `UpstreamRepository.save()`'s call contract (moving
-the merge into the repository, inside a transaction, rather than pre-merging
-in the ViewModel) rather than a localized change - a bigger change than the
-remaining time budget in this session could safely make and verify. Worth
-fixing the same way in a future session.
+**Update (same day, later session):** the `UpstreamRepository` variant flagged
+above as left-open is now fixed too. Added
+`UpstreamRepository.saveConfig(id, kind, label, via)`, which reads the
+existing row's `enabled`/`createdAt` via a fresh `SELECT` inside its own
+write transaction rather than trusting a caller-supplied snapshot -
+identical shape to the `AppBindingRepository` fix above.
+`UpstreamRoutingViewModel.save()` (the private helper behind `saveSocks5`
+and `saveWireGuard`) now calls `saveConfig()` instead of pre-reading
+`getImmediate()` and constructing a full `Upstream` itself.
+`UpstreamRepository.save(Upstream)` is kept unchanged for
+[saveExitNode]-style callers that always construct a brand-new row (a
+freshly `UUID.randomUUID()`'d id) with nothing prior to preserve.
 
 **Evidence:** `./gradlew compileDebugKotlin -PtestAbi=x86_64` clean after
 the `AppBindingRepository` fix. `go test -count=1
 ./libtailscale/multiproxy/...` still passes (this is a pure Kotlin-side
-change, included as a regression sanity check). Not separately device-
-tested beyond the compile - the race window is narrow enough that it isn't
-practically reproducible via manual on-device taps in the time available;
-correctness here rests on the transaction-serialization argument above, not
-an observed repro/fix pair.
+change, included as a regression sanity check). Neither fix was separately
+device-tested beyond the compile - the race window is narrow enough that
+it isn't practically reproducible via manual on-device taps in the time
+available; correctness rests on the transaction-serialization argument
+above, not an observed repro/fix pair.
 
 ## 48. Bottom line
 
