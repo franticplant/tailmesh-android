@@ -62,6 +62,12 @@ class AppBindingRepository(context: Context) {
    * defaulting a new row's other column to empty). Both [bind] and [setDNSUpstream] go through
    * this so that setting one never silently clears the other - a plain column-keyed
    * INSERT OR REPLACE would otherwise wipe out a DNS override every time the data route changes.
+   *
+   * The "existing" read happens from the database itself, inside the same transaction as the
+   * write - not from the in-memory [_bindings] snapshot - so that two calls for the same package
+   * racing each other (bind() and setDNSUpstream() fired in quick succession) can't both read the
+   * same stale snapshot and have the second write clobber the first's change; SQLite's own
+   * transaction serialization is what actually closes that window.
    */
   private suspend fun upsert(packageName: String, apply: ContentValues.() -> Unit) =
       withContext(Dispatchers.IO) {
@@ -69,7 +75,34 @@ class AppBindingRepository(context: Context) {
         val now = System.currentTimeMillis()
         db.beginTransaction()
         try {
-          val existing = _bindings.value[packageName]
+          val existing =
+              db.query(
+                      TailnetDatabaseHelper.TABLE_APP_BINDINGS,
+                      null,
+                      "${TailnetDatabaseHelper.COL_BINDING_PACKAGE} = ?",
+                      arrayOf(packageName),
+                      null,
+                      null,
+                      null)
+                  .use { cursor ->
+                    if (!cursor.moveToFirst()) null
+                    else
+                        AppBinding(
+                            packageName = packageName,
+                            upstreamId =
+                                cursor.getString(
+                                    cursor.getColumnIndexOrThrow(
+                                        TailnetDatabaseHelper.COL_BINDING_UPSTREAM)),
+                            dnsUpstreamId =
+                                cursor.getString(
+                                    cursor.getColumnIndexOrThrow(
+                                        TailnetDatabaseHelper.COL_BINDING_DNS_UPSTREAM)),
+                            createdAt =
+                                cursor.getLong(
+                                    cursor.getColumnIndexOrThrow(
+                                        TailnetDatabaseHelper.COL_CREATED_AT)),
+                        )
+                  }
           val values =
               ContentValues().apply {
                 put(TailnetDatabaseHelper.COL_BINDING_PACKAGE, packageName)
