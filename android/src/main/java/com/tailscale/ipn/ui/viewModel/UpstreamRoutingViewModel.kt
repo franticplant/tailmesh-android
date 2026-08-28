@@ -302,19 +302,13 @@ class UpstreamRoutingViewModel : ViewModel() {
       return
     }
     viewModelScope.launch {
-      val existing = upstreamRepository.getImmediate(upstreamId)
       // The config is written first: a row with no configuration is skipped at
       // registration with a complaint, whereas an orphaned config is harmless.
       withContext(Dispatchers.IO) { secrets.saveConfig(upstreamId, configJson) }
-      upstreamRepository.save(
-          Upstream(
-              id = upstreamId,
-              kind = kind,
-              label = label.ifBlank { upstreamId },
-              via = via,
-              enabled = existing?.enabled ?: true,
-              createdAt = existing?.createdAt ?: System.currentTimeMillis(),
-          ))
+      // saveConfig (not save) so enabled/createdAt are preserved via a fresh DB read
+      // inside its own transaction, not this stale in-memory snapshot - see its doc
+      // comment for why that matters when a setUpstreamEnabled() call races this edit.
+      upstreamRepository.saveConfig(upstreamId, kind, label, via)
       applyNow()
     }
   }

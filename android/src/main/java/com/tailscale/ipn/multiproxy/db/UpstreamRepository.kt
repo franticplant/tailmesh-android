@@ -73,12 +73,70 @@ class UpstreamRepository(context: Context) {
     _upstreams.value = list
   }
 
-  /** Inserts or replaces an upstream. */
+  /**
+   * Inserts or replaces an upstream outright, exactly as given - used for upstreams the caller
+   * always constructs whole (e.g. [saveExitNode]'s freshly-`UUID.randomUUID()`'d rows, which have
+   * no prior row to preserve anything from). Editing an existing config-bearing upstream should go
+   * through [saveConfig] instead, which protects fields like `enabled` from being reverted by a
+   * concurrent write.
+   */
   suspend fun save(upstream: Upstream) =
       withContext(Dispatchers.IO) {
         val updated = upstream.copy(updatedAt = System.currentTimeMillis())
         dbHelper.writableDatabase.replaceOrThrow(
             TailnetDatabaseHelper.TABLE_UPSTREAMS, null, values(updated))
+        refresh()
+      }
+
+  /**
+   * Inserts a new config-bearing upstream (SOCKS5/WireGuard), or edits an existing one's
+   * kind/label/via - preserving its `enabled` state and original `createdAt` across the edit.
+   *
+   * The existing row is read fresh from the database, inside the same transaction as the write -
+   * not from the in-memory [_upstreams] snapshot - so a [setEnabled] call for the same id racing
+   * this edit can't have its change silently reverted by a stale-snapshot merge. Same reasoning as
+   * AppBindingRepository.upsert's doc comment.
+   */
+  suspend fun saveConfig(id: String, kind: UpstreamKind, label: String, via: String) =
+      withContext(Dispatchers.IO) {
+        val db = dbHelper.writableDatabase
+        val now = System.currentTimeMillis()
+        db.beginTransaction()
+        try {
+          val existing =
+              db.query(
+                      TailnetDatabaseHelper.TABLE_UPSTREAMS,
+                      arrayOf(TailnetDatabaseHelper.COL_ENABLED, TailnetDatabaseHelper.COL_CREATED_AT),
+                      "${TailnetDatabaseHelper.COL_UPSTREAM_ID} = ?",
+                      arrayOf(id),
+                      null,
+                      null,
+                      null)
+                  .use { cursor ->
+                    if (!cursor.moveToFirst()) null
+                    else
+                        Pair(
+                            cursor.getInt(
+                                cursor.getColumnIndexOrThrow(TailnetDatabaseHelper.COL_ENABLED)) ==
+                                1,
+                            cursor.getLong(
+                                cursor.getColumnIndexOrThrow(TailnetDatabaseHelper.COL_CREATED_AT)))
+                  }
+          val upstream =
+              Upstream(
+                  id = id,
+                  kind = kind,
+                  label = label.ifBlank { id },
+                  via = via,
+                  enabled = existing?.first ?: true,
+                  createdAt = existing?.second ?: now,
+                  updatedAt = now,
+              )
+          db.replaceOrThrow(TailnetDatabaseHelper.TABLE_UPSTREAMS, null, values(upstream))
+          db.setTransactionSuccessful()
+        } finally {
+          db.endTransaction()
+        }
         refresh()
       }
 
