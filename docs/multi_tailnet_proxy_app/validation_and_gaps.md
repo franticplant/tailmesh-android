@@ -2916,6 +2916,56 @@ different, still-unadded column) remains open - this pass only added the
 DNS column. Private DNS Strict mode characterization (the other half of
 the old gap #10) also remains open, unrelated to this UI work.
 
+## 65. Fixed: stale-snapshot race in AppBindingRepository.upsert(); same pattern noted but not fixed in UpstreamRepository (2026-08-28)
+
+**BEFORE:** `AppBindingRepository.upsert()` read the row it was merging into
+(`existing`) from the in-memory `_bindings.value` StateFlow snapshot,
+*before* opening its SQLite transaction. `bind()` and `setDNSUpstream()`
+both go through `upsert()`, so two calls for the same package fired in
+quick succession from separate `viewModelScope.launch {}` coroutines (e.g.
+tapping the data-route picker and the DNS picker for the same app in quick
+succession) could both read the same stale `existing` snapshot before
+either write landed; whichever write finished second would then overwrite
+the column it wasn't explicitly setting back to that stale value, silently
+discarding the other call's change.
+
+**WHY:** an in-memory snapshot read outside the transaction gives SQLite no
+opportunity to serialize the two read+write pairs against each other - by
+the time either write happens, both calls already have their own (possibly
+identical, possibly stale) idea of what "existing" was.
+
+**NEW:** `existing` is now read via a fresh `SELECT` against
+`dbHelper.writableDatabase` *inside* the same transaction as the write.
+SQLite's own transaction/file locking then serializes the two calls: the
+second call's `SELECT` cannot observe pre-write state once the first call's
+transaction has committed, so its merge is now correct.
+
+**Not fixed, same session:** `UpstreamRepository`'s edit-and-save path
+(`UpstreamRoutingViewModel.save()`, ~line 305) has the identical shape -
+`val existing = upstreamRepository.getImmediate(upstreamId)` reads the
+in-memory snapshot to preserve `enabled`/`createdAt` before calling
+`upstreamRepository.save()` with a full replacement row. This could race
+against `UpstreamRepository.setEnabled()` for the same upstream id (e.g. a
+background edit dialog submitted just after the upstream's enabled switch
+was toggled elsewhere), reverting the toggle. Left open rather than fixed
+this session: the trigger requires a backgrounded edit dialog plus a
+concurrent toggle on the same row, which is less likely than two adjacent
+pickers on one always-visible list row (the AppBinding case), and a correct
+fix means restructuring `UpstreamRepository.save()`'s call contract (moving
+the merge into the repository, inside a transaction, rather than pre-merging
+in the ViewModel) rather than a localized change - a bigger change than the
+remaining time budget in this session could safely make and verify. Worth
+fixing the same way in a future session.
+
+**Evidence:** `./gradlew compileDebugKotlin -PtestAbi=x86_64` clean after
+the `AppBindingRepository` fix. `go test -count=1
+./libtailscale/multiproxy/...` still passes (this is a pure Kotlin-side
+change, included as a regression sanity check). Not separately device-
+tested beyond the compile - the race window is narrow enough that it isn't
+practically reproducible via manual on-device taps in the time available;
+correctness here rests on the transaction-serialization argument above, not
+an observed repro/fix pair.
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.
