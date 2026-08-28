@@ -44,6 +44,35 @@ object NetworkChangeCallback {
     private set
   fun currentUnderlyingDnsServer(): String? = currentDnsServerStr
 
+  // snapshotIfEmpty synchronously reads the connectivity state Android
+  // already has, for the window right after monitorDnsChanges registers its
+  // callback but before that callback's first onAvailable/
+  // onLinkPropertiesChanged has actually been delivered - callback delivery
+  // is asynchronous, so on a freshly (re)started process there is a real gap
+  // where currentDnsServerStr is still null even though the device's network
+  // and DNS servers haven't changed at all. A Multi-Tailnet (re)start that
+  // lands in that gap calls applyUpstreamDNS with an empty DNS value, which
+  // sets Engine.upstreamDNS to "" and silently fails every non-tailnet DNS
+  // lookup until the callback eventually catches up (or forever, if it
+  // doesn't fire again because nothing about the network actually changes).
+  // See validation_and_gaps.md #78. This does not replace the callback -
+  // only fills the gap before its first delivery - so it's a no-op once
+  // currentDnsServerStr is already set.
+  fun snapshotIfEmpty(connectivityManager: ConnectivityManager) {
+    if (currentDnsServerStr != null) return
+    lock.withLock {
+      if (currentDnsServerStr != null) return@withLock
+      for (network in connectivityManager.allNetworks) {
+        val caps = connectivityManager.getNetworkCapabilities(network) ?: continue
+        val linkProps = connectivityManager.getLinkProperties(network) ?: continue
+        activeNetworks[network] = NetworkInfo(caps, linkProps)
+      }
+      recomputeDefaultNetworkLocked("snapshotIfEmpty")
+      val info = cachedDefaultNetworkInfo ?: return@withLock
+      currentDnsServerStr = info.linkProps.dnsServers.firstOrNull()?.hostAddress
+      TSLog.d(TAG, "snapshotIfEmpty: seeded currentDnsServerStr=$currentDnsServerStr")
+    }
+  }
 
   // monitorDnsChanges sets up a network callback to monitor changes to the
   // system's network state and update the DNS configuration when interfaces

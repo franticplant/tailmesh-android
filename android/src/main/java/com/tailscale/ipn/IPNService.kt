@@ -284,6 +284,13 @@ open class IPNService : VpnService(), libtailscale.IPNService {
           return false
       }
       
+      // Fills the race window documented in validation_and_gaps.md #78: right
+      // after a process restart, the network callback registered in
+      // App.onCreate may not have delivered its first update yet, which
+      // would otherwise make the fallback below apply an empty DNS value.
+      NetworkChangeCallback.snapshotIfEmpty(
+          app.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager)
+
       NetworkChangeCallback.currentUnderlyingDnsServer()?.let { session.onUnderlyingDnsChanged(it) }
         ?: session.applyUpstreamDNS()
 
