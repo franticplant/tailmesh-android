@@ -82,6 +82,15 @@ class MultiProxySession(val app: App) {
         val dohUrl = app.decryptFromPref(
             com.tailscale.ipn.ui.viewModel.DNSSettingsViewModel.PUBLIC_DOH_URL_KEY,
         )?.trim().orEmpty()
+        val resolved = if (dohUrl.isNotEmpty()) dohUrl else lastUnderlyingDns
+        // Diagnostic for validation_and_gaps.md #78: this can run with
+        // lastUnderlyingDns still empty right after a restart, if it runs
+        // before NetworkChangeCallback has replayed the current network's
+        // LinkProperties to the freshly re-registered callback - which would
+        // leave general (non-tailnet) DNS broken until/unless something
+        // calls this again with a real value. This line makes that visible
+        // in logcat instead of having to infer it.
+        TSLog.d("MultiProxySession", "applyUpstreamDNS: dohUrl='$dohUrl' lastUnderlyingDns='$lastUnderlyingDns' -> resolved='$resolved' engine=${engine != null}")
         // Always hand the underlying resolver over as well, even when a DoH URL
         // wins below: the engine needs a non-synthetic resolver to look up the
         // DoH server's own hostname, which it cannot ask our own DNS server to
@@ -89,7 +98,7 @@ class MultiProxySession(val app: App) {
         if (lastUnderlyingDns.isNotEmpty()) {
             engine?.setBootstrapDNS(lastUnderlyingDns)
         }
-        engine?.setUpstreamDNS(if (dohUrl.isNotEmpty()) dohUrl else lastUnderlyingDns)
+        engine?.setUpstreamDNS(resolved)
     }
 
 
