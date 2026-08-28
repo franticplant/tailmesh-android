@@ -324,6 +324,7 @@ fun UpstreamPickerRow(
     unsetLabel: String,
     candidates: List<RoutableUpstream>,
     onSelect: (String) -> Unit,
+    buttonFormatRes: Int = R.string.route_via,
 ) {
   var expanded by remember { mutableStateOf(false) }
   val selected = candidates.firstOrNull { it.id == selectedId }
@@ -350,7 +351,7 @@ fun UpstreamPickerRow(
                 else -> selected.label
               }
           TextButton(onClick = { expanded = true }) {
-            Text(stringResource(R.string.route_via, label))
+            Text(stringResource(buttonFormatRes, label))
           }
           DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(

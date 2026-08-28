@@ -70,6 +70,10 @@ data class Upstream(
 data class AppBinding(
     val packageName: String,
     val upstreamId: String,
+    // Splits where this app's DNS lookups go from where its data goes; empty
+    // means "same as upstreamId", today's auto-follow behaviour. Only takes
+    // effect alongside a non-empty upstreamId - see COL_BINDING_DNS_UPSTREAM.
+    val dnsUpstreamId: String = "",
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
 )

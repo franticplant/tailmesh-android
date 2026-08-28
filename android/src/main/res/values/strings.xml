@@ -441,6 +441,9 @@
 
     <string name="app_routing">App routing</string>
     <string name="app_routing_explanation">Choose which upstream each app\'s traffic takes. This is separate from split tunneling, which decides whether an app uses the VPN at all.</string>
+    <string name="app_dns_title">DNS</string>
+    <string name="app_dns_via">DNS via: %1$s</string>
+    <string name="app_dns_unset">Same as route</string>
     <string name="count_bound_apps">%1$s of %2$s apps routed explicitly</string>
     <string name="unbound_apps">Apps with no route of their own</string>
     <string name="app_routing_subtitle">Send specific apps through a proxy, tunnel, or Tailnet</string>

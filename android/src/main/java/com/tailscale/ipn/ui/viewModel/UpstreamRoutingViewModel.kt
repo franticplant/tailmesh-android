@@ -63,8 +63,8 @@ class UpstreamRoutingViewModel : ViewModel() {
   /** The user's configured non-Tailnet upstreams. */
   val upstreams: StateFlow<List<Upstream>> = upstreamRepository.upstreams
 
-  /** Package name to upstream id, for apps the user has explicitly bound. */
-  val bindings: StateFlow<Map<String, String>> = bindingRepository.bindings
+  /** Package name to its full binding (upstream id and DNS override), for bound apps. */
+  val bindings: StateFlow<Map<String, AppBinding>> = bindingRepository.bindings
 
   val defaultUpstreamId: MutableStateFlow<String> = MutableStateFlow(settings.defaultUpstreamId)
 
@@ -403,8 +403,19 @@ class UpstreamRoutingViewModel : ViewModel() {
     }
   }
 
-  fun bindingFor(packageName: String): AppBinding? =
-      bindingRepository.getAllImmediate()[packageName]?.let { AppBinding(packageName, it) }
+  /**
+   * Sets (or, with an empty id, clears) one app's DNS override, independent of its data route.
+   * Only takes effect once the app also has a non-empty upstream binding - see
+   * AppBindingRepository.setDNSUpstream's doc comment.
+   */
+  fun setAppDNSUpstream(packageName: String, dnsUpstreamId: String) {
+    viewModelScope.launch {
+      bindingRepository.setDNSUpstream(packageName, dnsUpstreamId)
+      applyNow()
+    }
+  }
+
+  fun bindingFor(packageName: String): AppBinding? = bindingRepository.getAllImmediate()[packageName]
 
   /**
    * Pushes the current configuration into the running engine, if there is one.

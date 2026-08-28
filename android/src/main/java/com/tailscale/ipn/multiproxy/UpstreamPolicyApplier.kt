@@ -159,7 +159,7 @@ class UpstreamPolicyApplier(
    */
   private fun applyPolicy(engine: MultiProxyEngine) {
     val entries = JSONArray()
-    for ((packageName, upstreamId) in bindings.getAllImmediate()) {
+    for ((packageName, binding) in bindings.getAllImmediate()) {
       val uid =
           try {
             packageManager.getPackageUid(packageName, 0)
@@ -167,7 +167,11 @@ class UpstreamPolicyApplier(
             TSLog.d(TAG, "binding for $packageName ignored; package is not installed")
             continue
           }
-      entries.put(JSONObject().put("appUid", uid).put("upstream", upstreamId))
+      entries.put(
+          JSONObject()
+              .put("appUid", uid)
+              .put("upstream", binding.upstreamId)
+              .put("dnsUpstream", binding.dnsUpstreamId))
     }
 
     // Broad capture (RoutingSettings.broadCaptureEnabled) hands the engine

@@ -2860,6 +2860,62 @@ remains intentional, unchanged, and out of scope here.
 No Go-side change, no new Go test needed - this is Kotlin state-management
 logic with no engine behavior change.
 
+## 64. Added: per-app DNS/data-path split UI (2026-08-28)
+
+Closes the UI half of gap #10 (`upstreams_and_policy.md`). `CURRENT CODE`
+already fully supported this at the Go layer before this pass -
+`multiproxy.Rule.DNSUpstream` and `BuildAppBindingPolicyJSON`'s per-binding
+`dnsUpstream` field were implemented and `UNIT-TESTED` as part of §55's DNS
+versatility work - but only the default-route DNS picker ("DNS for unbound
+apps") had a UI. Per-app DNS override required a Kotlin schema change to
+`AppBinding` that both gap #9 and gap #10 already flagged as the blocker,
+so this pass added it:
+
+- `TailnetDatabaseHelper.kt`: bumped `DATABASE_VERSION` to 5, added
+  `dns_upstream_id` to `app_bindings`. Learned last night's exact lesson
+  (§60-era DB migration bug) proactively this time: froze the pre-v5 shape
+  as `CREATE_APP_BINDINGS_V3` for the v3 migration branch, since
+  `CREATE_APP_BINDINGS` (shared with `onCreate`) now reflects the current
+  schema and would otherwise collide with the v5 branch's `ALTER TABLE ADD
+  COLUMN` on a v2-straight-to-v5 upgrade.
+- `AppBindingRepository.kt`: rewritten to store full `AppBinding` rows
+  (not bare upstream-id strings), with a single `upsert()` helper shared by
+  `bind()` and the new `setDNSUpstream()` that always re-reads and
+  preserves whichever column it isn't writing - a naive `INSERT OR REPLACE`
+  keyed only on the changed column would otherwise silently wipe the other
+  choice every time either one changed.
+- `UpstreamPolicyApplier.kt`: `applyPolicy` now emits `dnsUpstream` per
+  binding entry.
+- `AppRoutingView.kt`: a second `UpstreamPickerRow` per bound app, shown
+  only when that app already has a non-empty data-route binding, matching
+  `BuildAppBindingPolicyJSON`'s existing behavior of skipping a binding
+  rule entirely when `upstream` is empty (verified in
+  `multiproxy_policy_facade.go` before designing the UI around it, rather
+  than assumed).
+
+**Evidence:** `./gradlew compileDebugKotlin -PtestAbi=x86_64` clean.
+DB migration verified both ways via on-device `sqlite3`
+(`adb shell run-as com.tailscale.ipn.multiproxy`), matching the
+methodology established for the earlier `upstreams` table bug: confirmed
+a v3-shape `app_bindings` table plus the v5 `ALTER TABLE ADD COLUMN`
+succeeds cleanly with the correct final schema, and separately confirmed
+the naive shared-constant approach really does fail with "duplicate
+column name" - so the fix is proven necessary, not just assumed by
+analogy. `INSTRUMENTATION-OR-EMULATOR-TESTED` on the x86_64 emulator
+build: bound an app to a SOCKS5 upstream, confirmed the DNS picker
+appeared showing "Same as route"; set the DNS override to "Direct" and
+confirmed it persisted and displayed correctly without disturbing the
+data-route binding; changed the data route to "Direct" afterward and
+confirmed the DNS override survived that change too (the preserve-the-
+other-column upsert logic verified in both directions, not just one);
+unbound the app and confirmed the DNS row correctly disappeared. No
+crashes in logcat across the flow.
+
+**Not yet closed:** the per-app *LAN* override gap #9 already flags (a
+different, still-unadded column) remains open - this pass only added the
+DNS column. Private DNS Strict mode characterization (the other half of
+the old gap #10) also remains open, unrelated to this UI work.
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.

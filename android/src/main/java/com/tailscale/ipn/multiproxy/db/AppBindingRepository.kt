@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 
 /**
- * Stores which upstream each app's traffic should take.
+ * Stores which upstream each app's traffic - and, optionally, its DNS lookups - should take.
  *
  * A missing binding is not "no upstream" - it means the app is unbound and routed by whatever the
  * default is, which is today's behaviour. Only an explicit binding changes anything, so an app the
@@ -20,17 +20,17 @@ import kotlinx.coroutines.withContext
  */
 class AppBindingRepository(context: Context) {
   private val dbHelper = TailnetDatabaseHelper(context)
-  private val _bindings = MutableStateFlow<Map<String, String>>(emptyMap())
+  private val _bindings = MutableStateFlow<Map<String, AppBinding>>(emptyMap())
 
-  /** Package name to upstream id, for every app the user has explicitly bound. */
-  val bindings: StateFlow<Map<String, String>> = _bindings.asStateFlow()
+  /** Package name to its full binding, for every app the user has explicitly bound. */
+  val bindings: StateFlow<Map<String, AppBinding>> = _bindings.asStateFlow()
 
   init {
     refresh()
   }
 
   private fun refresh() {
-    val map = mutableMapOf<String, String>()
+    val map = mutableMapOf<String, AppBinding>()
     dbHelper.readableDatabase
         .query(TailnetDatabaseHelper.TABLE_APP_BINDINGS, null, null, null, null, null, null)
         .use { cursor ->
@@ -38,30 +38,69 @@ class AppBindingRepository(context: Context) {
               cursor.getColumnIndexOrThrow(TailnetDatabaseHelper.COL_BINDING_PACKAGE)
           val upstreamIndex =
               cursor.getColumnIndexOrThrow(TailnetDatabaseHelper.COL_BINDING_UPSTREAM)
+          val dnsUpstreamIndex =
+              cursor.getColumnIndexOrThrow(TailnetDatabaseHelper.COL_BINDING_DNS_UPSTREAM)
+          val createdIndex = cursor.getColumnIndexOrThrow(TailnetDatabaseHelper.COL_CREATED_AT)
+          val updatedIndex = cursor.getColumnIndexOrThrow(TailnetDatabaseHelper.COL_UPDATED_AT)
           while (cursor.moveToNext()) {
-            map[cursor.getString(packageIndex)] = cursor.getString(upstreamIndex)
+            val packageName = cursor.getString(packageIndex)
+            map[packageName] =
+                AppBinding(
+                    packageName = packageName,
+                    upstreamId = cursor.getString(upstreamIndex),
+                    dnsUpstreamId = cursor.getString(dnsUpstreamIndex),
+                    createdAt = cursor.getLong(createdIndex),
+                    updatedAt = cursor.getLong(updatedIndex),
+                )
           }
         }
     _bindings.value = map
   }
 
-  /** Binds an app to an upstream, replacing any existing binding for it. */
-  suspend fun bind(packageName: String, upstreamId: String) =
+  /**
+   * Writes one column of a package's binding row, preserving whatever else is already there (or
+   * defaulting a new row's other column to empty). Both [bind] and [setDNSUpstream] go through
+   * this so that setting one never silently clears the other - a plain column-keyed
+   * INSERT OR REPLACE would otherwise wipe out a DNS override every time the data route changes.
+   */
+  private suspend fun upsert(packageName: String, apply: ContentValues.() -> Unit) =
       withContext(Dispatchers.IO) {
+        val db = dbHelper.writableDatabase
         val now = System.currentTimeMillis()
-        dbHelper.writableDatabase.replaceOrThrow(
-            TailnetDatabaseHelper.TABLE_APP_BINDINGS,
-            null,
-            ContentValues().apply {
-              put(TailnetDatabaseHelper.COL_BINDING_PACKAGE, packageName)
-              put(TailnetDatabaseHelper.COL_BINDING_UPSTREAM, upstreamId)
-              put(TailnetDatabaseHelper.COL_CREATED_AT, now)
-              put(TailnetDatabaseHelper.COL_UPDATED_AT, now)
-            })
+        db.beginTransaction()
+        try {
+          val existing = _bindings.value[packageName]
+          val values =
+              ContentValues().apply {
+                put(TailnetDatabaseHelper.COL_BINDING_PACKAGE, packageName)
+                put(TailnetDatabaseHelper.COL_BINDING_UPSTREAM, existing?.upstreamId ?: "")
+                put(TailnetDatabaseHelper.COL_BINDING_DNS_UPSTREAM, existing?.dnsUpstreamId ?: "")
+                put(TailnetDatabaseHelper.COL_CREATED_AT, existing?.createdAt ?: now)
+                put(TailnetDatabaseHelper.COL_UPDATED_AT, now)
+              }
+          values.apply()
+          db.replaceOrThrow(TailnetDatabaseHelper.TABLE_APP_BINDINGS, null, values)
+          db.setTransactionSuccessful()
+        } finally {
+          db.endTransaction()
+        }
         refresh()
       }
 
-  /** Removes an app's binding, returning it to the default route. */
+  /** Binds an app to an upstream, preserving any DNS override already set for it. */
+  suspend fun bind(packageName: String, upstreamId: String) =
+      upsert(packageName) { put(TailnetDatabaseHelper.COL_BINDING_UPSTREAM, upstreamId) }
+
+  /**
+   * Sets (or, with an empty id, clears) an app's DNS override, independent of its data route.
+   * Only takes effect while the app also has a non-empty upstream binding - see
+   * COL_BINDING_DNS_UPSTREAM's doc comment - but is stored regardless, so choosing a data route
+   * later picks the override back up rather than requiring it to be re-entered.
+   */
+  suspend fun setDNSUpstream(packageName: String, dnsUpstreamId: String) =
+      upsert(packageName) { put(TailnetDatabaseHelper.COL_BINDING_DNS_UPSTREAM, dnsUpstreamId) }
+
+  /** Removes an app's binding entirely - both its data route and any DNS override. */
   suspend fun unbind(packageName: String) =
       withContext(Dispatchers.IO) {
         dbHelper.writableDatabase.delete(
@@ -71,5 +110,5 @@ class AppBindingRepository(context: Context) {
         refresh()
       }
 
-  fun getAllImmediate(): Map<String, String> = _bindings.value
+  fun getAllImmediate(): Map<String, AppBinding> = _bindings.value
 }

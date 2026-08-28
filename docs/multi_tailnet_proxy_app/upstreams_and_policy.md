@@ -854,13 +854,21 @@ correctness bug, not a behaviour change.
    **global** on/off, not the per-app override ("still tunnel LAN traffic
    for this one app") the original plan described - that needs a schema
    change to `AppBinding` and was scoped out of this pass.
-10. **DNS/data split has no per-app UI yet; Private DNS Strict mode remains
-    uncharacterized (Off/Automatic are now confirmed).**
+10. ~~DNS/data split has no per-app UI yet~~ **Closed** - see
+    `validation_and_gaps.md` §64. `AppBinding` gained a `dnsUpstreamId`
+    column (the schema change this gap and gap 9 both pointed at), and
+    `AppRoutingView` now shows a second picker per bound app ("DNS via: ...")
+    beneath its data-route picker, shown only once the app has a non-empty
+    data route - `BuildAppBindingPolicyJSON` skips a binding rule entirely
+    when `upstream` is empty, so a DNS-only override with no data route has
+    nothing to attach to, and the UI now reflects that constraint rather
+    than offering a picker that would silently do nothing.
+    **Private DNS Strict mode remains uncharacterized** (Off/Automatic are
+    confirmed) - that half of this gap is still open.
     `validation_and_gaps.md` §55: `Rule.DNSUpstream` and
     `BuildAppBindingPolicyJSON`'s per-binding `dnsUpstream` are implemented
     and `UNIT-TESTED`; only the **default-route** picker ("DNS for unbound
-    apps") shipped a UI, `INSTRUMENTATION-OR-EMULATOR-TESTED`. A per-app
-    picker needs the same `AppBinding` schema change gap 9 already flags.
+    apps") had shipped a UI before this pass, `INSTRUMENTATION-OR-EMULATOR-TESTED`.
     Separately, `validation_and_gaps.md` §57.2 device-tested Android's three
     Private DNS modes against the synthetic resolver: Off and Automatic
     both confirmed working (fresh MagicDNS names resolved correctly in

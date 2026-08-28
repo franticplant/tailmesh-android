@@ -7,7 +7,7 @@ import android.database.sqlite.SQLiteOpenHelper
 class TailnetDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
     companion object {
         const val DATABASE_NAME = "multiproxy_profiles.db"
-        const val DATABASE_VERSION = 4
+        const val DATABASE_VERSION = 5
         const val TABLE_PROFILES = "profiles"
         const val COL_ID = "id"
         const val COL_DISPLAY_NAME = "display_name"
@@ -43,6 +43,13 @@ class TailnetDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABA
         const val TABLE_APP_BINDINGS = "app_bindings"
         const val COL_BINDING_PACKAGE = "package_name"
         const val COL_BINDING_UPSTREAM = "upstream_id"
+        // Splits where this app's DNS lookups go from where its data goes
+        // (multiproxy.Rule.DNSUpstream); empty means "same as upstream_id",
+        // today's auto-follow behaviour. Only meaningful alongside a non-empty
+        // upstream_id - BuildAppBindingPolicyJSON skips a binding row entirely
+        // when upstream_id is empty, so a DNS-only override with no data route
+        // has no rule to attach to.
+        const val COL_BINDING_DNS_UPSTREAM = "dns_upstream_id"
 
         private const val CREATE_UPSTREAMS = """
             CREATE TABLE IF NOT EXISTS $TABLE_UPSTREAMS (
@@ -78,6 +85,21 @@ class TailnetDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABA
         """
 
         private const val CREATE_APP_BINDINGS = """
+            CREATE TABLE IF NOT EXISTS $TABLE_APP_BINDINGS (
+                $COL_BINDING_PACKAGE TEXT PRIMARY KEY,
+                $COL_BINDING_UPSTREAM TEXT NOT NULL,
+                $COL_BINDING_DNS_UPSTREAM TEXT NOT NULL DEFAULT '',
+                $COL_CREATED_AT INTEGER NOT NULL,
+                $COL_UPDATED_AT INTEGER NOT NULL
+            )
+        """
+
+        // The v3 migration's original app_bindings shape, frozen without the
+        // dns_upstream_id column the v5 migration below adds - same reasoning
+        // as CREATE_UPSTREAMS_V3: onUpgrade can run the v3 and v5 branches in
+        // the same call, and CREATE_APP_BINDINGS above now reflects the
+        // current (v5+) schema, so the v3 branch must not share it.
+        private const val CREATE_APP_BINDINGS_V3 = """
             CREATE TABLE IF NOT EXISTS $TABLE_APP_BINDINGS (
                 $COL_BINDING_PACKAGE TEXT PRIMARY KEY,
                 $COL_BINDING_UPSTREAM TEXT NOT NULL,
@@ -131,7 +153,7 @@ class TailnetDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABA
             db.beginTransaction()
             try {
                 db.execSQL(CREATE_UPSTREAMS_V3.trimIndent())
-                db.execSQL(CREATE_APP_BINDINGS.trimIndent())
+                db.execSQL(CREATE_APP_BINDINGS_V3.trimIndent())
                 db.setTransactionSuccessful()
             } finally {
                 db.endTransaction()
@@ -145,6 +167,17 @@ class TailnetDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABA
             try {
                 db.execSQL("ALTER TABLE $TABLE_UPSTREAMS ADD COLUMN $COL_UPSTREAM_SOURCE_TAILNET TEXT NOT NULL DEFAULT ''")
                 db.execSQL("ALTER TABLE $TABLE_UPSTREAMS ADD COLUMN $COL_UPSTREAM_PEER_ADDR TEXT NOT NULL DEFAULT ''")
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
+        }
+        if (oldVersion < 5) {
+            // Adds the per-app DNS/data split column; every existing binding
+            // gets '' (follow the data route, today's behaviour).
+            db.beginTransaction()
+            try {
+                db.execSQL("ALTER TABLE $TABLE_APP_BINDINGS ADD COLUMN $COL_BINDING_DNS_UPSTREAM TEXT NOT NULL DEFAULT ''")
                 db.setTransactionSuccessful()
             } finally {
                 db.endTransaction()

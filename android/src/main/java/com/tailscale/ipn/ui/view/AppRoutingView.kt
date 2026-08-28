@@ -79,6 +79,7 @@ fun AppRoutingView(
         }
       } else {
         items(installedApps, key = { it.packageName }) { app ->
+          val binding = bindings[app.packageName]
           ListItem(
               headlineContent = { Text(app.name) },
               leadingContent = {
@@ -96,7 +97,7 @@ fun AppRoutingView(
           UpstreamPickerRow(
               title = app.packageName,
               subtitle = null,
-              selectedId = bindings[app.packageName].orEmpty(),
+              selectedId = binding?.upstreamId.orEmpty(),
               // Unbinding is spelled as "follow the default" because that is what
               // it does; "none" would read as "no network".
               unsetLabel = stringResource(R.string.route_default, defaultLabel),
@@ -106,6 +107,20 @@ fun AppRoutingView(
                 else model.bindApp(app.packageName, id)
               },
           )
+          // Only meaningful once the app has an explicit data route: the engine
+          // has nothing to attach a DNS-only override to otherwise (see
+          // AppBindingRepository.setDNSUpstream's doc comment).
+          if (!binding?.upstreamId.isNullOrEmpty()) {
+            UpstreamPickerRow(
+                title = stringResource(R.string.app_dns_title),
+                subtitle = null,
+                selectedId = binding?.dnsUpstreamId.orEmpty(),
+                unsetLabel = stringResource(R.string.app_dns_unset),
+                candidates = routable,
+                onSelect = { id -> model.setAppDNSUpstream(app.packageName, id) },
+                buttonFormatRes = R.string.app_dns_via,
+            )
+          }
           Lists.ItemDivider()
         }
       }
