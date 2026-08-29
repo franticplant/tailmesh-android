@@ -1,188 +1,156 @@
 ## 1. Tailmesh
 
-Tailmesh is an independent Android networking client built around one constraint:
+Tailmesh is primarily an Android client for using **multiple independent Tailscale networks at the same time through Android's single VPN interface** — even when those networks reuse the same IP addresses or hostnames.
 
-**Android gives a VPN application one `VpnService` / TUN file descriptor, while a useful networking client may need several independent tunnel and proxy upstreams active at the same time.**
+Two Tailnets can both contain `100.80.10.20`, or both have a host named `server`, and both remain reachable concurrently. Tailmesh preserves which private network each destination belongs to instead of forcing the user to disconnect from one network to reach the other.
 
-Tailmesh keeps that single Android VPN interface and moves the multiplicity behind it. Traffic entering the TUN is terminated in a gVisor userspace network stack, classified as individual TCP/UDP flows, and then re-originated through the appropriate upstream.
+Normal Internet traffic is separate from that private-network reachability. Different applications can independently use WireGuard, SOCKS5, a Tailscale exit node, or the device's direct network path while all enabled Tailnets remain reachable.
 
 ```mermaid
 flowchart TB
     APPS["Android applications"]
+    VPN["One Android VPN interface"]
+    ROUTER["Tailmesh userspace routing"]
 
-    FD["One VpnService<br/>one TUN file descriptor"]
+    TA["Tailnet A<br/>enabled + reachable"]
+    TB["Tailnet B<br/>enabled + reachable"]
+    TC["Tailnet C<br/>enabled + reachable"]
 
-    STACK["gVisor userspace network stack"]
+    WG["WireGuard upstream"]
+    SOCKS["SOCKS5 upstream"]
+    EXIT["Tailscale exit-node upstream"]
+    DIRECT["Direct network"]
 
+    APPS --> VPN
+    VPN --> ROUTER
+
+    ROUTER --> TA
+    ROUTER --> TB
+    ROUTER --> TC
+
+    ROUTER --> WG
+    ROUTER --> SOCKS
+    ROUTER --> EXIT
+    ROUTER --> DIRECT
+```
+
+Tailmesh is **not switching the whole device between VPNs**. Several private Tailscale networks can stay active together, while the egress path for ordinary traffic is chosen independently.
+
+## 2. Per-application routing
+
+General traffic can be routed per application and per flow.
+
+```mermaid
+flowchart LR
+    FIREFOX["Firefox"]
+    TELEGRAM["Telegram"]
+    OTHER["Another app"]
+
+    POLICY["Tailmesh routing policy"]
+
+    WG["WireGuard"]
+    SOCKS["SOCKS5"]
+    DIRECT["Direct"]
+
+    FIREFOX --> POLICY
+    TELEGRAM --> POLICY
+    OTHER --> POLICY
+
+    POLICY -->|"Firefox Internet traffic"| WG
+    POLICY -->|"Telegram Internet traffic"| SOCKS
+    POLICY -->|"Other Internet traffic"| DIRECT
+```
+
+That does **not** remove private-network access. The same application can still reach peers in every enabled Tailnet:
+
+```text
+Firefox
+  +-- Tailnet A peer  -> Tailnet A
+  +-- Tailnet B peer  -> Tailnet B
+  +-- Tailnet C peer  -> Tailnet C
+  `-- Internet        -> WireGuard
+
+Telegram
+  +-- Tailnet A peer  -> Tailnet A
+  +-- Tailnet B peer  -> Tailnet B
+  `-- Internet        -> SOCKS5
+
+Another app
+  `-- Internet        -> direct
+```
+
+Routing policy can match the originating Android app/UID, destination, port, and protocol, then route through a selected upstream, route directly, or block the flow.
+
+## 3. Overlapping Tailnets stay distinct
+
+Independent Tailnets can legitimately reuse the same native addresses and hostnames:
+
+```mermaid
+flowchart LR
+    TA["Tailnet A<br/>server<br/>100.80.10.20"]
+    TB["Tailnet B<br/>server<br/>100.80.10.20"]
+
+    SA["Tailnet-qualified target A"]
+    SB["Tailnet-qualified target B"]
+
+    RA["Tailnet A runtime"]
+    RB["Tailnet B runtime"]
+
+    TA --> SA --> RA
+    TB --> SB --> RB
+```
+
+Native IP alone is therefore not enough to identify the intended destination. Tailmesh gives peers Tailnet-qualified synthetic identities so the destination carries both **which peer?** and **through which Tailnet?** The peer's current native Tailscale address is then used as a locator when the connection is opened.
+
+Unknown synthetic destinations fail closed rather than being guessed into another network.
+
+## 4. Tailnets and upstreams are separate
+
+Tailnets are private networks that remain reachable while enabled.
+
+Upstreams are paths used to carry other traffic. Current upstream types include:
+
+- WireGuard
+- SOCKS5
+- Tailscale exit-node based egress
+- direct device networking
+
+Upstreams can also be chained, allowing one transport to be reached through another.
+
+This separation is what lets Tailmesh keep several Tailnets available while independently deciding how each application's ordinary traffic should leave the device.
+
+## 5. How it works
+
+Android gives a VPN application one `VpnService` / TUN file descriptor. Tailmesh uses that single FD as the ingress to a gVisor userspace TCP/IP stack, then multiplexes TCP/UDP flows across the required private-network runtime or selected general-traffic upstream.
+
+```mermaid
+flowchart TB
+    APPS["Android applications"]
+    FD["One VpnService<br/>one TUN FD"]
+    STACK["gVisor userspace TCP/IP stack"]
     FLOW["Flow classification<br/>app UID + destination + port + protocol"]
 
     APPS --> FD
     FD <--> STACK
     STACK --> FLOW
 
-    FLOW --> TA["Tailnet A<br/>tsnet.Server"]
-    FLOW --> TB["Tailnet B<br/>tsnet.Server"]
-    FLOW --> TC["Tailnet C<br/>tsnet.Server"]
+    FLOW -->|"Tailnet target"| TA["Required tsnet.Server"]
+    FLOW -->|"General traffic"| POLICY["Per-flow policy"]
 
-    FLOW --> WG["WireGuard upstream"]
-    FLOW --> SOCKS["SOCKS5 upstream"]
-    FLOW --> DIRECT["Direct path"]
+    POLICY --> WG["WireGuard"]
+    POLICY --> SOCKS["SOCKS5"]
+    POLICY --> EXIT["Exit node"]
+    POLICY --> DIRECT["Direct"]
 ```
 
-This means the application is not switching the whole Android VPN between tunnels.
+TCP and UDP flows are terminated in userspace and re-originated through the selected path. Upstream sockets are protected from the Android VPN so their own transport traffic does not recursively re-enter the TUN.
 
-Multiple Tailnets can remain connected and reachable concurrently, while ordinary application traffic can independently use another configured upstream.
+The Android application and Go/Gomobile engine implement the multi-network datapath, with a separately maintained patched Tailscale core providing the Tailscale integration required by the client.
 
-For example:
+Detailed engineering documentation starts at [`docs/multi_tailnet_proxy_app/README.md`](docs/multi_tailnet_proxy_app/README.md).
 
-```text
-Firefox
-  +-- work.tailnet peer  -> Tailnet A
-  +-- home.tailnet peer  -> Tailnet B
-  `-- general Internet   -> WireGuard upstream
+## 6. Project origin
 
-Telegram
-  +-- work.tailnet peer  -> Tailnet A
-  `-- general Internet   -> SOCKS5 upstream
+Tailmesh is derived from the BSD-3-Clause [Tailscale Android client](https://github.com/tailscale/tailscale-android) and builds against a separately maintained patched checkout of the BSD-3-Clause [`tailscale.com` core](https://github.com/tailscale/tailscale).
 
-Another app
-  `-- general Internet   -> direct
-```
-
-The Tailnet routes are destination-specific and remain available regardless of the selected general-traffic upstream.
-
-## 2. Multi-upstream routing
-
-Tailmesh treats an upstream as a dialable path rather than assuming the VPN has one global tunnel.
-
-Current upstream types include:
-
-- independent Tailnet runtimes backed by `tsnet.Server`
-- userspace WireGuard tunnels
-- SOCKS5 proxies
-- the device's direct network path
-- Tailnet exit-node based upstreams
-
-Upstreams can also be chained, allowing one transport to be reached through another.
-
-For ordinary Internet and LAN traffic, routing can be selected per application and per flow.
-
-The policy engine can match:
-
-```text
-originating Android app / UID
-destination address
-destination port
-protocol
-```
-
-and choose:
-
-```text
-route through upstream X
-route directly
-block
-```
-
-Conceptually:
-
-```mermaid
-flowchart LR
-    FLOW["Captured flow"]
-
-    META["App UID<br/>Destination<br/>Port<br/>Protocol"]
-
-    POLICY["Routing policy"]
-
-    U1["WireGuard"]
-    U2["SOCKS5"]
-    U3["Tailnet exit node"]
-    U4["Direct"]
-    BLOCK["Block"]
-
-    FLOW --> META
-    META --> POLICY
-
-    POLICY --> U1
-    POLICY --> U2
-    POLICY --> U3
-    POLICY --> U4
-    POLICY --> BLOCK
-```
-
-The important distinction is that this policy does **not** replace Tailnet connectivity.
-
-A flow addressed to a known Tailnet target is routed through the corresponding Tailnet runtime. A flow to the general Internet can separately be routed according to application policy.
-
-## 3. Multiple Tailnets behind one TUN
-
-Keeping several Tailnets connected simultaneously introduces another problem: their address spaces are independent.
-
-Two Tailnets can legitimately contain:
-
-```text
-Tailnet A
-  server -> 100.80.10.20
-
-Tailnet B
-  server -> 100.80.10.20
-```
-
-The native IP alone therefore cannot identify which network the application intended.
-
-Tailmesh assigns Tailnet-qualified synthetic identities to peers. The synthetic destination identifies both the peer and the required Tailnet runtime.
-
-```mermaid
-flowchart LR
-    A["Tailnet A<br/>100.80.10.20"]
-    B["Tailnet B<br/>100.80.10.20"]
-
-    SA["Synthetic target A"]
-    SB["Synthetic target B"]
-
-    RA["tsnet.Server A"]
-    RB["tsnet.Server B"]
-
-    A --> SA --> RA
-    B --> SB --> RB
-```
-
-The synthetic address is a routing identity, not the peer's actual Tailscale address.
-
-The engine resolves that stable identity to the peer's current native Tailscale locator when establishing the connection.
-
-This lets several otherwise-colliding Tailnet namespaces coexist behind the same Android TUN.
-
-## 4. Datapath
-
-At a high level:
-
-```text
-Android application
-        |
-        v
-single VpnService TUN FD
-        |
-        v
-gVisor userspace TCP/IP stack
-        |
-        +--> Tailnet destination
-        |       |
-        |       `--> required tsnet.Server
-        |
-        `--> ordinary traffic
-                |
-                v
-          per-flow policy
-                |
-        +-------+-------+---------+
-        |       |       |         |
-        v       v       v         v
-       WG     SOCKS5  exit node  direct
-```
-
-TCP and UDP flows are terminated in userspace and re-originated through the selected upstream. Upstream sockets are protected from the Android VPN so their own transport traffic does not recursively re-enter the TUN.
-
-The Android application, Go/Gomobile networking engine, and patched Tailscale core together implement this datapath.
-
-The detailed architecture and implementation documentation starts at [`docs/multi_tailnet_proxy_app/README.md`](docs/multi_tailnet_proxy_app/README.md).
+**Tailmesh is not affiliated with, sponsored by, or endorsed by Tailscale Inc.** Tailscale is a trademark of Tailscale Inc. WireGuard is a registered trademark of Jason A. Donenfeld.
