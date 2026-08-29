@@ -64,9 +64,32 @@ func (e *Engine) resolveAppUID(protocol string, src, dst netip.AddrPort) int32 {
 	}
 
 	for attempt := 0; attempt < uidResolveMaxAttempts; attempt++ {
-		if uid := e.resolveAppUIDOnce(r, protocol, src, dst); uid != UnknownAppUID {
+		uid := e.resolveAppUIDOnce(r, protocol, src, dst)
+		if uid == UnknownAppUID {
+			continue
+		}
+		// A successful lookup is corroborated with one more immediate call
+		// for the same 5-tuple before it's trusted. getConnectionOwnerUid
+		// answers from the OS's live connection table, which can move on
+		// between one lookup and the next - most commonly a short-lived UDP
+		// DNS socket (the same "send-and-close" pattern the retry above
+		// exists for) closing and its local port being reused by a
+		// *different* app before this flow's own attribution finishes. The
+		// retry loop was making that race worse, not better: the longer
+		// attribution takes to succeed, the more time a reused port has had
+		// to change owners, and a UID-scoped policy would then route (or,
+		// for DNS, forward) this flow under the wrong app's rule - not a
+		// failure, a misattribution. Two calls for the same 5-tuple agreeing
+		// is a far smaller window for that than trusting one call after
+		// possibly waiting through a prior failed attempt, and a mismatch is
+		// treated as unknown (fails closed on a UID-scoped DNS rule, per
+		// dns.go) rather than risking it. This is still once per new flow,
+		// never per packet - the same cost class as the retry it replaces
+		// the trust model of, not an added one.
+		if confirm := e.resolveAppUIDOnce(r, protocol, src, dst); confirm == uid {
 			return uid
 		}
+		return UnknownAppUID
 	}
 	return UnknownAppUID
 }

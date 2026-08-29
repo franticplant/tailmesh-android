@@ -444,10 +444,10 @@ type literalOnlyProvider struct {
 	lastAddr string
 }
 
-func (p *literalOnlyProvider) ID() UpstreamID     { return p.id }
-func (p *literalOnlyProvider) Kind() UpstreamKind { return UpstreamKindWireGuard }
-func (p *literalOnlyProvider) Ready() bool        { return true }
-func (p *literalOnlyProvider) Close() error       { return nil }
+func (p *literalOnlyProvider) ID() UpstreamID                              { return p.id }
+func (p *literalOnlyProvider) Kind() UpstreamKind                          { return UpstreamKindWireGuard }
+func (p *literalOnlyProvider) Ready() bool                                 { return true }
+func (p *literalOnlyProvider) Close() error                                { return nil }
 func (p *literalOnlyProvider) PeerPathInfo(context.Context, string) string { return "wireguard" }
 
 func (p *literalOnlyProvider) Dial(ctx context.Context, network, address string) (net.Conn, error) {
