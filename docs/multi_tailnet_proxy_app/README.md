@@ -156,6 +156,10 @@ physical-device E2E
 
 It also records the real remaining seams, including service-ready signalling, reconstruction serialization/error surfacing, Android test coverage, database migration policy, Private DNS, Always-On/lockdown, scoped IPv6 DNS, legacy API cleanup, and physical-device two-Tailnet validation.
 
+### 2.7 `observability.md`
+
+The production-safe observability system: process/dataplane/per-Tailnet/per-app metrics, path and network-source events, bounded SQLite history, the Diagnostics UI, and opt-in advanced profiling. Distinguishes exact from estimated from unavailable metrics — notably, per-app CPU/battery cost is deliberately not claimed.
+
 ## 3. Current feature state
 
 | Area | Current branch state |

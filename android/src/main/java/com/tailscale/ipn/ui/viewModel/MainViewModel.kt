@@ -15,7 +15,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.tailscale.ipn.App
+import com.tailscale.ipn.IPNService
+import com.tailscale.ipn.MultiProxySessionCoordinator
 import com.tailscale.ipn.R
+import com.tailscale.ipn.VpnRuntimeMode
 import com.tailscale.ipn.mdm.MDMSettings
 import com.tailscale.ipn.ui.model.Ipn
 import com.tailscale.ipn.ui.model.Ipn.State
@@ -70,6 +73,15 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
   val searchViewPeers: StateFlow<List<PeerSet>> = _searchViewPeers
   // The current state of the IPN for determining view visibility
   val ipnState = Notifier.state
+
+  // Whether Multi-Tailnet mode is the currently active VPN runtime, and how many of its
+  // configured tailnet/exit-node upstreams are actually connected right now. The classic
+  // ipnState/stateRes above only ever reflect the single-profile backend, so they show
+  // "disconnected" while Multi-Tailnet mode is running - this lets the home screen check
+  // the runtime that's actually active instead.
+  val multiProxyRuntimeMode: StateFlow<VpnRuntimeMode> = IPNService.runtimeMode
+  private val _multiProxyConnectedCount = MutableStateFlow(0)
+  val multiProxyConnectedCount: StateFlow<Int> = _multiProxyConnectedCount
   // The active search term for filtering peers
   private val _searchTerm = MutableStateFlow("")
   val searchTerm: StateFlow<String> = _searchTerm
@@ -179,6 +191,11 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
     }
     viewModelScope.launch {
       App.get().healthNotifier?.currentIcon?.collect { icon -> healthIcon.set(icon) }
+    }
+    viewModelScope.launch {
+      MultiProxySessionCoordinator.runtimeStates.collect { states ->
+        _multiProxyConnectedCount.value = states.values.count { it == "RUNNING" }
+      }
     }
   }
 

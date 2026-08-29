@@ -64,6 +64,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -79,6 +80,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.tailscale.ipn.App
 import com.tailscale.ipn.R
+import com.tailscale.ipn.VpnRuntimeMode
 import com.tailscale.ipn.mdm.MDMSettings
 import com.tailscale.ipn.mdm.ShowHide
 import com.tailscale.ipn.ui.Links
@@ -121,6 +123,7 @@ data class MainViewNavigation(
     val onNavigateToExitNodes: () -> Unit,
     val onNavigateToHealth: () -> Unit,
     val onNavigateToSearch: () -> Unit,
+    val onNavigateToMultiProxy: () -> Unit = {},
 )
 
 @OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterial3Api::class)
@@ -146,7 +149,19 @@ fun MainView(
             val state by viewModel.ipnState.collectAsState(initial = Ipn.State.NoState)
             val user by viewModel.loggedInUser.collectAsState(initial = null)
             val stateVal by viewModel.stateRes.collectAsState(initial = R.string.placeholder)
-            val stateStr = stringResource(id = stateVal)
+            val multiProxyMode by viewModel.multiProxyRuntimeMode.collectAsState(initial = VpnRuntimeMode.STOPPED)
+            val multiProxyConnectedCount by
+                viewModel.multiProxyConnectedCount.collectAsState(initial = 0)
+            val isMultiProxyActive = multiProxyMode == VpnRuntimeMode.MULTIPROXY
+            val stateStr =
+                if (isMultiProxyActive) {
+                  if (multiProxyConnectedCount > 0)
+                      pluralStringResource(
+                          R.plurals.multi_tailnet_connected,
+                          multiProxyConnectedCount,
+                          multiProxyConnectedCount)
+                  else stringResource(id = R.string.starting)
+                } else stringResource(id = stateVal)
             val netmap by viewModel.netmap.collectAsState(initial = null)
             val showExitNodePicker by MDMSettings.exitNodesPicker.flow.collectAsState()
             val disableToggle by MDMSettings.forceEnabled.flow.collectAsState()
@@ -159,21 +174,30 @@ fun MainView(
                 leadingContent = {
                   if (!hideHeader) {
                     TintedSwitch(
-                        checked = isOn,
+                        checked = if (isMultiProxyActive) true else isOn,
                         enabled =
-                            !disableToggle.value &&
+                            !isMultiProxyActive &&
+                                !disableToggle.value &&
                                 !viewModel.isToggleInProgress
                                     .value, // Disable switch if toggle is in progress
                         onCheckedChange = { desiredState -> viewModel.toggleVpn(desiredState) })
                   }
                 },
                 headlineContent = {
-                  user?.NetworkProfile?.tailnetNameForDisplay()?.let { domain ->
+                  if (isMultiProxyActive) {
                     AutoResizingText(
-                        text = domain,
+                        text = stringResource(id = R.string.multi_tailnet_mode),
                         style = MaterialTheme.typography.titleMedium.short,
                         minFontSize = MaterialTheme.typography.minTextSize,
                         overflow = TextOverflow.Ellipsis)
+                  } else {
+                    user?.NetworkProfile?.tailnetNameForDisplay()?.let { domain ->
+                      AutoResizingText(
+                          text = domain,
+                          style = MaterialTheme.typography.titleMedium.short,
+                          minFontSize = MaterialTheme.typography.minTextSize,
+                          overflow = TextOverflow.Ellipsis)
+                    }
                   }
                 },
                 supportingContent = {
@@ -209,6 +233,11 @@ fun MainView(
                     }
                   }
                 })
+            if (isMultiProxyActive) {
+              MultiProxyActiveBody(
+                  connectedCount = multiProxyConnectedCount,
+                  onOpenMultiProxy = navigation.onNavigateToMultiProxy)
+            } else
             when (state) {
               Ipn.State.Running -> {
                 viewModel.maybeRequestVpnPermission()
@@ -253,6 +282,33 @@ fun MainView(
       }
     }
   }
+}
+
+@Composable
+fun MultiProxyActiveBody(connectedCount: Int, onOpenMultiProxy: () -> Unit) {
+  Column(
+      modifier = Modifier.fillMaxWidth().padding(16.dp),
+      verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        ListItem(
+            modifier =
+                Modifier.clip(shape = RoundedCornerShape(10.dp)).clickable { onOpenMultiProxy() },
+            colors = MaterialTheme.colorScheme.primaryListItem,
+            headlineContent = {
+              Text(
+                  text =
+                      pluralStringResource(
+                          R.plurals.multi_tailnet_connected, connectedCount, connectedCount),
+                  style = MaterialTheme.typography.bodyMedium)
+            },
+            supportingContent = {
+              Text(
+                  text = stringResource(id = R.string.multi_tailnet_open),
+                  style = MaterialTheme.typography.bodySmall)
+            },
+            trailingContent = {
+              Icon(imageVector = Icons.Outlined.ArrowDropDown, contentDescription = null)
+            })
+      }
 }
 
 @Composable

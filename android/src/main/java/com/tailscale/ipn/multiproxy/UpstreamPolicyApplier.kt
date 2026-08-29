@@ -109,7 +109,7 @@ class UpstreamPolicyApplier(
       try {
         when (upstream.kind) {
           UpstreamKind.SOCKS5 -> registerSocks5(engine, upstream, config)
-          UpstreamKind.WIREGUARD -> engine.addWireGuardUpstream(upstream.id, config)
+          UpstreamKind.WIREGUARD -> registerWireGuard(engine, upstream, config)
           UpstreamKind.EXITNODE -> registerExitNode(engine, upstream, config)
         }
       } catch (e: Exception) {
@@ -137,6 +137,23 @@ class UpstreamPolicyApplier(
         throw e
       }
     }
+  }
+
+  /**
+   * Unlike SOCKS5, whose chain parent is a dedicated addSOCKS5UpstreamVia parameter, a WireGuard
+   * upstream's "via" travels inside its own configJSON (ParseWireGuardConfigJSON on the Go side
+   * reads a "via" key there - see AddWireGuardUpstream's doc comment). The stored config blob is
+   * whatever the user originally pasted/generated and never carries "via", since the "chain via"
+   * picker in the UI writes only to the upstream row's own via column (upstreamRepository), not
+   * back into the encrypted config JSON. Without this, the engine always saw an empty Via and the
+   * tunnel silently fell back to dialing direct instead of through the chosen upstream. Stamping
+   * the DB's via column into the JSON here, at the single point everything reconciles through,
+   * keeps that column authoritative the same way it already is for SOCKS5.
+   */
+  private fun registerWireGuard(engine: MultiProxyEngine, upstream: Upstream, config: String) {
+    val json = JSONObject(config)
+    json.put("via", upstream.via)
+    engine.addWireGuardUpstream(upstream.id, json.toString())
   }
 
   private fun registerSocks5(engine: MultiProxyEngine, upstream: Upstream, config: String) {

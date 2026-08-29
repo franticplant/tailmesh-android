@@ -194,6 +194,21 @@ object NetworkChangeCallback {
   }
 
   // Update cached default network + log interface name.
+  // Last network-source label reported to the observability event store, so
+  // a transition event only fires on an actual change - not on every
+  // NetworkCallback delivery, most of which don't change which transport is
+  // the default (e.g. onLinkPropertiesChanged for a non-default network).
+  @Volatile private var lastReportedNetworkSource: String? = null
+
+  private fun networkSourceLabel(caps: NetworkCapabilities?): String = when {
+    caps == null -> "none"
+    caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+    caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+    caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
+    caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "vpn"
+    else -> "other"
+  }
+
   private fun recomputeDefaultNetworkLocked(why: String) {
     val newNetwork = pickDefaultNetwork()
     cachedDefaultNetwork = newNetwork
@@ -204,6 +219,16 @@ object NetworkChangeCallback {
 
     TSLog.d(
         TAG, "$why: cachedDefaultNetwork=$newNetwork iface=${cachedDefaultInterfaceName ?: "none"}")
+
+    // Discrete, deduplicated transition event for the diagnostics event log -
+    // this is purely a label derived from data ConnectivityManager already
+    // pushed us, not a new poll or lookup.
+    val newSource = networkSourceLabel(info?.caps)
+    val prevSource = lastReportedNetworkSource
+    if (prevSource != null && prevSource != newSource) {
+      MultiProxySessionCoordinator.recordNetworkSourceEvent(newSource, prevSource, newSource)
+    }
+    lastReportedNetworkSource = newSource
   }
 
   // maybeUpdateDNSConfig will maybe update our DNS configuration based on the

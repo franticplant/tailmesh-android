@@ -728,6 +728,108 @@ open class UninitializedApp : Application() {
     return builder.build()
   }
 
+  /**
+   * Builds the persistent notification for Multi-Tailnet mode. Unlike [buildStatusNotification]
+   * (which assumes a single tailnet and a single exit node), this reads from
+   * [MultiProxySessionCoordinator]'s already-in-memory StateFlows - no extra I/O beyond what
+   * diagnostics already keeps warm - to show how many upstreams are connected, total tunnel
+   * traffic, and a short per-upstream breakdown. The compact text (always visible) is just the
+   * connection count and totals; the breakdown only appears in the expanded/pulled-down view via
+   * BigTextStyle, keeping the collapsed notification short per the user's request.
+   */
+  fun buildMultiProxyStatusNotification(hideDisconnectAction: Boolean): Notification {
+    val runtimeStates = MultiProxySessionCoordinator.runtimeStates.value
+    val upstreamStats = MultiProxySessionCoordinator.upstreamStats.value
+    val connectedCount = runtimeStates.values.count { it == "RUNNING" }
+    val dataplane = MultiProxySessionCoordinator.observabilitySnapshot.value.dataplane
+
+    val title =
+        if (connectedCount > 0)
+            resources.getQuantityString(
+                R.plurals.multi_tailnet_connected, connectedCount, connectedCount)
+        else getString(R.string.starting)
+    val totalRx = dataplane.tunRxBytes
+    val totalTx = dataplane.tunTxBytes
+    val message = getString(R.string.multi_tailnet_traffic_totals, formatBytes(totalRx), formatBytes(totalTx))
+
+    val topUpstreams =
+        upstreamStats.entries
+            .filter { it.value.bytesIn + it.value.bytesOut > 0 }
+            .sortedByDescending { it.value.bytesIn + it.value.bytesOut }
+            .take(4)
+    val expandedBody = buildString {
+      append(message)
+      topUpstreams.forEach { (id, stat) ->
+        append("\n")
+        append(multiProxyUpstreamDisplayName(id))
+        append(": ")
+        append(formatBytes(stat.bytesIn + stat.bytesOut))
+        if (stat.peerPath.isNotEmpty() && stat.peerPath != "unknown") {
+          append(" (${stat.peerPath})")
+        }
+      }
+      val remaining = upstreamStats.size - topUpstreams.size
+      if (remaining > 0) {
+        append("\n")
+        append(getString(R.string.multi_tailnet_more_upstreams, remaining))
+      }
+    }
+
+    val icon = if (connectedCount > 0) R.drawable.ic_notification else R.drawable.ic_notification_disabled
+    val action = if (connectedCount > 0) IPNReceiver.INTENT_DISCONNECT_VPN else IPNReceiver.INTENT_CONNECT_VPN
+    val actionLabel = getString(if (connectedCount > 0) R.string.disconnect else R.string.connect)
+    val buttonIntent = Intent(this, IPNReceiver::class.java).apply { this.action = action }
+    val pendingButtonIntent: PendingIntent =
+        PendingIntent.getBroadcast(
+            this, 0, buttonIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    val intent =
+        Intent(this, MainActivity::class.java).apply {
+          flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        }
+    val pendingIntent: PendingIntent =
+        PendingIntent.getActivity(
+            this, 1, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    val builder =
+        NotificationCompat.Builder(this, STATUS_CHANNEL_ID)
+            .setSmallIcon(icon)
+            .setContentTitle(title)
+            .setContentText(message)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(expandedBody))
+            .setAutoCancel(false)
+            .setOnlyAlertOnce(true)
+            .setOngoing(false)
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setContentIntent(pendingIntent)
+    if (!hideDisconnectAction) {
+      builder.addAction(
+          NotificationCompat.Action.Builder(0, actionLabel, pendingButtonIntent).build())
+    }
+    return builder.build()
+  }
+
+  private fun multiProxyUpstreamDisplayName(id: String): String {
+    if (id == "@direct") return "Direct"
+    val session = App.get().multiProxySession
+    session.upstreamRepository.getImmediate(id)?.let { if (it.label.isNotBlank()) return it.label }
+    session.profileRepository.getProfileImmediate(id)?.let {
+      if (it.displayName.isNotBlank()) return it.displayName
+    }
+    return id
+  }
+
+  private fun formatBytes(bytes: Long): String {
+    if (bytes < 1024) return "${bytes}B"
+    val units = arrayOf("KB", "MB", "GB", "TB")
+    var value = bytes.toDouble() / 1024
+    var i = 0
+    while (value >= 1024 && i < units.size - 1) {
+      value /= 1024
+      i++
+    }
+    return String.format(Locale.US, "%.1f%s", value, units[i])
+  }
+
   fun getIsClientLoggingEnabled(): Boolean {
 
     // Force client logging to be enabled, when the device is managed by MDM

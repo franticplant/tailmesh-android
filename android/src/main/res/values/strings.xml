@@ -13,6 +13,14 @@
     <string name="not_connected">Not connected</string>
     <string name="empty" translatable="false"> </string>
     <string name="template" translatable="false">%s</string>
+    <string name="multi_tailnet_mode">Multi-Tailnet</string>
+    <string name="multi_tailnet_open">Open Multi-Tailnet</string>
+    <string name="multi_tailnet_traffic_totals">↓ %1$s · ↑ %2$s</string>
+    <string name="multi_tailnet_more_upstreams">+%d more</string>
+    <plurals name="multi_tailnet_connected">
+        <item quantity="one">Connected · %d tailnet</item>
+        <item quantity="other">Connected · %d tailnets</item>
+    </plurals>
     <string name="selected">Selected</string> 
     <string name="offline">Offline</string>
     <string name="ok">OK</string>

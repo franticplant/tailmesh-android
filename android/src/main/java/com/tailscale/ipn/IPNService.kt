@@ -197,6 +197,7 @@ open class IPNService : VpnService(), libtailscale.IPNService {
           
           // Teardown current mode
           if (activeMode == VpnRuntimeMode.MULTIPROXY) {
+              stopMultiProxyNotificationRefresh()
               if (!stopMultiProxyVPNLocked() && targetMode == VpnRuntimeMode.STANDARD) {
                   TSLog.e(TAG, "Refusing to start STANDARD after MULTIPROXY state restore failed")
                   setActiveMode(VpnRuntimeMode.STOPPED)
@@ -213,6 +214,8 @@ open class IPNService : VpnService(), libtailscale.IPNService {
               val success = startMultiProxyVPNLocked()
               if (success) {
                   setActiveMode(VpnRuntimeMode.MULTIPROXY)
+                  showForegroundNotification()
+                  startMultiProxyNotificationRefresh()
               } else {
                   TSLog.e(TAG, "Failed to start MULTIPROXY")
                   stopMultiProxyVPNLocked()
@@ -274,6 +277,17 @@ open class IPNService : VpnService(), libtailscale.IPNService {
                     upstreamID ?: return,
                     ready,
                     reason ?: "",
+                )
+            }
+            override fun onObservabilityEvent(eventType: String?, upstreamID: String?, appUID: Int, networkSource: String?, previousState: String?, newState: String?, metadataJSON: String?) {
+                MultiProxySessionCoordinator.recordObservabilityEvent(
+                    eventType ?: return,
+                    upstreamID ?: "",
+                    appUID,
+                    networkSource ?: "",
+                    previousState ?: "",
+                    newState ?: "",
+                    metadataJSON ?: "",
                 )
             }
           })
@@ -628,8 +642,44 @@ open class IPNService : VpnService(), libtailscale.IPNService {
 
   private fun showForegroundNotification() {
     val hideDisconnectAction = MDMSettings.forceEnabled.flow.value.value
+    if (activeMode == VpnRuntimeMode.MULTIPROXY) {
+      try {
+        startForeground(
+            UninitializedApp.STATUS_NOTIFICATION_ID,
+            app.buildMultiProxyStatusNotification(hideDisconnectAction))
+      } catch (e: Exception) {
+        TSLog.e(TAG, "Failed to start foreground service: $e")
+      }
+      return
+    }
     val exitNodeName = UninitializedApp.getExitNodeName(Notifier.prefs.value, Notifier.netmap.value)
     showForegroundNotification(hideDisconnectAction, exitNodeName)
+  }
+
+  // Periodically rebuilds the Multi-Tailnet foreground notification so its traffic totals and
+  // per-upstream breakdown stay current - the notification is otherwise only rebuilt on discrete
+  // events (mode start/stop, upstream health changes), so a long-lived idle session would
+  // otherwise show stale byte counts. Reads already-in-memory StateFlows only (no network or disk
+  // I/O), so a 30s cadence costs essentially nothing; the job is cancelled the moment MULTIPROXY
+  // mode stops.
+  private var notificationRefreshJob: kotlinx.coroutines.Job? = null
+
+  private fun startMultiProxyNotificationRefresh() {
+    notificationRefreshJob?.cancel()
+    notificationRefreshJob =
+        scope.launch {
+          while (activeMode == VpnRuntimeMode.MULTIPROXY) {
+            kotlinx.coroutines.delay(30_000)
+            if (activeMode == VpnRuntimeMode.MULTIPROXY) {
+              showForegroundNotification()
+            }
+          }
+        }
+  }
+
+  private fun stopMultiProxyNotificationRefresh() {
+    notificationRefreshJob?.cancel()
+    notificationRefreshJob = null
   }
 
   private fun configIntent(): PendingIntent {

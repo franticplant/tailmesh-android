@@ -299,7 +299,8 @@ class MainActivity : ComponentActivity() {
                           onNavigateToSearch = {
                             viewModel.enableSearchAutoFocus()
                             navController.navigate("search")
-                          })
+                          },
+                          onNavigateToMultiProxy = { navController.navigate("multiProxy") })
                   val settingsNav =
                       SettingsNav(
                           onNavigateToBugReport = { navController.navigate("bugReport") },
@@ -389,7 +390,11 @@ class MainActivity : ComponentActivity() {
                         onNavigateBack = backTo("settings"),
                         onAddAccount = { navController.navigate("userSwitcher") },
                         onAddAuthKey = { navController.navigate("loginWithAuthKey") },
+                        onOpenDiagnostics = { navController.navigate("diagnostics") },
                     )
+                  }
+                  composable("diagnostics") {
+                    com.tailscale.ipn.ui.view.DiagnosticsView(onNavigateBack = backTo("settings"))
                   }
                   composable("splitTunneling") { SplitTunnelAppPickerView(backTo("settings")) }
                   composable("proxyUpstreams") { UpstreamsView(backTo("settings")) }

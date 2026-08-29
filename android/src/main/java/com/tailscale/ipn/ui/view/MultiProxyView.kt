@@ -26,6 +26,7 @@ fun MultiProxyView(
     onNavigateBack: () -> Unit,
     onAddAccount: () -> Unit,
     onAddAuthKey: () -> Unit,
+    onOpenDiagnostics: () -> Unit = {},
 ) {
     val uiStates by viewModel.uiStates.collectAsState()
     val regularProfiles by viewModel.regularProfiles.collectAsState()
@@ -82,6 +83,8 @@ fun MultiProxyView(
                         style = MaterialTheme.typography.titleMedium,
                         color = if (stoppedUnexpectedly) MaterialTheme.colorScheme.error else Color.Unspecified,
                     )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    TextButton(onClick = onOpenDiagnostics) { Text("Diagnostics") }
                     Spacer(modifier = Modifier.height(8.dp))
                     if (activeMode == VpnRuntimeMode.MULTIPROXY) {
                         OutlinedButton(onClick = viewModel::stopMultiProxy) { Text("Stop Multi-Tailnet") }
