@@ -472,6 +472,17 @@ func (e *Engine) handleDNSMsg(r *dns.Msg, netType string, flow FlowInfo) *dns.Ms
 	m := new(dns.Msg)
 	m.SetReply(r)
 
+	// qname/qtype for logDNSQuery below - computed once regardless of whether
+	// logging is enabled (cheap: just reading the first question, which every
+	// call site already has), the enabled check happens inside logDNSQuery
+	// itself so callers never need to guard it.
+	qname, qtype := "", ""
+	if len(r.Question) > 0 {
+		qname = strings.ToLower(r.Question[0].Name)
+		qtype = dns.TypeToString[r.Question[0].Qtype]
+	}
+	logDNS := func(upstreamID, outcome string) { e.logDNSQuery(qname, qtype, flow.AppUID, upstreamID, outcome) }
+
 	hasAnswer := false
 	ambiguous := false
 	nodata := false
@@ -523,6 +534,7 @@ func (e *Engine) handleDNSMsg(r *dns.Msg, netType string, flow FlowInfo) *dns.Ms
 	e.targetMutex.RUnlock()
 
 	if ambiguous {
+		logDNS("", "ambiguous")
 		m.Rcode = dns.RcodeNameError
 		return m
 	}
@@ -533,6 +545,7 @@ func (e *Engine) handleDNSMsg(r *dns.Msg, netType string, flow FlowInfo) *dns.Ms
 		e.mu.RUnlock()
 
 		if upstream == "" {
+			logDNS("", "no-upstream-configured")
 			m.Rcode = dns.RcodeServerFailure
 			return m
 		}
@@ -551,6 +564,7 @@ func (e *Engine) handleDNSMsg(r *dns.Msg, netType string, flow FlowInfo) *dns.Ms
 		// site"), unlike dropping an already-established data connection.
 		if flow.AppUID == UnknownAppUID && e.policyUsesAppUID() {
 			e.obs.dp.addDNSAttributionFailClosed()
+			logDNS("", "fail-closed")
 			m.Rcode = dns.RcodeServerFailure
 			return m
 		}
@@ -561,9 +575,11 @@ func (e *Engine) handleDNSMsg(r *dns.Msg, netType string, flow FlowInfo) *dns.Ms
 		route := e.dnsRouteFor(flow)
 		switch {
 		case route.blocked:
+			logDNS("", "blocked")
 			m.Rcode = dns.RcodeRefused
 			return m
 		case route.failed:
+			logDNS("", "route-failed")
 			m.Rcode = dns.RcodeServerFailure
 			return m
 		}
@@ -580,16 +596,22 @@ func (e *Engine) handleDNSMsg(r *dns.Msg, netType string, flow FlowInfo) *dns.Ms
 			}
 			if err != nil {
 				log.Printf("multiproxy DNS: %v", err)
+				upstreamID := ""
 				if route.provider != nil {
+					upstreamID = string(route.provider.ID())
 					e.obs.dp.addDNSForwardFailure()
 					e.statsFor(route.provider.ID()).recordDNSFailed()
 				}
+				logDNS(upstreamID, "forward-fail")
 				m.Rcode = dns.RcodeServerFailure
 				return m
 			}
+			upstreamID := ""
 			if route.provider != nil {
+				upstreamID = string(route.provider.ID())
 				e.statsFor(route.provider.ID()).recordDNSForwarded()
 			}
+			logDNS(upstreamID, "forward-ok")
 			resp.Id = r.Id
 			return resp
 		}
@@ -607,10 +629,12 @@ func (e *Engine) handleDNSMsg(r *dns.Msg, netType string, flow FlowInfo) *dns.Ms
 				}
 				e.obs.dp.addDNSForwardFailure()
 				e.statsFor(route.provider.ID()).recordDNSFailed()
+				logDNS(string(route.provider.ID()), "forward-fail")
 				m.Rcode = dns.RcodeServerFailure
 				return m
 			}
 			e.statsFor(route.provider.ID()).recordDNSForwarded()
+			logDNS(string(route.provider.ID()), "forward-ok")
 			resp.Id = r.Id
 			return resp
 		}
@@ -624,14 +648,17 @@ func (e *Engine) handleDNSMsg(r *dns.Msg, netType string, flow FlowInfo) *dns.Ms
 			resp, _, err = c.Exchange(r, upstream)
 		}
 		if err == nil && resp != nil {
+			logDNS("", "device-ok")
 			resp.Id = r.Id
 			return resp
 		}
 
+		logDNS("", "device-fail")
 		m.Rcode = dns.RcodeServerFailure
 		return m
 	}
 
+	logDNS("", "synthetic")
 	m.Authoritative = true
 	return m
 }

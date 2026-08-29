@@ -159,6 +159,20 @@ func (e *MultiProxyEngine) SetObservabilitySampleIntervalSeconds(secs int32) {
 	e.inner.SetObservabilitySampleIntervalSeconds(secs)
 }
 
+// SetDNSQueryLogEnabled turns per-DNS-query event logging on/off - which
+// upstream a specific name resolved through and with what outcome, at the
+// cost of one event (and one SQLite insert on the Kotlin side) per DNS
+// lookup instead of per rare transition. Off by default; call with true only
+// while the diagnostics screen's DNS log toggle is actually on, and false
+// when it closes, the same on/off-while-visible pattern as
+// SetObservabilitySampleIntervalSeconds above.
+func (e *MultiProxyEngine) SetDNSQueryLogEnabled(enabled bool) {
+	if e == nil || e.inner == nil {
+		return
+	}
+	e.inner.SetDNSQueryLogEnabled(enabled)
+}
+
 // SetAdvancedDiagnostics turns higher-frequency sampling on/off. Off by
 // default. Does not itself start any profiler - see Capture* below.
 func (e *MultiProxyEngine) SetAdvancedDiagnostics(on bool) {

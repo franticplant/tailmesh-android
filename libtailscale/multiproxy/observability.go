@@ -271,7 +271,36 @@ const (
 	ObsEventTailnetRestarted   = "TAILNET_RESTARTED"
 	ObsEventVPNRestarted       = "VPN_RESTARTED"
 	ObsEventBackendError       = "BACKEND_ERROR"
+	ObsEventDNSQuery           = "DNS_QUERY"
 )
+
+// SetDNSQueryLogEnabled turns per-query DNS event logging on or off - the
+// "toggleable heavier" tier of DNS observability (see
+// docs/multi_tailnet_proxy_app/observability.md): which upstream a specific
+// name resolved through, and with what outcome, at the cost of one event -
+// and on the Kotlin side, one SQLite insert - per DNS lookup instead of per
+// rare transition. Off by default (see observability.dnsQueryLogEnabled);
+// the diagnostics UI's Network tab is expected to be the only caller,
+// enabling this only while a developer/user is actively looking at it.
+func (e *Engine) SetDNSQueryLogEnabled(enabled bool) {
+	e.obs.dnsQueryLogEnabled.Store(enabled)
+}
+
+func (e *Engine) DNSQueryLogEnabled() bool {
+	return e.obs.dnsQueryLogEnabled.Load()
+}
+
+// logDNSQuery records one DNS lookup's outcome, if and only if
+// SetDNSQueryLogEnabled(true) is in effect - a single atomic load when it is
+// not, so dns.go can call this unconditionally on every query without
+// worrying about the cost. upstreamID is empty for a synthetic answer or a
+// query that never reached routing (blocked/ambiguous/fail-closed).
+func (e *Engine) logDNSQuery(qname, qtype string, appUID int32, upstreamID, outcome string) {
+	if !e.obs.dnsQueryLogEnabled.Load() {
+		return
+	}
+	e.enqueueObservabilityEvent(ObsEventDNSQuery, upstreamID, appUID, qtype, qname, outcome, "")
+}
 
 // enqueueObservabilityEvent is the single place any discrete observability
 // event is emitted. Bounded and non-blocking, same as every other
@@ -428,6 +457,16 @@ type observability struct {
 	// CaptureGoroutineDump below.
 	advancedMu sync.Mutex
 	advanced   bool
+
+	// dnsQueryLogEnabled gates per-query DNS event logging (see logDNSQuery
+	// below). Unlike every other observability event, one of these fires per
+	// DNS lookup rather than per rare transition - the UI persists every
+	// event it receives (SQLite insert, see MultiProxySessionCoordinator.
+	// recordObservabilityEvent on the Kotlin side), so leaving this on by
+	// default would mean writing to disk on every DNS query an app makes.
+	// atomic.Bool so the hot path (every DNS query, on or off) only ever
+	// costs one atomic load when this is off.
+	dnsQueryLogEnabled atomic.Bool
 }
 
 // defaultSampleIntervalSeconds is used whenever the diagnostics UI is not

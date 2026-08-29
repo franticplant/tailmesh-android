@@ -111,10 +111,18 @@ fun DiagnosticsView(onNavigateBack: () -> Unit) {
     }
     var captureStatus by remember { mutableStateOf<String?>(null) }
     var showResetDialog by remember { mutableStateOf(false) }
+    var dnsLogEnabled by remember { mutableStateOf(false) }
 
     DisposableEffect(Unit) {
         MultiProxySessionCoordinator.setDiagnosticsUiVisible(true)
-        onDispose { MultiProxySessionCoordinator.setDiagnosticsUiVisible(false) }
+        onDispose {
+            MultiProxySessionCoordinator.setDiagnosticsUiVisible(false)
+            // Belt-and-suspenders: leaving this screen with the toggle still on would mean every
+            // DNS query app-wide keeps writing a SQLite row with nothing left to see it - the
+            // toggle's own onCheckedChange already turns the engine side off when unchecked, but
+            // dispose covers back-navigation without touching the switch.
+            App.get().multiProxySession.engine?.setDNSQueryLogEnabled(false)
+        }
     }
 
     LaunchedEffect(range) {
@@ -186,7 +194,11 @@ fun DiagnosticsView(onNavigateBack: () -> Unit) {
                     DiagSection.OVERVIEW -> overviewSection(this, snapshot, samples, liveEvents, resolution, range)
                     DiagSection.UPSTREAMS -> upstreamsSection(this, snapshot, range, resolution)
                     DiagSection.APPS -> appsSection(this, snapshot, range, resolution)
-                    DiagSection.NETWORK -> networkSection(this, liveEvents)
+                    DiagSection.NETWORK ->
+                        networkSection(this, liveEvents, dnsLogEnabled) {
+                            dnsLogEnabled = it
+                            App.get().multiProxySession.engine?.setDNSQueryLogEnabled(it)
+                        }
                 }
                 item {
                     Spacer(modifier = Modifier.height(16.dp))
@@ -1017,6 +1029,8 @@ private fun AppRow(app: com.tailscale.ipn.UIDStatsInfo, range: DiagRange, resolu
 private fun networkSection(
     scope: LazyListScope,
     events: List<com.tailscale.ipn.ObservabilityEvent>,
+    dnsLogEnabled: Boolean,
+    onDnsLogEnabledChange: (Boolean) -> Unit,
 ) {
     scope.item {
         Text("Network source", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 12.dp))
@@ -1029,6 +1043,41 @@ private fun networkSection(
     }
     scope.items(events.filter { it.eventType == "NETWORK_SOURCE_CHANGED" }.takeLast(30).reversed()) { e ->
         Text("${e.previousState} -> ${e.newState}", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 2.dp))
+    }
+    scope.item {
+        Spacer(modifier = Modifier.height(16.dp))
+        HorizontalDivider()
+        Spacer(modifier = Modifier.height(8.dp))
+        Text("DNS query log", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Off by default - logs every DNS lookup app-wide (which upstream it went through and " +
+                "the outcome: synthetic answer, forwarded ok/failed, blocked, fail-closed, ambiguous). " +
+                "Useful for tracking down a query leaking to the wrong upstream, but writes a row " +
+                "per query while on, so turn it off again once you've caught what you're looking for.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 8.dp)) {
+            Switch(checked = dnsLogEnabled, onCheckedChange = onDnsLogEnabledChange)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(if (dnsLogEnabled) "Enabled" else "Disabled")
+        }
+    }
+    if (dnsLogEnabled) {
+        scope.items(events.filter { it.eventType == "DNS_QUERY" }.takeLast(50).reversed()) { e ->
+            Text(
+                "${e.previousState} (${e.networkSource})  " +
+                    "${if (e.upstreamId.isNotEmpty()) upstreamDisplayLabel(e.upstreamId) else "device"} -> ${e.newState}" +
+                    (if (e.appUid > 0) "  uid=${e.appUid}" else ""),
+                style = MaterialTheme.typography.bodySmall,
+                color =
+                    if (e.newState.contains("fail") || e.newState == "blocked" || e.newState == "ambiguous") {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        Color.Unspecified
+                    },
+                modifier = Modifier.padding(vertical = 2.dp),
+            )
+        }
     }
 }
 
