@@ -22,7 +22,7 @@ type TargetKey struct {
 	Kind        TargetKind
 	// StableID is the stable Tailscale node identity within its control-plane lifecycle (e.g. tailcfg.StableNodeID).
 	// Uniqueness is defined by UpstreamID + StableID.
-	StableID    string
+	StableID string
 }
 
 var SyntheticIPv6Prefix = netip.MustParsePrefix("fd9b:8d7c:6a5e::/48")
@@ -82,7 +82,7 @@ func (k TargetKey) SyntheticIPv6() netip.Addr {
 		if !SyntheticIPv6ControlPrefix.Contains(ip) {
 			return ip
 		}
-		
+
 		data = append(data, 1)
 	}
 }

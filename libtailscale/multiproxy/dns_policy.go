@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -195,7 +196,34 @@ func (e *Engine) dohClientFor(id UpstreamID) *http.Client {
 				if !ok {
 					return nil, fmt.Errorf("%w: %q", ErrUpstreamNotReady, id)
 				}
-				return p.Dial(ctx, network, address)
+				conn, err := p.Dial(ctx, network, address)
+				if err == nil {
+					return conn, nil
+				}
+				// Some upstreams (WireGuard's own netstack, which has no
+				// resolver of its own - see wireguardProvider.Dial's doc
+				// comment) can only dial a literal address:port, unlike
+				// SOCKS5/Tailnet upstreams which resolve a hostname at the
+				// far end. If the address wasn't already literal, resolve
+				// the DoH resolver's own hostname off-tunnel (the same
+				// bootstrap path the device-direct DoH client uses for the
+				// same reason) and retry once with the literal IP. A
+				// provider that can already resolve hostnames itself
+				// succeeds on the first attempt and never reaches this
+				// fallback, so its leak properties (letting the far end
+				// resolve, not the device) are unchanged.
+				host, port, splitErr := net.SplitHostPort(address)
+				if splitErr != nil {
+					return nil, err
+				}
+				if _, parseErr := netip.ParseAddr(host); parseErr == nil {
+					return nil, err
+				}
+				ips, resolveErr := bootstrapResolve(ctx, host)
+				if resolveErr != nil || len(ips) == 0 {
+					return nil, err
+				}
+				return p.Dial(ctx, network, net.JoinHostPort(ips[0].String(), port))
 			},
 			// Same reason as dohHTTPClient: setting DialContext otherwise
 			// suppresses HTTP/2, and some providers serve HTTP/2 only.

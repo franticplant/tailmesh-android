@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"runtime/debug"
 	"syscall"
+	"time"
 
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/link/fdbased"
@@ -116,6 +117,56 @@ func attachNIC(s *stack.Stack, linkEP stack.LinkEndpoint) error {
 	return nil
 }
 
+// countingLinkEndpoint decorates a stack.LinkEndpoint so every packet
+// gVisor reads from or writes to the TUN is counted (TUN RX/TX bytes and
+// packets - PHASE 4) with a single atomic add per packet/batch and no
+// allocation. Every method other than WritePackets and Attach is promoted
+// unchanged from the embedded real endpoint.
+type countingLinkEndpoint struct {
+	stack.LinkEndpoint
+	dp *dataplaneCounters
+}
+
+func wrapCountingEndpoint(real stack.LinkEndpoint, dp *dataplaneCounters) stack.LinkEndpoint {
+	return &countingLinkEndpoint{LinkEndpoint: real, dp: dp}
+}
+
+// WritePackets counts outbound (TUN TX) packets/bytes, then delegates
+// unchanged. This is the same batch gVisor was already going to write - no
+// extra syscall, no extra copy, just an atomic add per packet in the list.
+func (c *countingLinkEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcpip.Error) {
+	for _, pkt := range pkts.AsSlice() {
+		c.dp.addTx(uint64(pkt.Size()))
+	}
+	return c.LinkEndpoint.WritePackets(pkts)
+}
+
+// countingDispatcher decorates the NetworkDispatcher the stack attaches, so
+// every inbound (TUN RX) packet is counted before being handed to gVisor's
+// real dispatch - the cheapest point available, since this is called
+// exactly once per packet the real endpoint already read off the fd.
+type countingDispatcher struct {
+	stack.NetworkDispatcher
+	dp *dataplaneCounters
+}
+
+func (c *countingDispatcher) DeliverNetworkPacket(protocol tcpip.NetworkProtocolNumber, pkt *stack.PacketBuffer) {
+	c.dp.addRx(uint64(pkt.Size()))
+	c.NetworkDispatcher.DeliverNetworkPacket(protocol, pkt)
+}
+
+// Attach wraps dispatcher in a countingDispatcher before attaching it to the
+// real endpoint, instead of counting inside the real endpoint's own read
+// loop - this keeps all counting logic in this file rather than needing to
+// touch gVisor's fdbased package.
+func (c *countingLinkEndpoint) Attach(dispatcher stack.NetworkDispatcher) {
+	if dispatcher == nil {
+		c.LinkEndpoint.Attach(nil)
+		return
+	}
+	c.LinkEndpoint.Attach(&countingDispatcher{NetworkDispatcher: dispatcher, dp: c.dp})
+}
+
 // bindVPNStackLocked constructs the gVisor stack, attaches linkEP as its
 // sole NIC, and wires the TCP/UDP forwarders into this Engine. Callers must
 // hold e.vpnMu and must have already verified no VPN stack is running.
@@ -190,11 +241,18 @@ func (e *Engine) StartVPN(fd int32, mtu int32) error {
 		return fmt.Errorf("failed to create fdbased endpoint: %v", err)
 	}
 
-	if err := e.bindVPNStackLocked(linkID); err != nil {
+	countedLink := wrapCountingEndpoint(linkID, &e.obs.dp)
+	if err := e.bindVPNStackLocked(countedLink); err != nil {
 		closeFD()
 		return err
 	}
 	e.vpnFD = fdInt
+	if e.obs.vpnStartedAt.Swap(time.Now().UnixMilli()) != 0 {
+		// A prior start had already run (and been stopped) before this one -
+		// this is a restart, not the first start of the engine's lifetime.
+		e.AddVPNRestart()
+		e.enqueueObservabilityEvent(ObsEventVPNRestarted, "", UnknownAppUID, "", "", "", "")
+	}
 
 	log.Printf("[VPN] gVisor stack successfully bound to TUN FD %d", fdInt)
 	return nil
@@ -213,6 +271,7 @@ func (e *Engine) StopVPN() {
 		e.vpnStack = nil
 	}
 	e.addrRefCount = nil
+	e.obs.vpnStartedAt.Store(0)
 
 	if e.vpnFD >= 0 {
 		syscall.Close(e.vpnFD)

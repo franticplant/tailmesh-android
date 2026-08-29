@@ -51,6 +51,17 @@ type EngineCallback interface {
 	// events below) - UpstreamStatsSnapshot (stats.go) is the reliable source
 	// of truth for anything this channel drops.
 	OnUpstreamHealthChanged(upstreamID string, ready bool, reason string)
+
+	// OnObservabilityEvent fires on a discrete, low-frequency observability
+	// lifecycle transition - a path change (direct<->DERP), an exit-node
+	// connect/disconnect, a Tailnet or VPN restart, etc. See
+	// observability.go's eventType constants for the full list. Fields that
+	// don't apply to a given eventType are empty/zero. This is a single
+	// generic method rather than one per event type so that adding a new
+	// transition kind later does not require another gomobile-bound
+	// interface method (and the AAR rebuild that implies) - metadataJSON
+	// carries anything event-specific that doesn't fit the shared fields.
+	OnObservabilityEvent(eventType, upstreamID string, appUID int32, networkSource, previousState, newState, metadataJSON string)
 }
 
 type subnetRoute struct {
@@ -65,6 +76,7 @@ const (
 	eventTailnetStateChange
 	eventAddressCrossover
 	eventUpstreamHealthChanged
+	eventObservability
 )
 
 type engineEvent struct {
@@ -84,6 +96,18 @@ type engineEvent struct {
 	healthUpstreamID string
 	healthReady      bool
 	healthReason     string
+
+	// used by eventObservability only - a discrete, low-frequency lifecycle
+	// event for the diagnostics UI's event log (PHASE 10/13), e.g. a
+	// direct<->DERP path transition or exit-node connect/disconnect. Not
+	// every dimension applies to every event type; unused fields are empty.
+	obsType       string
+	obsUpstreamID string
+	obsAppUID     int32
+	obsNetSource  string
+	obsPrevState  string
+	obsNewState   string
+	obsMetaJSON   string
 }
 
 type tsnetUpstream struct {
@@ -157,6 +181,14 @@ type Engine struct {
 	// stats holds live per-upstream dial/byte counters, recorded by every real
 	// dial regardless of call site. See stats.go.
 	stats *statsRegistry
+
+	// uids holds live per-Android-UID traffic counters, recorded at the same
+	// natural flow-creation/byte-pump points stats is. See observability.go.
+	uids *uidRegistry
+
+	// obs holds engine-wide dataplane counters, the periodic process/runtime
+	// sampler, and bounded observability event history. See observability.go.
+	obs *observability
 
 	// policy is the ordered rule list consulted for flows that synthetic
 	// addressing has not already bound to a specific upstream.
@@ -247,8 +279,10 @@ func NewEngineWithStateStore(dataDir string, cb EngineCallback, stateStoreFor fu
 
 		upstreams: newUpstreamRegistry(),
 		stats:     newStatsRegistry(),
+		uids:      newUIDRegistry(),
 		policy:    &policyStore{},
 	}
+	e.obs = newObservability(e)
 
 	// Tailnets are dialable upstreams too, but their lifecycle belongs to the
 	// tailnet machinery rather than the registry, so they plug in as a source
@@ -296,6 +330,8 @@ func (e *Engine) dispatchOneEvent(cb EngineCallback, ev engineEvent) {
 		cb.OnAddressCrossover(ev.crossoverIP, ev.crossoverCandidates, ev.crossoverChosen)
 	case eventUpstreamHealthChanged:
 		cb.OnUpstreamHealthChanged(ev.healthUpstreamID, ev.healthReady, ev.healthReason)
+	case eventObservability:
+		cb.OnObservabilityEvent(ev.obsType, ev.obsUpstreamID, ev.obsAppUID, ev.obsNetSource, ev.obsPrevState, ev.obsNewState, ev.obsMetaJSON)
 	default:
 		cb.OnTailnetStateChange(ev.tailnetID, ev.stateStr)
 	}
@@ -865,6 +901,8 @@ func (e *Engine) Close() {
 			}
 		}
 	}
+
+	e.obs.stop()
 
 	e.mu.Lock()
 	close(e.events)

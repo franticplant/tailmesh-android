@@ -22,12 +22,18 @@ type UIDResolver interface {
 	ResolveUID(protocol, srcIP string, srcPort int32, dstIP string, dstPort int32) int32
 }
 
-// uidResolveTimeout bounds how long the datapath will wait for an attribution.
-//
-// The resolver call crosses JNI into the Android framework. A slow or wedged
-// platform call must degrade to "unknown app" - which can only ever widen which
-// rule matches, never narrow it - instead of stalling the flow that triggered it.
-const uidResolveTimeout = 150 * time.Millisecond
+// uidResolveAttemptTimeout bounds a single attribution attempt, and
+// uidResolveMaxAttempts is how many attempts resolveAppUID makes before
+// giving up. A UDP DNS query's own socket in particular can already be gone
+// by the time a first getConnectionOwnerUid call lands (send-and-close is
+// common), so one retry meaningfully cuts the false-negative rate without
+// materially changing new-flow latency - worst case is
+// uidResolveMaxAttempts*uidResolveAttemptTimeout, a modest increase over the
+// old single 150ms budget, paid once per new flow, never per packet.
+const (
+	uidResolveAttemptTimeout = 90 * time.Millisecond
+	uidResolveMaxAttempts    = 2
+)
 
 // SetUIDResolver installs (or with nil, removes) the per-flow app attribution
 // hook. Without one every flow resolves as UnknownAppUID, so UID-scoped rules
@@ -45,7 +51,9 @@ func (e *Engine) currentUIDResolver() UIDResolver {
 }
 
 // resolveAppUID attributes a flow, returning UnknownAppUID when no resolver is
-// installed, the lookup fails, or it does not answer within uidResolveTimeout.
+// installed, or every attempt fails or times out. It retries up to
+// uidResolveMaxAttempts times - see that constant's doc comment for why a
+// single attempt has a real, expected false-negative rate.
 func (e *Engine) resolveAppUID(protocol string, src, dst netip.AddrPort) int32 {
 	r := e.currentUIDResolver()
 	if r == nil {
@@ -55,6 +63,17 @@ func (e *Engine) resolveAppUID(protocol string, src, dst netip.AddrPort) int32 {
 		return UnknownAppUID
 	}
 
+	for attempt := 0; attempt < uidResolveMaxAttempts; attempt++ {
+		if uid := e.resolveAppUIDOnce(r, protocol, src, dst); uid != UnknownAppUID {
+			return uid
+		}
+	}
+	return UnknownAppUID
+}
+
+// resolveAppUIDOnce makes one attribution attempt, bounded by
+// uidResolveAttemptTimeout.
+func (e *Engine) resolveAppUIDOnce(r UIDResolver, protocol string, src, dst netip.AddrPort) int32 {
 	// Buffered so the goroutine can always finish and be collected even if we
 	// stopped waiting for it.
 	result := make(chan int32, 1)
@@ -75,7 +94,7 @@ func (e *Engine) resolveAppUID(protocol string, src, dst netip.AddrPort) int32 {
 		)
 	}()
 
-	timer := time.NewTimer(uidResolveTimeout)
+	timer := time.NewTimer(uidResolveAttemptTimeout)
 	defer timer.Stop()
 	select {
 	case uid := <-result:

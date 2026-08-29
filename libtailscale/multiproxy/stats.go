@@ -35,6 +35,29 @@ type UpstreamStats struct {
 	lastLatencyNs int64
 	ready         int32 // 0 or 1: this stats object's last observed readiness
 
+	// Flow counts, for the observability diagnostics screen (see
+	// observability.go). tcpFlowsTotal/udpFlowsTotal only ever increase;
+	// activeTCP/activeUDP are incremented when nat_router.go creates a flow
+	// through this upstream and decremented when it ends, so they reflect
+	// concurrency, not history. All plain atomics - same rationale as the
+	// byte counters above.
+	tcpFlowsTotal uint64
+	udpFlowsTotal uint64
+	activeTCP     int64
+	activeUDP     int64
+
+	// dnsQueriesForwarded/dnsQueriesFailed count DNS lookups this upstream
+	// specifically carried, per dnsRouteFor's routing decision in
+	// dns_policy.go/dns.go. These are separate from dialAttempts/dialFailures
+	// above: every DNS forward also dials (and so also moves those counters),
+	// but a general dial success only means the TLS/TCP connection to the
+	// resolver came up, not that a usable DNS answer came back - and
+	// dialAttempts mixes DNS dials in with every other kind of traffic this
+	// upstream carries, so it cannot answer "is DNS specifically working
+	// through this upstream" on its own.
+	dnsQueriesForwarded uint64
+	dnsQueriesFailed    uint64
+
 	mu            sync.Mutex
 	lastError     string
 	lastErrorAt   time.Time
@@ -87,6 +110,31 @@ func (s *UpstreamStats) addBytesOut(n int64) {
 		atomic.AddUint64(&s.bytesOut, uint64(n))
 	}
 }
+
+// beginTCPFlow/endTCPFlow and beginUDPFlow/endUDPFlow bracket one flow's
+// lifetime through this upstream. Callers (nat_router.go) must call the
+// matching end exactly once per begin, on every exit path (typically via
+// defer), or activeTCP/activeUDP will drift.
+func (s *UpstreamStats) beginTCPFlow() {
+	atomic.AddUint64(&s.tcpFlowsTotal, 1)
+	atomic.AddInt64(&s.activeTCP, 1)
+}
+func (s *UpstreamStats) endTCPFlow() { atomic.AddInt64(&s.activeTCP, -1) }
+
+// recordDNSForwarded/recordDNSFailed are dns.go's hooks for a DNS query
+// specifically routed through this upstream - see dnsRouteFor.
+func (s *UpstreamStats) recordDNSForwarded() {
+	atomic.AddUint64(&s.dnsQueriesForwarded, 1)
+}
+func (s *UpstreamStats) recordDNSFailed() {
+	atomic.AddUint64(&s.dnsQueriesFailed, 1)
+}
+
+func (s *UpstreamStats) beginUDPFlow() {
+	atomic.AddUint64(&s.udpFlowsTotal, 1)
+	atomic.AddInt64(&s.activeUDP, 1)
+}
+func (s *UpstreamStats) endUDPFlow() { atomic.AddInt64(&s.activeUDP, -1) }
 
 // Health-observation states for UpstreamStats.ready. healthUnknown is the
 // zero value, distinct from both outcomes, so the very first observation -
@@ -148,6 +196,16 @@ func (r *statsRegistry) snapshot() map[UpstreamID]*UpstreamStats {
 
 func (e *Engine) statsFor(id UpstreamID) *UpstreamStats {
 	return e.stats.forID(id)
+}
+
+// resetAll drops every per-upstream UpstreamStats entry, for the diagnostics
+// "reset stats" action. Same in-flight-flow caveat as uidRegistry.resetAll:
+// a dial already holding a stale *UpstreamStats keeps updating it harmlessly,
+// and the next dial for that upstream gets a fresh entry via forID.
+func (r *statsRegistry) resetAll() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.stats = make(map[UpstreamID]*UpstreamStats)
 }
 
 // recordNotReady is readyProvider's hook for the "exists but not ready" case,
@@ -241,11 +299,31 @@ type UpstreamStatsInfo struct {
 	BytesIn       uint64 `json:"bytesIn"`
 	BytesOut      uint64 `json:"bytesOut"`
 
+	TCPFlowsTotal uint64 `json:"tcpFlowsTotal"`
+	UDPFlowsTotal uint64 `json:"udpFlowsTotal"`
+	ActiveTCP     int64  `json:"activeTcp"`
+	ActiveUDP     int64  `json:"activeUdp"`
+
+	// DNSQueriesForwarded/DNSQueriesFailed are the subset of dial traffic
+	// through this upstream that was specifically DNS lookups a policy rule
+	// routed here - see UpstreamStats.dnsQueriesForwarded's doc comment for
+	// why this is not derivable from DialAttempts/DialFailures above.
+	DNSQueriesForwarded uint64 `json:"dnsQueriesForwarded,omitempty"`
+	DNSQueriesFailed    uint64 `json:"dnsQueriesFailed,omitempty"`
+
 	LastLatencyMs       int64  `json:"lastLatencyMs,omitempty"`
 	LastError           string `json:"lastError,omitempty"`
 	LastErrorAtMillis   int64  `json:"lastErrorAtMillis,omitempty"`
 	LastSuccessAtMillis int64  `json:"lastSuccessAtMillis,omitempty"`
 	LastAttemptAtMillis int64  `json:"lastAttemptAtMillis,omitempty"`
+
+	// PeerPath is the current peer-connection state, generic across upstream
+	// kinds - "direct"/"derp:<region>" for a Tailnet/exit-node's peer,
+	// "wireguard:established"/"wireguard:no-handshake" for a WireGuard
+	// tunnel, "socks5"/"direct-bypass" for the kinds that have no
+	// meaningful path, or "unknown" if it could not be determined. See
+	// Engine.peerPathFor.
+	PeerPath string `json:"peerPath,omitempty"`
 }
 
 // UpstreamStatsSnapshot lists live stats for every upstream currently known:
@@ -282,6 +360,9 @@ func (e *Engine) UpstreamStatsSnapshot() []UpstreamStatsInfo {
 			info.ID = string(id)
 		}
 		item := UpstreamStatsInfo{ID: info.ID, Kind: info.Kind, Ready: info.Ready, Via: info.Via}
+		if info.Kind != "" {
+			item.PeerPath = e.peerPathFor(id, UpstreamKind(info.Kind))
+		}
 
 		if s := statsByID[id]; s != nil {
 			item.DialAttempts = atomic.LoadUint64(&s.dialAttempts)
@@ -290,6 +371,12 @@ func (e *Engine) UpstreamStatsSnapshot() []UpstreamStatsInfo {
 			item.NotReadyCount = atomic.LoadUint64(&s.notReadyCount)
 			item.BytesIn = atomic.LoadUint64(&s.bytesIn)
 			item.BytesOut = atomic.LoadUint64(&s.bytesOut)
+			item.TCPFlowsTotal = atomic.LoadUint64(&s.tcpFlowsTotal)
+			item.UDPFlowsTotal = atomic.LoadUint64(&s.udpFlowsTotal)
+			item.ActiveTCP = atomic.LoadInt64(&s.activeTCP)
+			item.DNSQueriesForwarded = atomic.LoadUint64(&s.dnsQueriesForwarded)
+			item.DNSQueriesFailed = atomic.LoadUint64(&s.dnsQueriesFailed)
+			item.ActiveUDP = atomic.LoadInt64(&s.activeUDP)
 			if ns := atomic.LoadInt64(&s.lastLatencyNs); ns > 0 {
 				item.LastLatencyMs = ns / int64(time.Millisecond)
 			}

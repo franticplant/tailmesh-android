@@ -52,7 +52,7 @@ func TestRunUDPAssociationIdleTimeout(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- runUDPAssociation(a, b, 30*time.Millisecond, nil)
+		done <- runUDPAssociation(a, b, 30*time.Millisecond, nil, nil, nil)
 	}()
 
 	select {
@@ -71,7 +71,7 @@ func TestRunUDPAssociationActivityRefreshesLifetime(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- runUDPAssociation(a, b, 80*time.Millisecond, nil)
+		done <- runUDPAssociation(a, b, 80*time.Millisecond, nil, nil, nil)
 	}()
 
 	for i := 0; i < 3; i++ {
@@ -105,7 +105,7 @@ func TestRunUDPAssociationCloseOneSideTerminatesBothPumps(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- runUDPAssociation(a, b, time.Second, nil)
+		done <- runUDPAssociation(a, b, time.Second, nil, nil, nil)
 	}()
 
 	if err := aPeer.Close(); err != nil {
@@ -130,7 +130,7 @@ func TestRunUDPAssociationRecordsByteCounts(t *testing.T) {
 	stats := &UpstreamStats{}
 	done := make(chan error, 1)
 	go func() {
-		done <- runUDPAssociation(a, b, time.Second, stats)
+		done <- runUDPAssociation(a, b, time.Second, stats, nil, nil)
 	}()
 
 	outPayload := []byte("app-to-upstream")

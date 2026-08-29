@@ -293,9 +293,11 @@ func (e *Engine) handleTCPConnection(r *tcp.ForwarderRequest) {
 	isDNS := isSyntheticDNSAddr(targetIPStr) && targetPort == 53
 
 	var decision RouteDecision
+	var flow FlowInfo
 	if !isDNS {
 		var ok bool
-		decision, ok = e.resolveFlow(e.flowFromEndpointID("tcp", id))
+		flow = e.flowFromEndpointID("tcp", id)
+		decision, ok = e.resolveFlow(flow)
 		if !ok {
 			log.Printf("[flow-%d] TCP %v -> %v (synthetic): reject (no route)", flowID, remoteAddr, targetIP)
 			r.Complete(true)
@@ -377,12 +379,22 @@ func (e *Engine) handleTCPConnection(r *tcp.ForwarderRequest) {
 		defer gonetConn.Close()
 
 		stats := e.statsFor(decision.UpstreamID)
+		stats.beginTCPFlow()
+		defer stats.endTCPFlow()
+
+		uid := e.uidStatsFor(flow.AppUID)
+		uu := uid.noteUpstream(decision.UpstreamID)
+		atomic.AddUint64(&uid.tcpFlows, 1)
+		atomic.AddUint64(&uu.tcpFlows, 1)
+
 		var wg sync.WaitGroup
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
 			n, _ := io.Copy(conn, gonetConn)
 			stats.addBytesOut(n)
+			uid.addBytesOut(n)
+			uu.addBytesOut(n)
 			if cw, ok := conn.(interface{ CloseWrite() error }); ok {
 				cw.CloseWrite()
 			}
@@ -391,6 +403,8 @@ func (e *Engine) handleTCPConnection(r *tcp.ForwarderRequest) {
 			defer wg.Done()
 			n, _ := io.Copy(gonetConn, conn)
 			stats.addBytesIn(n)
+			uid.addBytesIn(n)
+			uu.addBytesIn(n)
 			gonetConn.CloseRead()
 		}()
 		wg.Wait()
@@ -429,12 +443,12 @@ func pumpUDPAssociation(dst, src net.Conn, touch func(), onBytes func(n int)) er
 // first terminal error or idle timeout closes both sides, which unblocks the
 // opposite pump, and the function waits for both pumps before returning.
 //
-// stats may be nil (existing tests exercise the timeout/activity/close
-// behaviour directly over net.Pipe with no real Engine or upstream involved);
-// a is the app/gVisor side and b is the upstream side, matching the TCP path's
-// addBytesOut/addBytesIn direction convention (app->upstream is "out",
-// upstream->app is "in").
-func runUDPAssociation(a, b net.Conn, idleTimeout time.Duration, stats *UpstreamStats) error {
+// stats, uid, and uu may all be nil (existing tests exercise the
+// timeout/activity/close behaviour directly over net.Pipe with no real
+// Engine, upstream, or app attribution involved); a is the app/gVisor side
+// and b is the upstream side, matching the TCP path's addBytesOut/addBytesIn
+// direction convention (app->upstream is "out", upstream->app is "in").
+func runUDPAssociation(a, b net.Conn, idleTimeout time.Duration, stats *UpstreamStats, uid *uidStats, uu *upstreamUsage) error {
 	touch := func() {
 		deadline := time.Now().Add(idleTimeout)
 		_ = a.SetDeadline(deadline)
@@ -443,9 +457,29 @@ func runUDPAssociation(a, b net.Conn, idleTimeout time.Duration, stats *Upstream
 	touch()
 
 	var onOut, onIn func(n int)
-	if stats != nil {
-		onOut = func(n int) { stats.addBytesOut(int64(n)) }
-		onIn = func(n int) { stats.addBytesIn(int64(n)) }
+	if stats != nil || uid != nil || uu != nil {
+		onOut = func(n int) {
+			if stats != nil {
+				stats.addBytesOut(int64(n))
+			}
+			if uid != nil {
+				uid.addBytesOut(int64(n))
+			}
+			if uu != nil {
+				uu.addBytesOut(int64(n))
+			}
+		}
+		onIn = func(n int) {
+			if stats != nil {
+				stats.addBytesIn(int64(n))
+			}
+			if uid != nil {
+				uid.addBytesIn(int64(n))
+			}
+			if uu != nil {
+				uu.addBytesIn(int64(n))
+			}
+		}
 	}
 
 	errCh := make(chan error, 2)
@@ -479,7 +513,8 @@ func (e *Engine) handleUDPConnection(r *udp.ForwarderRequest) bool {
 		return true
 	}
 
-	decision, ok := e.resolveFlow(e.flowFromEndpointID("udp", r.ID()))
+	flow := e.flowFromEndpointID("udp", r.ID())
+	decision, ok := e.resolveFlow(flow)
 	if !ok {
 		return false
 	}
@@ -523,7 +558,16 @@ func (e *Engine) handleUDPConnection(r *udp.ForwarderRequest) bool {
 		defer tsnetConn.Close()
 
 		log.Printf("[flow-%d] UDP upstream dial %s %s success", flowID, decision.UpstreamID, dialAddr)
-		err = runUDPAssociation(gvisorConn, tsnetConn, udpAssociationIdleTimeout, e.statsFor(decision.UpstreamID))
+
+		stats := e.statsFor(decision.UpstreamID)
+		stats.beginUDPFlow()
+		defer stats.endUDPFlow()
+		uid := e.uidStatsFor(flow.AppUID)
+		uu := uid.noteUpstream(decision.UpstreamID)
+		atomic.AddUint64(&uid.udpFlows, 1)
+		atomic.AddUint64(&uu.udpFlows, 1)
+
+		err = runUDPAssociation(gvisorConn, tsnetConn, udpAssociationIdleTimeout, stats, uid, uu)
 		log.Printf("[flow-%d] UDP closed: %v", flowID, err)
 	}()
 

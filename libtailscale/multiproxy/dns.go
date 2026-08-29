@@ -392,6 +392,7 @@ func (e *Engine) ServeDNSUDP(conn net.Conn, flow FlowInfo) {
 		}
 
 		resp := e.handleDNSMsg(req, "udp", flow)
+		e.AddDNSQuery(resp.Rcode != dns.RcodeSuccess)
 		out, err := resp.Pack()
 		if err != nil {
 			continue
@@ -448,6 +449,7 @@ func (e *Engine) ServeDNSTCP(conn net.Conn, flow FlowInfo) {
 		}
 
 		resp := e.handleDNSMsg(req, "tcp", flow)
+		e.AddDNSQuery(resp.Rcode != dns.RcodeSuccess)
 		out, err := resp.Pack()
 		if err != nil || len(out) > 0xffff {
 			continue
@@ -535,6 +537,24 @@ func (e *Engine) handleDNSMsg(r *dns.Msg, netType string, flow FlowInfo) *dns.Ms
 			return m
 		}
 
+		// A UID-scoped policy rule exists (this app, or some app, has an
+		// explicit route) but this query's flow could not be attributed -
+		// see uid.go's resolveAppUID and flowinfo.go's attributionFailures
+		// counter. Falling through to the default/direct route here would
+		// silently leak this app's lookups outside the route it - or
+		// another app - was deliberately given, so this fails closed
+		// instead: refuse rather than guess. General (non-DNS) data
+		// traffic does not fail closed the same way yet (see
+		// docs/multi_tailnet_proxy_app/observability.md) - deliberately
+		// scoped to DNS first, since a refused lookup is cheap and
+		// recoverable (the app/OS resolver retries or surfaces "can't find
+		// site"), unlike dropping an already-established data connection.
+		if flow.AppUID == UnknownAppUID && e.policyUsesAppUID() {
+			e.obs.dp.addDNSAttributionFailClosed()
+			m.Rcode = dns.RcodeServerFailure
+			return m
+		}
+
 		// Where the forward leaves from follows the asking app's own route, so a
 		// proxied app does not announce its lookups to the device resolver. See
 		// dns_policy.go.
@@ -560,8 +580,15 @@ func (e *Engine) handleDNSMsg(r *dns.Msg, netType string, flow FlowInfo) *dns.Ms
 			}
 			if err != nil {
 				log.Printf("multiproxy DNS: %v", err)
+				if route.provider != nil {
+					e.obs.dp.addDNSForwardFailure()
+					e.statsFor(route.provider.ID()).recordDNSFailed()
+				}
 				m.Rcode = dns.RcodeServerFailure
 				return m
+			}
+			if route.provider != nil {
+				e.statsFor(route.provider.ID()).recordDNSForwarded()
 			}
 			resp.Id = r.Id
 			return resp
@@ -578,9 +605,12 @@ func (e *Engine) handleDNSMsg(r *dns.Msg, netType string, flow FlowInfo) *dns.Ms
 				if err != nil {
 					log.Printf("multiproxy DNS: %v", err)
 				}
+				e.obs.dp.addDNSForwardFailure()
+				e.statsFor(route.provider.ID()).recordDNSFailed()
 				m.Rcode = dns.RcodeServerFailure
 				return m
 			}
+			e.statsFor(route.provider.ID()).recordDNSForwarded()
 			resp.Id = r.Id
 			return resp
 		}

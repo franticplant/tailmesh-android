@@ -11,7 +11,7 @@ import (
 // TestEngineConcurrency stresses the Mutex locks
 func TestEngineConcurrency(t *testing.T) {
 	log.Println("Starting Edge Concurrency Test...")
-	
+
 	engine := NewEngine("/tmp/test-engine", &MockCallback{})
 	var wg sync.WaitGroup
 

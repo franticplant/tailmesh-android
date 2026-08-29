@@ -31,30 +31,49 @@ type tailnetStateProbe struct {
 	srv     *tsnet.Server
 }
 
-func observedTailnetState(enabled bool, srv *tsnet.Server) (state, machineName, exitNodeIP string) {
+// pathInfo is the direct/DERP observation observedTailnetState derives from
+// the same Status() call it already makes for exitNodeIP - no extra polling
+// beyond what GetTailnetStatesJSON's existing 1s cadence already does (see
+// observability.go's noteExitNodePath, which this feeds).
+type pathInfo struct {
+	hasExitNode bool
+	direct      bool
+	derpRegion  string
+}
+
+func observedTailnetState(enabled bool, srv *tsnet.Server) (state, machineName, exitNodeIP string, path pathInfo) {
 	if !enabled || srv == nil {
-		return "STOPPED", "", ""
+		return "STOPPED", "", "", path
 	}
 	lc, err := srv.LocalClient()
 	if err != nil {
-		return "ERROR", "", ""
+		return "ERROR", "", "", path
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	status, err := lc.Status(ctx)
 	if err != nil || status == nil {
-		return "STARTING", "", ""
+		return "STARTING", "", "", path
 	}
 	if status.BackendState == "" {
-		return "STARTING", "", ""
+		return "STARTING", "", "", path
 	}
 	if status.Self != nil {
 		machineName = status.Self.HostName
 	}
 	if status.ExitNodeStatus != nil && len(status.ExitNodeStatus.TailscaleIPs) > 0 {
 		exitNodeIP = status.ExitNodeStatus.TailscaleIPs[0].Addr().String()
+		path.hasExitNode = true
+		for _, peer := range status.Peer {
+			if peer == nil || peer.ID != status.ExitNodeStatus.ID {
+				continue
+			}
+			path.direct = peer.CurAddr != ""
+			path.derpRegion = peer.Relay
+			break
+		}
 	}
-	return status.BackendState, machineName, exitNodeIP
+	return status.BackendState, machineName, exitNodeIP, path
 }
 
 // GetTailnetStatesJSON returns a stable snapshot of registered Tailnet runtimes
@@ -84,7 +103,7 @@ func (e *Engine) GetTailnetStatesJSON() string {
 		wg.Add(1)
 		go func(i int, p tailnetStateProbe) {
 			defer wg.Done()
-			state, machineName, exitNodeIP := observedTailnetState(p.enabled, p.srv)
+			state, machineName, exitNodeIP, path := observedTailnetState(p.enabled, p.srv)
 			out[i] = TailnetRuntimeExport{
 				TailnetID:   p.id,
 				Enabled:     p.enabled,
@@ -92,6 +111,7 @@ func (e *Engine) GetTailnetStatesJSON() string {
 				MachineName: machineName,
 				ExitNodeIP:  exitNodeIP,
 			}
+			e.noteExitNodePath(p.id, path.hasExitNode, path.direct, path.derpRegion)
 		}(i, p)
 	}
 	wg.Wait()
@@ -161,7 +181,7 @@ func (e *Engine) GetExitNodeStatesJSON() string {
 		wg.Add(1)
 		go func(i int, p exitNodeStateProbe) {
 			defer wg.Done()
-			state, machineName, _ := observedTailnetState(p.enabled, p.srv)
+			state, machineName, _, _ := observedTailnetState(p.enabled, p.srv)
 			out[i] = ExitNodeRuntimeExport{
 				ID:              p.id,
 				SourceTailnetID: p.sourceTailnetID,

@@ -1,22 +1,23 @@
 package multiproxy
 
 import (
-	"fmt"
 	"context"
+	"fmt"
+	"github.com/miekg/dns"
 	"net"
 	"net/netip"
-	"syscall"
 	"sync"
+	"syscall"
+	"tailscale.com/tsnet"
 	"testing"
 	"time"
-	"github.com/miekg/dns"
-	"tailscale.com/tsnet"
 )
 
 type MockCallback struct {
 	mu           sync.Mutex
 	crossovers   []crossoverCall
 	healthEvents []healthCall
+	obsEvents    []obsCall
 }
 
 type crossoverCall struct {
@@ -27,6 +28,13 @@ type healthCall struct {
 	upstreamID string
 	ready      bool
 	reason     string
+}
+
+type obsCall struct {
+	eventType, upstreamID                  string
+	appUID                                 int32
+	networkSource, previousState, newState string
+	metadataJSON                           string
 }
 
 func (m *MockCallback) OnPeerDiscovered(h, v4, v6, t string) {}
@@ -41,6 +49,12 @@ func (m *MockCallback) OnUpstreamHealthChanged(upstreamID string, ready bool, re
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.healthEvents = append(m.healthEvents, healthCall{upstreamID, ready, reason})
+}
+
+func (m *MockCallback) OnObservabilityEvent(eventType, upstreamID string, appUID int32, networkSource, previousState, newState, metadataJSON string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.obsEvents = append(m.obsEvents, obsCall{eventType, upstreamID, appUID, networkSource, previousState, newState, metadataJSON})
 }
 
 func (m *MockCallback) crossoverCount() int {
@@ -97,25 +111,25 @@ func TestCanonicalTargetKey(t *testing.T) {
 func TestSnapshotLifecycle(t *testing.T) {
 	engine := NewEngine("/tmp", &MockCallback{})
 	uid := UpstreamID("test-tn")
-	
+
 	// Initial snapshot with A and B
 	recA := TargetRecord{
-		Key: TargetKey{uid, TargetKindTailscaleNode, "A"},
-		SyntheticIPv6: TargetKey{uid, TargetKindTailscaleNode, "A"}.SyntheticIPv6(),
-		Hostname: "hostA.",
-		CurrentIPv4: netip.MustParseAddr("100.0.0.1"),
+		Key:              TargetKey{uid, TargetKindTailscaleNode, "A"},
+		SyntheticIPv6:    TargetKey{uid, TargetKindTailscaleNode, "A"}.SyntheticIPv6(),
+		Hostname:         "hostA.",
+		CurrentIPv4:      netip.MustParseAddr("100.0.0.1"),
 		RequiredUpstream: uid,
 	}
 	recB := TargetRecord{
-		Key: TargetKey{uid, TargetKindTailscaleNode, "B"},
-		SyntheticIPv6: TargetKey{uid, TargetKindTailscaleNode, "B"}.SyntheticIPv6(),
-		Hostname: "hostB.",
-		CurrentIPv4: netip.MustParseAddr("100.0.0.2"),
+		Key:              TargetKey{uid, TargetKindTailscaleNode, "B"},
+		SyntheticIPv6:    TargetKey{uid, TargetKindTailscaleNode, "B"}.SyntheticIPv6(),
+		Hostname:         "hostB.",
+		CurrentIPv4:      netip.MustParseAddr("100.0.0.2"),
 		RequiredUpstream: uid,
 	}
-	
+
 	engine.updateTailnetSnapshot(uid, []TargetRecord{recA, recB})
-	
+
 	// Verify A and B exist
 	engine.targetMutex.RLock()
 	if len(engine.targets) != 2 {
@@ -132,10 +146,10 @@ func TestSnapshotLifecycle(t *testing.T) {
 	// 4. Removing another node does not change existing addresses
 	// Update snapshot with B and C (A is gone)
 	recC := TargetRecord{
-		Key: TargetKey{uid, TargetKindTailscaleNode, "C"},
-		SyntheticIPv6: TargetKey{uid, TargetKindTailscaleNode, "C"}.SyntheticIPv6(),
-		Hostname: "hostC.",
-		CurrentIPv4: netip.MustParseAddr("100.0.0.3"),
+		Key:              TargetKey{uid, TargetKindTailscaleNode, "C"},
+		SyntheticIPv6:    TargetKey{uid, TargetKindTailscaleNode, "C"}.SyntheticIPv6(),
+		Hostname:         "hostC.",
+		CurrentIPv4:      netip.MustParseAddr("100.0.0.3"),
 		RequiredUpstream: uid,
 	}
 	engine.updateTailnetSnapshot(uid, []TargetRecord{recB, recC})
@@ -155,14 +169,14 @@ func TestSnapshotLifecycle(t *testing.T) {
 
 	// 5. same stable node ID with changed current IPv4 keeps same synthetic IPv6
 	recB_updated := TargetRecord{
-		Key: TargetKey{uid, TargetKindTailscaleNode, "B"},
-		SyntheticIPv6: TargetKey{uid, TargetKindTailscaleNode, "B"}.SyntheticIPv6(),
-		Hostname: "hostB.",
-		CurrentIPv4: netip.MustParseAddr("100.0.0.99"), // Changed IP
+		Key:              TargetKey{uid, TargetKindTailscaleNode, "B"},
+		SyntheticIPv6:    TargetKey{uid, TargetKindTailscaleNode, "B"}.SyntheticIPv6(),
+		Hostname:         "hostB.",
+		CurrentIPv4:      netip.MustParseAddr("100.0.0.99"), // Changed IP
 		RequiredUpstream: uid,
 	}
 	engine.updateTailnetSnapshot(uid, []TargetRecord{recB_updated, recC})
-	
+
 	engine.targetMutex.RLock()
 	updatedRecB, ok := engine.targets[recB.SyntheticIPv6]
 	engine.targetMutex.RUnlock()
@@ -183,15 +197,15 @@ func TestSnapshotLifecycle(t *testing.T) {
 func TestDisableTailnet(t *testing.T) {
 	engine := NewEngine("/tmp", &MockCallback{})
 	engine.AddTailnet("tn", "key", true)
-	
+
 	uid := UpstreamID("tn")
 	engine.updateTailnetSnapshot(uid, []TargetRecord{{
-		Key: TargetKey{uid, TargetKindTailscaleNode, "A"},
-		SyntheticIPv6: TargetKey{uid, TargetKindTailscaleNode, "A"}.SyntheticIPv6(),
-		Hostname: "hostA.",
+		Key:              TargetKey{uid, TargetKindTailscaleNode, "A"},
+		SyntheticIPv6:    TargetKey{uid, TargetKindTailscaleNode, "A"}.SyntheticIPv6(),
+		Hostname:         "hostA.",
 		RequiredUpstream: uid,
 	}})
-	
+
 	engine.targetMutex.RLock()
 	numTargs := len(engine.targets)
 	engine.targetMutex.RUnlock()
@@ -200,14 +214,14 @@ func TestDisableTailnet(t *testing.T) {
 	}
 
 	engine.SetTailnetEnabled("tn", false)
-	
+
 	engine.targetMutex.RLock()
 	numTargs = len(engine.targets)
 	engine.targetMutex.RUnlock()
 	if numTargs != 0 {
 		t.Fatalf("Expected 0 targets after disable, got %d", numTargs)
 	}
-	
+
 	engine.mu.RLock()
 	if _, exists := engine.tailnets[uid]; !exists {
 		t.Fatalf("Disabled tailnet should still exist in configuration")
@@ -215,27 +229,26 @@ func TestDisableTailnet(t *testing.T) {
 	engine.mu.RUnlock()
 }
 
-
 func TestDistinctTargetsSameIPv4Routing(t *testing.T) {
 	engine := NewEngine("/tmp", &MockCallback{})
 	uid1 := UpstreamID("tn1")
 	uid2 := UpstreamID("tn2")
-	
+
 	engine.mu.Lock()
-	engine.tailnets[uid1] = &TailnetRuntime{ Enabled: true, Srv: &tsnet.Server{} }
-	engine.tailnets[uid2] = &TailnetRuntime{ Enabled: true, Srv: &tsnet.Server{} }
+	engine.tailnets[uid1] = &TailnetRuntime{Enabled: true, Srv: &tsnet.Server{}}
+	engine.tailnets[uid2] = &TailnetRuntime{Enabled: true, Srv: &tsnet.Server{}}
 	engine.mu.Unlock()
 
 	recA := TargetRecord{
-		Key: TargetKey{uid1, TargetKindTailscaleNode, "A"},
-		CurrentIPv4: netip.MustParseAddr("100.1.2.3"),
+		Key:              TargetKey{uid1, TargetKindTailscaleNode, "A"},
+		CurrentIPv4:      netip.MustParseAddr("100.1.2.3"),
 		RequiredUpstream: uid1,
 	}
 	recA.SyntheticIPv6 = recA.Key.SyntheticIPv6()
-	
+
 	recB := TargetRecord{
-		Key: TargetKey{uid2, TargetKindTailscaleNode, "B"},
-		CurrentIPv4: netip.MustParseAddr("100.1.2.3"),
+		Key:              TargetKey{uid2, TargetKindTailscaleNode, "B"},
+		CurrentIPv4:      netip.MustParseAddr("100.1.2.3"),
 		RequiredUpstream: uid2,
 	}
 	recB.SyntheticIPv6 = recB.Key.SyntheticIPv6()
@@ -254,22 +267,21 @@ func TestDistinctTargetsSameIPv4Routing(t *testing.T) {
 	}
 }
 
-
 func TestForcedCollisionFailsClosed(t *testing.T) {
 	engine := NewEngine("/tmp", &MockCallback{})
 	uid := UpstreamID("tn")
 
 	// Force a collision manually
 	recA := TargetRecord{
-		Key: TargetKey{uid, TargetKindTailscaleNode, "A"},
-		Hostname: "hostA.",
+		Key:              TargetKey{uid, TargetKindTailscaleNode, "A"},
+		Hostname:         "hostA.",
 		RequiredUpstream: uid,
 	}
 	recA.SyntheticIPv6 = recA.Key.SyntheticIPv6()
 
 	recB := TargetRecord{
-		Key: TargetKey{uid, TargetKindTailscaleNode, "B"},
-		Hostname: "hostB.",
+		Key:              TargetKey{uid, TargetKindTailscaleNode, "B"},
+		Hostname:         "hostB.",
 		RequiredUpstream: uid,
 	}
 	// FORCE COLLISION
@@ -287,20 +299,20 @@ func TestForcedCollisionFailsClosed(t *testing.T) {
 
 func TestDNSAmbiguityAndQualified(t *testing.T) {
 	engine := NewEngine("/tmp", &MockCallback{})
-	
+
 	uid1 := UpstreamID("tn1")
 	uid2 := UpstreamID("tn2")
 
 	recA := TargetRecord{
-		Key: TargetKey{uid1, TargetKindTailscaleNode, "A"},
-		SyntheticIPv6: TargetKey{uid1, TargetKindTailscaleNode, "A"}.SyntheticIPv6(),
-		Hostname: "shared.",
+		Key:              TargetKey{uid1, TargetKindTailscaleNode, "A"},
+		SyntheticIPv6:    TargetKey{uid1, TargetKindTailscaleNode, "A"}.SyntheticIPv6(),
+		Hostname:         "shared.",
 		RequiredUpstream: uid1,
 	}
 	recB := TargetRecord{
-		Key: TargetKey{uid2, TargetKindTailscaleNode, "B"},
-		SyntheticIPv6: TargetKey{uid2, TargetKindTailscaleNode, "B"}.SyntheticIPv6(),
-		Hostname: "shared.",
+		Key:              TargetKey{uid2, TargetKindTailscaleNode, "B"},
+		SyntheticIPv6:    TargetKey{uid2, TargetKindTailscaleNode, "B"}.SyntheticIPv6(),
+		Hostname:         "shared.",
 		RequiredUpstream: uid2,
 	}
 
@@ -312,7 +324,7 @@ func TestDNSAmbiguityAndQualified(t *testing.T) {
 	if len(ips) != 2 {
 		t.Fatalf("Expected 2 IPs for ambiguous name 'shared.', got %d", len(ips))
 	}
-	
+
 	hash1 := getStableHash("tn1")
 	qualified1 := "shared." + hash1 + ".proxy."
 	ips1 := engine.dnsTable[qualified1]
@@ -325,7 +337,7 @@ func TestDNSAmbiguityAndQualified(t *testing.T) {
 func TestPrefixContainment(t *testing.T) {
 	k := TargetKey{"tn", TargetKindTailscaleNode, "X"}
 	ip := k.SyntheticIPv6()
-	
+
 	if !SyntheticIPv6Prefix.Contains(ip) {
 		t.Fatalf("Generated IP %v is not contained in SyntheticIPv6Prefix %v", ip, SyntheticIPv6Prefix)
 	}
@@ -335,9 +347,9 @@ func TestSyntheticDNSAnswersBothFamilies(t *testing.T) {
 	engine := NewEngine("/tmp", &MockCallback{})
 	uid := UpstreamID("tn")
 	rec := TargetRecord{
-		Key: TargetKey{uid, TargetKindTailscaleNode, "A"},
-		SyntheticIPv6: TargetKey{uid, TargetKindTailscaleNode, "A"}.SyntheticIPv6(),
-		Hostname: "onlyv6.",
+		Key:              TargetKey{uid, TargetKindTailscaleNode, "A"},
+		SyntheticIPv6:    TargetKey{uid, TargetKindTailscaleNode, "A"}.SyntheticIPv6(),
+		Hostname:         "onlyv6.",
 		RequiredUpstream: uid,
 	}
 	engine.updateTailnetSnapshot(uid, []TargetRecord{rec})
@@ -367,7 +379,8 @@ func TestSyntheticDNSAnswersBothFamilies(t *testing.T) {
 	}
 }
 
-type mockUpstream struct { dialAddr string }
+type mockUpstream struct{ dialAddr string }
+
 func (m *mockUpstream) Dial(ctx context.Context, network, address string) (net.Conn, error) {
 	m.dialAddr = address
 	return nil, nil // we just record it
@@ -376,7 +389,7 @@ func (m *mockUpstream) Dial(ctx context.Context, network, address string) (net.C
 func TestConcurrentEnableDisable(t *testing.T) {
 	engine := NewEngine("/tmp", &MockCallback{})
 	engine.AddTailnet("tn", "key", true)
-	
+
 	// Rapidly disable and enable
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {
@@ -391,20 +404,20 @@ func TestConcurrentEnableDisable(t *testing.T) {
 
 	// End state verify
 	engine.SetTailnetEnabled("tn", true)
-	
+
 	engine.mu.RLock()
 	rt, exists := engine.tailnets["tn"]
 	engine.mu.RUnlock()
-	
+
 	if !exists || !rt.Enabled || rt.Srv == nil {
 		t.Fatalf("Tailnet failed to stabilize in enabled state")
 	}
-	
+
 	engine.SetTailnetEnabled("tn", false)
 	engine.mu.RLock()
 	rt, _ = engine.tailnets["tn"]
 	engine.mu.RUnlock()
-	
+
 	if rt.Enabled || rt.Srv != nil {
 		t.Fatalf("Tailnet failed to stabilize in disabled state")
 	}
@@ -412,20 +425,20 @@ func TestConcurrentEnableDisable(t *testing.T) {
 
 func TestRouteDecisionUpstreamSelection(t *testing.T) {
 	engine := NewEngine("/tmp", &MockCallback{})
-	
+
 	uid := UpstreamID("tn-mock")
 	engine.mu.Lock()
-	engine.tailnets[uid] = &TailnetRuntime{ Enabled: true, Srv: &tsnet.Server{} }
+	engine.tailnets[uid] = &TailnetRuntime{Enabled: true, Srv: &tsnet.Server{}}
 	engine.mu.Unlock()
 
 	recA := TargetRecord{
-		Key: TargetKey{uid, TargetKindTailscaleNode, "A"},
-		Hostname: "hostA.",
-		CurrentIPv4: netip.MustParseAddr("100.0.0.5"),
+		Key:              TargetKey{uid, TargetKindTailscaleNode, "A"},
+		Hostname:         "hostA.",
+		CurrentIPv4:      netip.MustParseAddr("100.0.0.5"),
 		RequiredUpstream: uid,
 	}
 	recA.SyntheticIPv6 = recA.Key.SyntheticIPv6()
-	
+
 	engine.updateTailnetSnapshot(uid, []TargetRecord{recA})
 
 	decision, ok := engine.resolveRoute(recA.SyntheticIPv6)
@@ -443,21 +456,21 @@ func TestRouteDecisionUpstreamSelection(t *testing.T) {
 func TestDisableReenableIdentity(t *testing.T) {
 	engine := NewEngine("/tmp", &MockCallback{})
 	engine.AddTailnet("tn", "key", true)
-	
+
 	uid := UpstreamID("tn")
 	recA := TargetRecord{
-		Key: TargetKey{uid, TargetKindTailscaleNode, "A"},
+		Key:              TargetKey{uid, TargetKindTailscaleNode, "A"},
 		RequiredUpstream: uid,
 	}
 	recA.SyntheticIPv6 = recA.Key.SyntheticIPv6()
 	engine.updateTailnetSnapshot(uid, []TargetRecord{recA})
-	
+
 	engine.SetTailnetEnabled("tn", false)
 	engine.SetTailnetEnabled("tn", true)
-	
+
 	// Add it back in snapshot (simulate connection returning)
 	engine.updateTailnetSnapshot(uid, []TargetRecord{recA})
-	
+
 	engine.targetMutex.RLock()
 	defer engine.targetMutex.RUnlock()
 	if _, ok := engine.targets[recA.SyntheticIPv6]; !ok {
@@ -470,19 +483,18 @@ func TestStaleSyntheticRouting(t *testing.T) {
 	engine.mu.Lock()
 	engine.tailnets["exit-node"] = &TailnetRuntime{Enabled: true, Srv: &tsnet.Server{}}
 	engine.mu.Unlock()
-	
+
 	engine.SetExitNode("exit-node")
 	engine.AcceptSubnet("::/0", "exit-node")
 
-	
 	// Create an address that is inside SyntheticIPv6Prefix but has no TargetRecord
 	staleIP := SyntheticIPv6Prefix.Addr()
-	
+
 	_, ok := engine.resolveRoute(staleIP)
 	if ok {
 		t.Fatalf("Stale synthetic route fell through to subnet/exit node rather than failing closed!")
 	}
-	
+
 	// Random IP outside synthetic prefix should fall through to exit node
 	outsideIP := netip.MustParseAddr("2001:4860:4860::8888")
 	decision, ok2 := engine.resolveRoute(outsideIP)
@@ -584,19 +596,19 @@ func TestRealIPRoutingUnaffectedInsideSyntheticNamespace(t *testing.T) {
 func TestResolveRouteConcurrency(t *testing.T) {
 	engine := NewEngine("/tmp", &MockCallback{})
 	engine.AddTailnet("tn-race", "key", true)
-	
+
 	uid := UpstreamID("tn-race")
 	rec := TargetRecord{
-		Key: TargetKey{uid, TargetKindTailscaleNode, "RACE"},
-		CurrentIPv4: netip.MustParseAddr("100.1.2.3"),
+		Key:              TargetKey{uid, TargetKindTailscaleNode, "RACE"},
+		CurrentIPv4:      netip.MustParseAddr("100.1.2.3"),
 		RequiredUpstream: uid,
 	}
 	rec.SyntheticIPv6 = rec.Key.SyntheticIPv6()
 	engine.updateTailnetSnapshot(uid, []TargetRecord{rec})
-	
+
 	var wg sync.WaitGroup
 	done := make(chan struct{})
-	
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -610,7 +622,7 @@ func TestResolveRouteConcurrency(t *testing.T) {
 		}
 		close(done)
 	}()
-	
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -623,36 +635,36 @@ func TestResolveRouteConcurrency(t *testing.T) {
 			}
 		}
 	}()
-	
+
 	wg.Wait()
 }
 
 func TestSyntheticDNSNoDataForUnsupported(t *testing.T) {
 	engine := NewEngine("/tmp", &MockCallback{})
 	uid := UpstreamID("tn-dns")
-	
+
 	engine.mu.Lock()
 	engine.tailnets[uid] = &TailnetRuntime{Enabled: true, Srv: &tsnet.Server{}}
 	engine.mu.Unlock()
 
 	rec := TargetRecord{
-		Key: TargetKey{uid, TargetKindTailscaleNode, "DNS"},
-		Hostname: "dns-test.",
-		CurrentIPv4: netip.MustParseAddr("100.1.2.3"),
+		Key:              TargetKey{uid, TargetKindTailscaleNode, "DNS"},
+		Hostname:         "dns-test.",
+		CurrentIPv4:      netip.MustParseAddr("100.1.2.3"),
 		RequiredUpstream: uid,
 	}
 	rec.SyntheticIPv6 = rec.Key.SyntheticIPv6()
-	
+
 	engine.updateTailnetSnapshot(uid, []TargetRecord{rec})
-	
+
 	hashID := getStableHash(string(uid))
 	qualified := fmt.Sprintf("dns-test.%s.proxy.", hashID)
 
 	req := new(dns.Msg)
 	req.SetQuestion(qualified, dns.TypeTXT)
-	
+
 	resp := engine.handleDNSMsg(req, "udp", FlowInfo{AppUID: UnknownAppUID})
-	
+
 	if len(resp.Answer) != 0 {
 		t.Fatalf("Expected NODATA (0 answers) for TXT, got %d", len(resp.Answer))
 	}
@@ -680,7 +692,7 @@ func TestDNSNormalization(t *testing.T) {
 	if engine.upstreamDNS != "[2001:db8::1]:53" { // Should be unchanged from previous
 		t.Fatalf("Expected [2001:db8::1]:53 after rejecting self-DNS, got %s", engine.upstreamDNS)
 	}
-	
+
 	engine.SetUpstreamDNS("[2001:db8::2]:5353")
 	if engine.upstreamDNS != "[2001:db8::2]:5353" {
 		t.Fatalf("Expected [2001:db8::2]:5353, got %s", engine.upstreamDNS)

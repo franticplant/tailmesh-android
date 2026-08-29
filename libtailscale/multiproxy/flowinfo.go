@@ -16,7 +16,8 @@ import (
 // wrong rules, so the mapping is done here once rather than at each call site.
 //
 // The app UID is resolved here too, which is a blocking call bounded by
-// uidResolveTimeout. It happens once per new flow, not per packet.
+// resolveAppUID's own retry/timeout budget. It happens once per new flow,
+// not per packet.
 func (e *Engine) flowFromEndpointID(protocol string, id stack.TransportEndpointID) FlowInfo {
 	dst := addrPortFrom(id.LocalAddress, id.LocalPort)
 	src := addrPortFrom(id.RemoteAddress, id.RemotePort)
@@ -32,6 +33,17 @@ func (e *Engine) flowFromEndpointID(protocol string, id stack.TransportEndpointI
 	// common case free.
 	if e.policyUsesAppUID() {
 		f.AppUID = e.resolveAppUID(protocol, src, dst)
+		if f.AppUID == UnknownAppUID {
+			// A UID-scoped rule exists, but this specific flow couldn't be
+			// attributed to an app - it can now only match a broader rule
+			// than the one that may actually apply to it (Selector.matches'
+			// "an unattributed flow can never satisfy a UID-scoped rule").
+			// Counted here, once per flow, regardless of protocol - the
+			// single point every new flow (TCP, UDP, and the UDP/TCP
+			// connections DNS itself rides on) passes through. See
+			// observability.go's dataplaneCounters.attributionFailures.
+			e.obs.dp.addAttributionFailure()
+		}
 	}
 	return f
 }

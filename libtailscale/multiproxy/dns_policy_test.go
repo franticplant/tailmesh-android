@@ -2,7 +2,9 @@ package multiproxy
 
 import (
 	"context"
+	"fmt"
 	"net"
+	"net/http"
 	"net/netip"
 	"strings"
 	"testing"
@@ -349,6 +351,65 @@ func TestRouteToUnusableUpstreamServfails(t *testing.T) {
 	}
 }
 
+// An unattributed query must not silently fall through to the default/direct
+// route when some app has an explicit binding - that would leak whichever
+// app's lookup this actually was outside the route the user configured for
+// it. It fails closed (SERVFAIL) instead, and counts the occurrence rather
+// than guessing. See dns.go's fail-closed branch and
+// flowinfo.go/observability.go's attributionFailures counter.
+func TestUnattributedQueryFailsClosedWhenPolicyUsesAppUID(t *testing.T) {
+	e := NewEngine(t.TempDir(), &MockCallback{})
+	e.SetUpstreamDNS("192.0.2.53:53")
+	provider := &dialProvider{id: "proxy", dials: make(chan string, 4)}
+	if err := e.RegisterUpstream(provider); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.SetPolicy(Policy{Rules: []Rule{
+		appRule("someone's route", []int32{1000}, ActionRoute, "proxy"),
+		{Name: "default", Action: ActionDirect},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := new(dns.Msg)
+	req.SetQuestion("example.com.", dns.TypeA)
+	resp := e.handleDNSMsg(req, "udp", FlowInfo{Protocol: "udp", AppUID: UnknownAppUID})
+	if resp.Rcode != dns.RcodeServerFailure {
+		t.Fatalf("rcode = %s, want SERVFAIL", dns.RcodeToString[resp.Rcode])
+	}
+	select {
+	case got := <-provider.dials:
+		t.Fatalf("unattributed query reached an upstream instead of failing closed: %q", got)
+	default:
+	}
+	if got := e.obs.dp.dnsAttributionFailClosed; got != 1 {
+		t.Fatalf("dnsAttributionFailClosed = %d, want 1", got)
+	}
+}
+
+// With no UID-scoped rule in the policy at all, an unattributed query keeps
+// today's behaviour (falls through to the default/no-op forward) - there is
+// nothing it could be leaking out of, since nothing is app-scoped.
+func TestUnattributedQueryStillWorksWithNoUIDScopedRules(t *testing.T) {
+	e := NewEngine(t.TempDir(), &MockCallback{})
+	// No SetUpstreamDNS call: the forward's early "no upstream configured"
+	// check returns SERVFAIL by itself, before ever reaching the fail-closed
+	// branch under test - what matters here is that the fail-closed branch
+	// specifically did not fire (a real dial isn't needed either way).
+	if err := e.SetPolicy(Policy{Rules: []Rule{
+		{Name: "default", Action: ActionDirect},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := new(dns.Msg)
+	req.SetQuestion("example.com.", dns.TypeA)
+	e.handleDNSMsg(req, "udp", FlowInfo{Protocol: "udp", AppUID: UnknownAppUID})
+	if got := e.obs.dp.dnsAttributionFailClosed; got != 0 {
+		t.Fatalf("dnsAttributionFailClosed = %d, want 0 (no rule is UID-scoped)", got)
+	}
+}
+
 // The cached client is per upstream and resolves the provider at dial time, so
 // a replaced or disabled upstream is observed rather than dialed around.
 func TestDoHClientIsCachedPerUpstreamAndFailsClosed(t *testing.T) {
@@ -372,5 +433,75 @@ func TestDoHClientIsCachedPerUpstreamAndFailsClosed(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not ready") {
 		t.Fatalf("error %q does not say the upstream was unusable", err)
+	}
+}
+
+// literalOnlyProvider mimics wireguardProvider.Dial's real constraint: it
+// only ever succeeds when given a literal address:port, exactly like a
+// WireGuard tunnel's own netstack, which has no resolver of its own.
+type literalOnlyProvider struct {
+	id       UpstreamID
+	lastAddr string
+}
+
+func (p *literalOnlyProvider) ID() UpstreamID     { return p.id }
+func (p *literalOnlyProvider) Kind() UpstreamKind { return UpstreamKindWireGuard }
+func (p *literalOnlyProvider) Ready() bool        { return true }
+func (p *literalOnlyProvider) Close() error       { return nil }
+func (p *literalOnlyProvider) PeerPathInfo(context.Context, string) string { return "wireguard" }
+
+func (p *literalOnlyProvider) Dial(ctx context.Context, network, address string) (net.Conn, error) {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := netip.ParseAddr(host); err != nil {
+		return nil, fmt.Errorf("literalOnlyProvider: destination %q must be a literal address:port", address)
+	}
+	p.lastAddr = address
+	client, server := net.Pipe()
+	go server.Close()
+	return client, nil
+}
+
+// A DoH resolver's own hostname (not an app's destination) must still work
+// when the query is forwarded through an upstream whose transport - like a
+// WireGuard tunnel's own netstack - cannot resolve a hostname itself. See
+// dns_policy.go's dohClientFor: on a literal-address dial failure, it
+// resolves the hostname off-tunnel (the same bootstrap path the
+// device-direct DoH client already used) and retries once with the literal
+// IP, rather than failing every query through that upstream.
+func TestDoHDialResolvesHostnameForLiteralOnlyUpstream(t *testing.T) {
+	e := NewEngine(t.TempDir(), &MockCallback{})
+
+	// security.cloudflare-dns.com is in the built-in known-IP table
+	// (publicdns.DoHIPsOfBase), so this needs no real network access -
+	// exactly the same lookup dialUpstreamDNS already relies on for the
+	// device-direct DoH path.
+	const dohBase = "https://security.cloudflare-dns.com/dns-query"
+	setBootstrapDoHBase(dohBase)
+	defer setBootstrapDoHBase("")
+
+	fp := &literalOnlyProvider{id: "wg"}
+	if err := e.RegisterUpstream(fp); err != nil {
+		t.Fatalf("RegisterUpstream: %v", err)
+	}
+
+	transport, ok := e.dohClientFor("wg").Transport.(*http.Transport)
+	if !ok {
+		t.Fatal("expected the DoH client to use an *http.Transport")
+	}
+	conn, err := transport.DialContext(context.Background(), "tcp", "security.cloudflare-dns.com:443")
+	if err != nil {
+		t.Fatalf("DialContext through a literal-only upstream failed: %v", err)
+	}
+	conn.Close()
+
+	host, _, err := net.SplitHostPort(fp.lastAddr)
+	if err != nil {
+		t.Fatalf("provider was dialed with an unparseable address %q: %v", fp.lastAddr, err)
+	}
+	if _, err := netip.ParseAddr(host); err != nil {
+		t.Fatalf("provider was dialed with %q, want a literal IP", fp.lastAddr)
 	}
 }

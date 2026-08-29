@@ -29,6 +29,11 @@ type MultiProxyCallback interface {
 	// (multiproxy_policy_facade.go) is the reliable source of truth for
 	// anything this drops.
 	OnUpstreamHealthChanged(upstreamID string, ready bool, reason string)
+
+	// OnObservabilityEvent fires on a discrete observability lifecycle event
+	// (path transitions, restarts, etc). See multiproxy.EngineCallback's own
+	// doc comment for the full rationale - this simply forwards it.
+	OnObservabilityEvent(eventType, upstreamID string, appUID int32, networkSource, previousState, newState, metadataJSON string)
 }
 
 type MultiProxyEngine struct {
@@ -123,6 +128,76 @@ func AcquireMultiProxyNetworkHooks(token string, s IPNService, appCtx AppContext
 func ReleaseMultiProxyNetworkHooks(token string) { ReleaseAndroidNetworkHooks(token) }
 
 func (e *MultiProxyEngine) GetTargetsJSON() string { return e.inner.GetTargetsJSON() }
+
+// GetObservabilitySnapshotJSON returns the current process/dataplane/per-app
+// observability snapshot as JSON. See multiproxy.Engine.GetObservabilitySnapshotJSON.
+func (e *MultiProxyEngine) GetObservabilitySnapshotJSON() string {
+	if e == nil || e.inner == nil {
+		return "{}"
+	}
+	return e.inner.GetObservabilitySnapshotJSON()
+}
+
+// ResetObservabilityCounters zeroes the selected live observability counter
+// groups. See multiproxy.Engine.ResetObservabilityCounters.
+func (e *MultiProxyEngine) ResetObservabilityCounters(dataplane, apps, upstreams bool) {
+	if e == nil || e.inner == nil {
+		return
+	}
+	e.inner.ResetObservabilityCounters(dataplane, apps, upstreams)
+}
+
+// SetObservabilitySampleIntervalSeconds changes the periodic process/runtime
+// sampler's cadence. Call with a short interval (e.g. 1) only while the
+// diagnostics screen is visible, and with 0 (or the same default the app
+// uses elsewhere) when it closes - see PHASE 17 in the design doc for why
+// this must not default to a fast interval.
+func (e *MultiProxyEngine) SetObservabilitySampleIntervalSeconds(secs int32) {
+	if e == nil || e.inner == nil {
+		return
+	}
+	e.inner.SetObservabilitySampleIntervalSeconds(secs)
+}
+
+// SetAdvancedDiagnostics turns higher-frequency sampling on/off. Off by
+// default. Does not itself start any profiler - see Capture* below.
+func (e *MultiProxyEngine) SetAdvancedDiagnostics(on bool) {
+	if e == nil || e.inner == nil {
+		return
+	}
+	e.inner.SetAdvancedDiagnostics(on)
+}
+
+func (e *MultiProxyEngine) AdvancedDiagnosticsEnabled() bool {
+	if e == nil || e.inner == nil {
+		return false
+	}
+	return e.inner.AdvancedDiagnosticsEnabled()
+}
+
+// CaptureCPUProfileToFile runs a bounded (<=60s) CPU profile and writes it
+// to path. The only way CPU profiling ever runs in this engine - there is
+// no HTTP pprof listener anywhere in production code.
+func (e *MultiProxyEngine) CaptureCPUProfileToFile(path string, durationSeconds int32) error {
+	if e == nil || e.inner == nil {
+		return errors.New("engine not initialized")
+	}
+	return e.inner.CaptureCPUProfileToFile(path, durationSeconds)
+}
+
+func (e *MultiProxyEngine) CaptureHeapProfileToFile(path string) error {
+	if e == nil || e.inner == nil {
+		return errors.New("engine not initialized")
+	}
+	return e.inner.CaptureHeapProfileToFile(path)
+}
+
+func (e *MultiProxyEngine) CaptureGoroutineDumpToFile(path string) error {
+	if e == nil || e.inner == nil {
+		return errors.New("engine not initialized")
+	}
+	return e.inner.CaptureGoroutineDumpToFile(path)
+}
 
 // GetAddressConflictsJSON lists real Tailscale IPs claimed by more than one
 // upstream at once, so the UI can show them before traffic hits one rather
