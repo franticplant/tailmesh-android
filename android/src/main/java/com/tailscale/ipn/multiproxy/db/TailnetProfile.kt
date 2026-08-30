@@ -1,3 +1,6 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
 package com.tailscale.ipn.multiproxy.db
 
 data class TailnetProfile(
@@ -13,6 +16,23 @@ data class TailnetProfile(
     val migrationVersion: Int = 1,
 )
 
-enum class UpstreamOwner { IDLE, STANDARD, MULTIPROXY }
-enum class ProvisioningState { UNPROVISIONED, PROVISIONING, READY, ERROR }
-enum class RuntimeState { NOT_LOADED, STARTING, RUNNING, STOPPED, ERROR }
+enum class UpstreamOwner {
+  IDLE,
+  STANDARD,
+  MULTIPROXY
+}
+
+enum class ProvisioningState {
+  UNPROVISIONED,
+  PROVISIONING,
+  READY,
+  ERROR
+}
+
+enum class RuntimeState {
+  NOT_LOADED,
+  STARTING,
+  RUNNING,
+  STOPPED,
+  ERROR
+}
