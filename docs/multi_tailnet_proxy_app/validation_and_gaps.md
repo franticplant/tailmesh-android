@@ -80,6 +80,8 @@ Do not substitute one level for another.
 | Upstream/binding persistence | yes | no Android CRUD or migration tests | DB v3 + EncryptedSharedPreferences | §50.1: upstream and default route survived an app reinstall |
 | Live re-apply without VPN restart | yes | not directly tested | applier called from the view model | not documented (edit was verified only after a VPN restart, §50.1) |
 | DNS forwarding follows the app's policy route | yes | route-decision + DoH-cache-and-fail-closed tests against a real forwarding server | transparent - reached through the same applier/policy | §50.2: real DoH CONNECT tunneled through a SOCKS5 upstream |
+| Cross-tailnet real-IP conflict resolution (deterministic winner + pre-emptive conflict list) | yes | `real_ip_test.go` (7) | Upstreams screen shows conflicts + observed crossovers | §49 |
+| VIP Services (`svc:` names): DNS resolution + virtual-IP discovery | yes | none dedicated - only exercised indirectly via the existing `updateTailnetSnapshot`/collision/DNS-table tests, which don't construct a `TargetKindVIPService` record | none - no dedicated UI surfacing beyond appearing in Upstreams/DNS like any other target | not documented - see §81 |
 
 ## 3. Evidence from the Go test suite
 
@@ -3990,6 +3992,101 @@ investigation.
 Full test suites for the three touched vendored packages (`tsnet`,
 `net/tsdial`, `wgengine/netstack`) and this app's own `multiproxy` package
 pass with no regressions.
+
+## 81. Fixed: Tailscale VIP Services (`svc:` names) neither resolved nor had their virtual IPs discovered (2026-08-30, unit-tested/Android-built, not device-verified)
+
+**User report.** "tailscale service names do not resolve, their IPs aren't
+discovered either" - referring to Tailscale's VIP Services feature: a
+tailnet-wide named service (`svc:dns-label`) with its own dedicated virtual
+IP pair, distinct from any single node's own addresses.
+
+**BEFORE.** `libtailscale/multiproxy` had zero references to
+`tailcfg.VIPService`/`ServiceName`/`ServiceDetails` anywhere (confirmed by
+grep across the whole package). `pollTailnetStatus`
+(`api.go`) built the entire synthetic DNS/target table by iterating only
+`status.Peer` - a per-node list. A VIP service is not a peer and has no
+entry there, so it was invisible to the exact same construction that gives
+every ordinary peer a synthetic address and a DNS name: not a routing bug in
+an existing path, but a missing source of `TargetRecord`s entirely. This is
+the same root-cause shape as §62.10's "no route on the TUN" finding - a
+capability that's a real gap in data flowing *into* the engine, not a bug in
+what the engine already does with the data it gets.
+
+**WHY the client-side data source isn't obvious.** VIP services aren't
+carried on a top-level `NetworkMap`/`ipnstate.Status` field. Control
+advertises them as capabilities in the *self* node's `CapMap`
+(`tailscale.com/tailcfg`), under two different keys depending on which side
+of the relationship a node is on:
+
+- `nodecap.ServiceHost` ("service-host"): which VIP services *this* node is
+  approved to host, and the IPs assigned for hosting them (`ServiceIPMappings`,
+  `map[ServiceName][]netip.Addr`). This is the host/server side - not
+  useful here, since `tsnet.Server` upstreams in this app are ordinary
+  consuming nodes, not service hosts.
+- `nodecap.ServicesPrefix` ("services/", one entry per service, opaque key
+  suffix): the services *visible to* this node as a consumer, each value a
+  `tailcfg.ServiceDetails{Name, Addrs, Ports, ...}`. This is what
+  `netmap.NetworkMap.Services()` decodes for the core client, and it's the
+  side that matters for a proxy relaying traffic on a consuming node's
+  behalf.
+
+`ipnstate.Status.Self.CapMap` (populated in `ipn/ipnlocal/local.go`, copied
+through from the self node's `CapMap()` unfiltered) carries the same data
+`LocalClient().Status()` already gives `pollTailnetStatus`, so no new API
+surface was needed - only decoding a part of a struct this code was already
+reading.
+
+**NEW.**
+
+- `types.go`: `TargetKindVIPService` alongside the existing
+  `TargetKindTailscaleNode`. `TargetKey.SyntheticIPv6()`'s hash already takes
+  `Kind` as an input, so a service and a peer can never collide on identity
+  even if a StableID string were ever reused between the two spaces.
+- `api.go`: `pollTailnetStatus`, after building the peer-derived snapshot,
+  now also decodes every `nodecap.ServicesPrefix`-keyed entry from
+  `status.Self.CapMap` via `tailcfg.UnmarshalNodeCapJSON[tailcfg.ServiceDetails]`,
+  and appends one `TargetRecord` per service with `Addrs` populated (skipping
+  services with no address yet, e.g. one just created and not yet
+  provisioned). The DNS name is built the same way Tailscale's own `serve.go`
+  builds a VIP service's FQDN: `strings.Join([]string{svc.Name.WithoutPrefix(),
+  magicDNSSuffix}, ".")` - so `svc:web` becomes `web.<tailnet>.ts.net.`,
+  matching what a user would actually type or what another Tailscale client
+  would show them.
+- No changes anywhere else. `rebuildTargetsUnlocked`, the synthetic
+  v4/v6 allocators, `realIPIndex`, `resolveRoute`/`resolveRealIPRoute`, and
+  the DNS table builder in `dns.go` all operate on `TargetRecord`/`TargetKey`
+  generically and were never gated on `Kind == TargetKindTailscaleNode` - a
+  VIP service record flows through the exact same synthetic-DNS,
+  synthetic-v4-allocation, and cross-tailnet real-IP-conflict machinery
+  documented in `backend_internals.md` §62.6/§62.9/§62.10 as any peer.
+  Concretely: if two tailnets you're both connected to each expose a VIP
+  service whose real IP happens to collide (or a service's real IP collides
+  with an ordinary peer's), that is picked up by the *existing*
+  `realIPIndex`/`chooseRealIPCandidate`/`OnAddressCrossover`/
+  `GetAddressConflictsJSON` pipeline with no VIP-service-specific code -
+  see backend_internals.md §62.11 for that cross-reference written up
+  explicitly, and the "How best-effort real-IP resolution and collisions
+  are tracked, notified, and handled" summary in this document's §2 capability
+  matrix row for the mechanism itself.
+
+**Evidence level - be precise about what this is not yet.** `go test
+./libtailscale/multiproxy/...` passes and `go vet` is clean, but there is
+**no dedicated test** exercising this new code path: it lives inside
+`pollTailnetStatus`, which (like the rest of that function - the ordinary
+peer-polling loop it sits beside) is reached only through a live
+`tsnet.Server.LocalClient().Status()` call, not through `updateTailnetSnapshot`
+directly the way `lib_test.go`'s existing tests construct `TargetRecord`s by
+hand. The change compiles into the AAR (`make libtailscale` succeeded) and
+into a signed debug and release APK
+(`tailmesh-v0.1.0-alpha-vipsvc-arm64.apk`), so it is **ANDROID-BUILT**, but
+it has **not** been verified against a real tailnet with an actual VIP
+service configured - that would require an account with VIP Services
+enabled and at least one service provisioned, which wasn't available in this
+session. **Required evidence:** a device test connecting through this app's
+Multi-Tailnet mode to a tailnet with a real VIP service, confirming the
+`svc:` name resolves to a reachable address and that traffic to it actually
+completes (not just that a `TargetRecord` was constructed correctly in
+isolation).
 
 ## 48. Bottom line
 

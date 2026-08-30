@@ -19,6 +19,8 @@ import (
 
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"tailscale.com/ipn"
+	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tsnet"
 )
 
@@ -813,6 +815,63 @@ func (e *Engine) pollTailnetStatus(ctx context.Context, wg *sync.WaitGroup, uid 
 				}
 
 				snapshot = append(snapshot, rec)
+			}
+
+			// VIP Services (tailcfg.ServiceName, form "svc:dns-label") are a
+			// tailnet-wide named service with its own virtual IPs, distinct
+			// from any single peer's addresses - so they never show up in
+			// status.Peer above and were previously invisible to this
+			// engine's synthetic DNS table entirely: no code path read them,
+			// so a "svc:" name would neither resolve nor route. Control
+			// advertises the services a node may consume as per-service
+			// entries in its own CapMap, keyed by an opaque suffix under
+			// nodecap.ServicesPrefix ("services/") with a tailcfg.ServiceDetails
+			// value - the same mechanism netmap.NetworkMap.Services() decodes
+			// client-side; ipnstate.Status.Self.CapMap is that same CapMap
+			// copied through unfiltered, so it can be decoded the same way here.
+			if status.Self != nil && status.CurrentTailnet != nil {
+				magicDNSSuffix := strings.TrimSuffix(status.CurrentTailnet.MagicDNSSuffix, ".")
+				for capKey := range status.Self.CapMap {
+					if !strings.HasPrefix(string(capKey), string(nodecap.ServicesPrefix)) {
+						continue
+					}
+					svcs, err := tailcfg.UnmarshalNodeCapJSON[tailcfg.ServiceDetails](status.Self.CapMap, capKey)
+					if err != nil || len(svcs) == 0 {
+						continue
+					}
+					svc := svcs[0]
+					if len(svc.Addrs) == 0 || svc.Name == "" {
+						continue
+					}
+
+					key := TargetKey{
+						NamespaceID: uid,
+						Kind:        TargetKindVIPService,
+						StableID:    string(svc.Name),
+					}
+
+					fqdn := strings.ToLower(svc.Name.WithoutPrefix())
+					if magicDNSSuffix != "" {
+						fqdn += "." + magicDNSSuffix
+					}
+					fqdn += "."
+
+					rec := TargetRecord{
+						Key:              key,
+						SyntheticIPv6:    key.SyntheticIPv6(),
+						Hostname:         fqdn,
+						RequiredUpstream: uid,
+					}
+					for _, ip := range svc.Addrs {
+						if ip.Is4() {
+							rec.CurrentIPv4 = ip
+						} else if ip.Is6() {
+							rec.CurrentIPv6 = ip
+						}
+					}
+
+					snapshot = append(snapshot, rec)
+				}
 			}
 
 			accepted := e.updateTailnetSnapshot(uid, snapshot)

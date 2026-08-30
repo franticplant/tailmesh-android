@@ -987,6 +987,42 @@ whether new flow Dial succeeds
 
 Do not begin by deleting/recreating profiles. Profile identity should survive ordinary underlay movement.
 
+## 48.1. Flow twenty-seven: VIP service resolution (added 2026-08-30)
+
+An app queries `web.example.ts.net` (a Tailscale VIP Service's MagicDNS
+name, not a peer's own hostname).
+
+```text
+app queries "web.example.ts.net"
+        |
+        v
+same handleDNSMsg entry point as any other name -
+looked up in dnsTable, which now also holds one
+entry per svc:-prefixed TargetRecord (see
+backend_internals.md §62.11, §81)
+        |
+        v
+match found -> answered with the service's synthetic
+address, exactly like a peer hostname would be
+        |
+        v
+app connects to the synthetic address
+        |
+        v
+resolveRoute finds RequiredUpstream from the
+TargetRecord (TargetKindVIPService) -> same tsnet.Server
+dial path a peer connection would use
+```
+
+Before this was added, this whole flow dead-ended at the first step: the
+name was never in `dnsTable` at all (no `TargetRecord` for it existed), so
+the query fell through to the generic non-tailnet forwarding path and, for a
+`*.ts.net` name with no public DNS record, failed. See
+`backend_internals.md` §62.11 for how a VIP service's *real* virtual IP also
+participates in the cross-tailnet real-IP conflict machinery (§62.6/§62.10)
+the moment it becomes a `TargetRecord` - no separate flow for that, since it
+reuses "Flow: real-IP crossover" (§62.6) unchanged.
+
 ## 49. What is proven by local tests
 
 Current tests support these flow assumptions:

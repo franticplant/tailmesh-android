@@ -1764,6 +1764,79 @@ from both synthetic pools - if they ever overlapped, `resolveRoute`'s
 in-namespace fail-closed branch would swallow real peer addresses before
 they reached the index. Device verification: `validation_and_gaps.md` §49.
 
+## 62.11. VIP Services (`svc:` names): discovery feeds the existing generic pipelines, including collision handling (CURRENT CODE, 2026-08-30)
+
+**BEFORE.** `pollTailnetStatus` built the entire synthetic DNS/target table
+from `status.Peer` only. Tailscale VIP Services - a tailnet-wide named
+service (`svc:dns-label`) with its own dedicated virtual IP pair, not tied
+to any single peer - never appeared there, so a `svc:` name neither resolved
+nor had a route: not a bug in DNS or routing, a missing source of
+`TargetRecord`s. Full root-cause and fix write-up:
+`validation_and_gaps.md` §81.
+
+**WHY this section exists separately from §81.** §81 covers the discovery
+fix itself. This section documents the more interesting consequence: once a
+VIP service is *a* `TargetRecord`, every downstream mechanism this document
+already describes for peers - synthetic v6 (§59 context)/v4 (§62.9)
+addressing, and cross-tailnet real-IP conflict tracking/notification/handling
+(§62.6, §62.10) - applies to it automatically, with zero VIP-service-specific
+code in any of those mechanisms. That's worth calling out explicitly because
+it's easy to assume a new kind of target needs its own collision-handling
+path; it doesn't, by construction of `TargetKey`/`TargetRecord` being
+generic over `Kind`.
+
+**NEW - how a VIP service participates in the existing best-effort/collision
+system, concretely.**
+
+- **Synthetic addressing (no new collision risk).** `TargetKey.SyntheticIPv6()`
+  hashes `(NamespaceID, Kind, StableID)`. `Kind` is now `TargetKindVIPService`
+  for a service vs. `TargetKindTailscaleNode` for a peer, so a service and a
+  peer can never collide on synthetic identity even if a StableID string
+  were coincidentally reused between the two spaces - the collision-discarding
+  logic in `rebuildTargetsUnlocked` (dns.go) that already protects peers
+  against a genuine synthetic-v6 hash collision, and the linear-probing v4
+  allocator in `synthetic_v4.go` that already protects peers against v4 pool
+  contention, cover services identically because both operate on the full
+  `e.targets`/key set, not on any one `Kind`.
+- **Real-IP conflicts (this is where it gets interesting).** A VIP service's
+  `Addrs` are real Tailscale address-space IPs - the same CGNAT/ULA ranges a
+  peer's `CurrentIPv4`/`CurrentIPv6` are drawn from (§62.6's "one shared pool
+  across every tailnet" reasoning applies unchanged). `rebuildTargetsUnlocked`
+  feeds every `TargetRecord`'s real addresses into `realIPIndex` regardless
+  of `Kind`, so a VIP service's real IP is tracked as a claimant exactly like
+  a peer's. Two new collision shapes become possible that were not possible
+  before this change, and both are already handled by existing code with no
+  modification:
+  1. **Service vs. peer.** If tailnet A hosts a service at the same real
+     address a peer on tailnet B happens to hold, `chooseRealIPCandidate`
+     picks the lowest-`UpstreamID` *active* claimant exactly as it already
+     does for two colliding peers, and `GetAddressConflictsJSON` lists both
+     candidates (with the service's `Hostname` being its `svc:`-derived FQDN,
+     read from the same `TargetRecord.Hostname` field a peer's row uses).
+  2. **Service vs. service.** Two tailnets each exposing a same-real-address
+     VIP service resolves the same way - there is nothing in
+     `chooseRealIPCandidate`/`sortRealIPCandidates` that inspects `Kind`, so
+     this required no new code, only correct data flowing into the index
+     that was already collision-aware.
+- **What is genuinely new, not just inherited:** the *DNS name* a VIP
+  service answers under (`web.<tailnet>.ts.net.`, matching Tailscale's own
+  `serve.go` FQDN construction) sits in the same flat `dnsTable`/`baseDnsTable`
+  as peer hostnames, so a service name that happens to collide with a peer's
+  short name is resolved by the pre-existing short-name-ambiguity behavior
+  (`baseDnsTable` accumulates every claimant under the bare first label; see
+  data_path_and_dns.md's "Flow fifteen" and the "Ambiguous short-name
+  rejection" capability-matrix row) - again inherited, not added.
+
+**Evidence.** Same as §81: `go test ./libtailscale/multiproxy/...` and
+`go vet` pass, compiles into the AAR and a signed APK
+(`tailmesh-v0.1.0-alpha-vipsvc-arm64.apk`). No test constructs a
+`TargetKindVIPService` record and a colliding peer/service together to
+directly exercise the interaction described above - the claim that it's
+handled is by *construction* (neither `realIPIndex` population nor
+`chooseRealIPCandidate` branches on `Kind`, verifiable by reading `dns.go`'s
+`rebuildTargetsUnlocked` and `real_ip.go` in full), not by a dedicated test.
+Real-device verification is outstanding, same caveat as §81.
+
 ## 63. Bottom line
 
 The Go backend is organized around a narrow chain of authority:

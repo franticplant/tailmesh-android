@@ -15,6 +15,7 @@ type TargetKind string
 
 const (
 	TargetKindTailscaleNode TargetKind = "tailscale-node"
+	TargetKindVIPService    TargetKind = "vip-service"
 )
 
 type TargetKey struct {
