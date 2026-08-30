@@ -108,24 +108,27 @@ fun PeerDetails(
 
           item(key = "sendFile") {
             val context = LocalContext.current
-            val filePicker = rememberLauncherForActivityResult(
-                ActivityResultContracts.GetMultipleContents()
-            ) { uris ->
-                if (uris.isNotEmpty()) {
-                    val intent = android.content.Intent(context, com.tailscale.ipn.ShareActivity::class.java).apply {
-                        action = android.content.Intent.ACTION_SEND_MULTIPLE
-                        putParcelableArrayListExtra(android.content.Intent.EXTRA_STREAM, ArrayList(uris))
-                        putExtra("destNodeId", nodeId)
-                    }
+            val filePicker =
+                rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) {
+                    uris ->
+                  if (uris.isNotEmpty()) {
+                    val intent =
+                        android.content
+                            .Intent(context, com.tailscale.ipn.ShareActivity::class.java)
+                            .apply {
+                              action = android.content.Intent.ACTION_SEND_MULTIPLE
+                              putParcelableArrayListExtra(
+                                  android.content.Intent.EXTRA_STREAM, ArrayList(uris))
+                              putExtra("destNodeId", nodeId)
+                            }
                     context.startActivity(intent)
+                  }
                 }
-            }
             Lists.SectionDivider()
             Setting.Text(
                 title = stringResource(R.string.taildrop_send_file),
                 subtitle = stringResource(R.string.taildrop_send_file_desc),
-                onClick = { filePicker.launch("*/*") }
-            )
+                onClick = { filePicker.launch("*/*") })
           }
 
           item(key = "infoDivider") { Lists.SectionDivider() }

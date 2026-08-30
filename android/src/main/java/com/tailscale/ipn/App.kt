@@ -651,7 +651,6 @@ open class UninitializedApp : Application() {
     }
   }
 
-
   fun createNotificationChannel(id: String, name: String, description: String, importance: Int) {
     val channel = NotificationChannel(id, name, importance)
     channel.description = description
@@ -750,7 +749,8 @@ open class UninitializedApp : Application() {
         else getString(R.string.starting)
     val totalRx = dataplane.tunRxBytes
     val totalTx = dataplane.tunTxBytes
-    val message = getString(R.string.multi_tailnet_traffic_totals, formatBytes(totalRx), formatBytes(totalTx))
+    val message =
+        getString(R.string.multi_tailnet_traffic_totals, formatBytes(totalRx), formatBytes(totalTx))
 
     val topUpstreams =
         upstreamStats.entries
@@ -775,13 +775,19 @@ open class UninitializedApp : Application() {
       }
     }
 
-    val icon = if (connectedCount > 0) R.drawable.ic_notification else R.drawable.ic_notification_disabled
-    val action = if (connectedCount > 0) IPNReceiver.INTENT_DISCONNECT_VPN else IPNReceiver.INTENT_CONNECT_VPN
+    val icon =
+        if (connectedCount > 0) R.drawable.ic_notification else R.drawable.ic_notification_disabled
+    val action =
+        if (connectedCount > 0) IPNReceiver.INTENT_DISCONNECT_VPN
+        else IPNReceiver.INTENT_CONNECT_VPN
     val actionLabel = getString(if (connectedCount > 0) R.string.disconnect else R.string.connect)
     val buttonIntent = Intent(this, IPNReceiver::class.java).apply { this.action = action }
     val pendingButtonIntent: PendingIntent =
         PendingIntent.getBroadcast(
-            this, 0, buttonIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            this,
+            0,
+            buttonIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     val intent =
         Intent(this, MainActivity::class.java).apply {
           flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK

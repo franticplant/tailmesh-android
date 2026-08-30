@@ -3,9 +3,9 @@
 
 package com.tailscale.ipn.ui.viewModel
 
+import androidx.lifecycle.viewModelScope
 import com.tailscale.ipn.ui.localapi.Client
 import com.tailscale.ipn.ui.util.set
-import androidx.lifecycle.viewModelScope
 import com.tailscale.ipn.ui.view.ErrorDialogType
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

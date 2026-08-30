@@ -106,7 +106,8 @@ class UpstreamRepository(context: Context) {
           val existing =
               db.query(
                       TailnetDatabaseHelper.TABLE_UPSTREAMS,
-                      arrayOf(TailnetDatabaseHelper.COL_ENABLED, TailnetDatabaseHelper.COL_CREATED_AT),
+                      arrayOf(
+                          TailnetDatabaseHelper.COL_ENABLED, TailnetDatabaseHelper.COL_CREATED_AT),
                       "${TailnetDatabaseHelper.COL_UPSTREAM_ID} = ?",
                       arrayOf(id),
                       null,
@@ -143,8 +144,8 @@ class UpstreamRepository(context: Context) {
   /**
    * Deletes an upstream, and clears any chaining and app bindings that pointed at it.
    *
-   * Leaving a dangling `via` or binding behind would not be unsafe - both fail closed in Go - but it
-   * would leave the UI showing a chain through something that no longer exists.
+   * Leaving a dangling `via` or binding behind would not be unsafe - both fail closed in Go - but
+   * it would leave the UI showing a chain through something that no longer exists.
    */
   suspend fun delete(id: String) =
       withContext(Dispatchers.IO) {

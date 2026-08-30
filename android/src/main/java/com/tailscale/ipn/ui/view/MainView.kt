@@ -149,7 +149,8 @@ fun MainView(
             val state by viewModel.ipnState.collectAsState(initial = Ipn.State.NoState)
             val user by viewModel.loggedInUser.collectAsState(initial = null)
             val stateVal by viewModel.stateRes.collectAsState(initial = R.string.placeholder)
-            val multiProxyMode by viewModel.multiProxyRuntimeMode.collectAsState(initial = VpnRuntimeMode.STOPPED)
+            val multiProxyMode by
+                viewModel.multiProxyRuntimeMode.collectAsState(initial = VpnRuntimeMode.STOPPED)
             val multiProxyConnectedCount by
                 viewModel.multiProxyConnectedCount.collectAsState(initial = 0)
             val isMultiProxyActive = multiProxyMode == VpnRuntimeMode.MULTIPROXY
@@ -238,42 +239,43 @@ fun MainView(
                   connectedCount = multiProxyConnectedCount,
                   onOpenMultiProxy = navigation.onNavigateToMultiProxy)
             } else
-            when (state) {
-              Ipn.State.Running -> {
-                viewModel.maybeRequestVpnPermission()
-                LaunchVpnPermissionIfNeeded(viewModel)
-                PromptForMissingPermissions(viewModel)
+                when (state) {
+                  Ipn.State.Running -> {
+                    viewModel.maybeRequestVpnPermission()
+                    LaunchVpnPermissionIfNeeded(viewModel)
+                    PromptForMissingPermissions(viewModel)
 
-                if (showKeyExpiry) {
-                  ExpiryNotification(netmap = netmap, action = { viewModel.login() })
+                    if (showKeyExpiry) {
+                      ExpiryNotification(netmap = netmap, action = { viewModel.login() })
+                    }
+                    if (showExitNodePicker.value == ShowHide.Show) {
+                      ExitNodeStatus(
+                          navAction = navigation.onNavigateToExitNodes, viewModel = viewModel)
+                    }
+                    PeerList(
+                        viewModel = viewModel,
+                        onNavigateToPeerDetails = navigation.onNavigateToPeerDetails,
+                        onSearchBarClick = navigation.onNavigateToSearch,
+                        onSearch = { viewModel.searchPeers(it) })
+                  }
+                  Ipn.State.NoState,
+                  Ipn.State.Starting -> StartingView()
+                  else -> {
+                    ConnectView(
+                        state,
+                        isPrepared,
+                        // If Tailscale is stopping, don't automatically restart; wait for user to
+                        // take
+                        // action (eg, if the user connected to another VPN).
+                        state != Ipn.State.Stopping,
+                        user,
+                        { viewModel.toggleVpn(desiredState = !isOn) },
+                        { viewModel.login() },
+                        loginAtUrl,
+                        netmap?.SelfNode,
+                        { viewModel.showVPNPermissionLauncherIfUnauthorized() })
+                  }
                 }
-                if (showExitNodePicker.value == ShowHide.Show) {
-                  ExitNodeStatus(
-                      navAction = navigation.onNavigateToExitNodes, viewModel = viewModel)
-                }
-                PeerList(
-                    viewModel = viewModel,
-                    onNavigateToPeerDetails = navigation.onNavigateToPeerDetails,
-                    onSearchBarClick = navigation.onNavigateToSearch,
-                    onSearch = { viewModel.searchPeers(it) })
-              }
-              Ipn.State.NoState,
-              Ipn.State.Starting -> StartingView()
-              else -> {
-                ConnectView(
-                    state,
-                    isPrepared,
-                    // If Tailscale is stopping, don't automatically restart; wait for user to take
-                    // action (eg, if the user connected to another VPN).
-                    state != Ipn.State.Stopping,
-                    user,
-                    { viewModel.toggleVpn(desiredState = !isOn) },
-                    { viewModel.login() },
-                    loginAtUrl,
-                    netmap?.SelfNode,
-                    { viewModel.showVPNPermissionLauncherIfUnauthorized() })
-              }
-            }
           }
       currentPingDevice?.let { _ ->
         ModalBottomSheet(onDismissRequest = { viewModel.onPingDismissal() }) {

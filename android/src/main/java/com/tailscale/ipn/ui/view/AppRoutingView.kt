@@ -6,12 +6,12 @@ package com.tailscale.ipn.ui.view
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
@@ -37,8 +37,8 @@ import com.tailscale.ipn.ui.viewModel.UpstreamRoutingViewModel
  * Chooses which upstream each installed app's traffic takes.
  *
  * This is a different question from split tunnelling, which is about whether an app uses the VPN at
- * all. An app can be inside the VPN and still need to reach the Internet through a particular exit -
- * a Tailnet, a proxy core, or a WireGuard tunnel - and that is what this screen decides.
+ * all. An app can be inside the VPN and still need to reach the Internet through a particular
+ * exit - a Tailnet, a proxy core, or a WireGuard tunnel - and that is what this screen decides.
  *
  * An app with no choice made here keeps today's behaviour, which is what the "Default" route on the
  * Upstreams screen governs.

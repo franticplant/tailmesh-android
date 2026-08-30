@@ -72,10 +72,11 @@ fun DNSSettingsView(
   var showPublicDoHDialog by remember { mutableStateOf(false) }
   val isKnownPublicDoHURL =
       publicDoHURL.isBlank() ||
-          PublicDoHProviders.grouped.any { provider -> provider.endpoints.any { it.url == publicDoHURL } }
-  var customDoHURL by remember(publicDoHURL) {
-    mutableStateOf(if (isKnownPublicDoHURL) "" else publicDoHURL)
-  }
+          PublicDoHProviders.grouped.any { provider ->
+            provider.endpoints.any { it.url == publicDoHURL }
+          }
+  var customDoHURL by
+      remember(publicDoHURL) { mutableStateOf(if (isKnownPublicDoHURL) "" else publicDoHURL) }
 
   Scaffold(topBar = { Header(R.string.dns_settings, onBack = backToSettings) }) { innerPadding ->
     LoadingIndicator.Wrap {
@@ -122,7 +123,8 @@ fun DNSSettingsView(
           Setting.Switch(
               R.string.public_doh_override_exit_node,
               subtitle =
-                  standardOnlyNote ?: stringResource(R.string.public_doh_override_exit_node_subtitle),
+                  standardOnlyNote
+                      ?: stringResource(R.string.public_doh_override_exit_node_subtitle),
               isOn = publicDoHOverrideExitNode,
               enabled = publicDoHURL.isNotBlank() && !isMultiProxy,
               onToggle = { model.togglePublicDoHOverrideExitNode() })
@@ -194,7 +196,9 @@ fun DNSSettingsView(
                     supportingContent = { Text(endpoint.url) })
               }
             }
-            item("customHeader") { Lists.SectionDivider(stringResource(R.string.public_doh_custom)) }
+            item("customHeader") {
+              Lists.SectionDivider(stringResource(R.string.public_doh_custom))
+            }
             item("customEntry") {
               Column(modifier = Modifier.padding(16.dp)) {
                 OutlinedTextField(
@@ -214,8 +218,8 @@ fun DNSSettingsView(
                         model.updatePublicDoHURL(customDoHURL.trim())
                         showPublicDoHDialog = false
                       }) {
-                    Text(stringResource(R.string.use))
-                  }
+                        Text(stringResource(R.string.use))
+                      }
                 }
               }
             }

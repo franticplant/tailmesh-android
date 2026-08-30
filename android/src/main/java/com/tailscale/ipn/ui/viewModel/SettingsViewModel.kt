@@ -52,9 +52,12 @@ class SettingsViewModel : IpnViewModel() {
   val debugHTTPProxyLogging: StateFlow<Boolean> = MutableStateFlow(false)
   val debugDNSConfigLogging: StateFlow<Boolean> = MutableStateFlow(false)
   val debugDNSQueryLogging: StateFlow<Boolean> = MutableStateFlow(false)
-  val localProxyEnabled = MutableStateFlow((App.get().decryptFromPref("localProxyEnabled") ?: "false").toBoolean())
-  val localProxyAddress = MutableStateFlow(App.get().decryptFromPref("localProxyAddress") ?: "127.0.0.1:1055")
-  val userspaceOnlyMode = MutableStateFlow((App.get().decryptFromPref("userspaceOnlyMode") ?: "false").toBoolean())
+  val localProxyEnabled =
+      MutableStateFlow((App.get().decryptFromPref("localProxyEnabled") ?: "false").toBoolean())
+  val localProxyAddress =
+      MutableStateFlow(App.get().decryptFromPref("localProxyAddress") ?: "127.0.0.1:1055")
+  val userspaceOnlyMode =
+      MutableStateFlow((App.get().decryptFromPref("userspaceOnlyMode") ?: "false").toBoolean())
 
   init {
     isClientRemoteLoggingEnabled.set(App.get().isClientLoggingEnabled())

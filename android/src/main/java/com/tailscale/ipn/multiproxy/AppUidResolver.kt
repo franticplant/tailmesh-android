@@ -46,10 +46,12 @@ class AppUidResolver(context: Context) : MultiProxyUIDResolver {
       dstPort: Int
   ): Int {
     if (disabled) return UNKNOWN_UID
-    val cm = connectivityManager ?: run {
-      disabled = true
-      return UNKNOWN_UID
-    }
+    val cm =
+        connectivityManager
+            ?: run {
+              disabled = true
+              return UNKNOWN_UID
+            }
 
     val ipProtocol =
         when (protocol.lowercase()) {

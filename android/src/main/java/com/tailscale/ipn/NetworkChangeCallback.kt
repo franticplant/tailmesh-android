@@ -32,7 +32,6 @@ object NetworkChangeCallback {
   // Cached info for the chosen default network.
   @Volatile private var cachedDefaultNetworkInfo: NetworkInfo? = null
 
-
   // Convenience: cached interface name for logging.
   @Volatile
   var cachedDefaultInterfaceName: String? = null
@@ -42,6 +41,7 @@ object NetworkChangeCallback {
   @Volatile
   var currentDnsServerStr: String? = null
     private set
+
   fun currentUnderlyingDnsServer(): String? = currentDnsServerStr
 
   // snapshotIfEmpty synchronously reads the connectivity state Android
@@ -200,14 +200,15 @@ object NetworkChangeCallback {
   // the default (e.g. onLinkPropertiesChanged for a non-default network).
   @Volatile private var lastReportedNetworkSource: String? = null
 
-  private fun networkSourceLabel(caps: NetworkCapabilities?): String = when {
-    caps == null -> "none"
-    caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
-    caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
-    caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
-    caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "vpn"
-    else -> "other"
-  }
+  private fun networkSourceLabel(caps: NetworkCapabilities?): String =
+      when {
+        caps == null -> "none"
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "vpn"
+        else -> "other"
+      }
 
   private fun recomputeDefaultNetworkLocked(why: String) {
     val newNetwork = pickDefaultNetwork()
@@ -251,8 +252,8 @@ object NetworkChangeCallback {
     // MULTIPROXY EXTENSION: Check if the raw IP list changed, if so, notify IPNService.
     val newDnsStr = info.linkProps.dnsServers.firstOrNull()?.hostAddress
     if (currentDnsServerStr != newDnsStr) {
-        currentDnsServerStr = newDnsStr
-        IPNService.onUnderlyingDnsChanged(newDnsStr ?: "")
+      currentDnsServerStr = newDnsStr
+      IPNService.onUnderlyingDnsChanged(newDnsStr ?: "")
     }
 
     val sb = StringBuilder()

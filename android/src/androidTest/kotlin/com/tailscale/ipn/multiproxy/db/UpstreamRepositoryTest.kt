@@ -18,8 +18,8 @@ import org.junit.runner.RunWith
 /**
  * Exercises [UpstreamRepository] against a real on-device database, in particular
  * [UpstreamRepository.saveConfig] - the fix for the same stale-snapshot race
- * [AppBindingRepositoryTest] covers for [AppBindingRepository.bind]/`setDNSUpstream`, applied here to
- * `setEnabled` racing an edit.
+ * [AppBindingRepositoryTest] covers for [AppBindingRepository.bind]/`setDNSUpstream`, applied here
+ * to `setEnabled` racing an edit.
  */
 @RunWith(AndroidJUnit4::class)
 class UpstreamRepositoryTest {

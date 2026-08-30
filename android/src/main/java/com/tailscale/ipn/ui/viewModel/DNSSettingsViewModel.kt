@@ -53,16 +53,17 @@ class DNSSettingsViewModel : IpnViewModel() {
 
   /**
    * True while Multi-Tailnet mode owns the datapath. The controls backed by CorpDNS,
-   * publicDoHOverrideExitNode and publicDoHRouteThroughTailscale are only read by
-   * Standard mode's DNS manager (libtailscale/control_doh.go), so the UI presents
-   * them as inapplicable rather than letting them look effective.
+   * publicDoHOverrideExitNode and publicDoHRouteThroughTailscale are only read by Standard mode's
+   * DNS manager (libtailscale/control_doh.go), so the UI presents them as inapplicable rather than
+   * letting them look effective.
    */
   val isMultiProxy: StateFlow<Boolean> = MutableStateFlow(false)
 
   init {
     publicDoHURL.set(App.get().decryptFromPref(PUBLIC_DOH_URL_KEY) ?: "")
     publicDoHOverrideExitNode.set(
-        App.get().decryptFromPref(PUBLIC_DOH_OVERRIDE_EXIT_NODE_KEY)?.toBooleanStrictOrNull() ?: true)
+        App.get().decryptFromPref(PUBLIC_DOH_OVERRIDE_EXIT_NODE_KEY)?.toBooleanStrictOrNull()
+            ?: true)
     publicDoHRouteThroughTailscale.set(
         App.get().decryptFromPref(PUBLIC_DOH_ROUTE_THROUGH_TAILSCALE_KEY)?.toBooleanStrictOrNull()
             ?: false)

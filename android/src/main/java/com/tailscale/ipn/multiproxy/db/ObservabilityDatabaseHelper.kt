@@ -14,19 +14,18 @@ import android.database.sqlite.SQLiteOpenHelper
  * this data is disposable (losing it costs nothing but some graph history), is written far more
  * often (once per sample tick, not once per user action), and its retention/pruning policy is
  * unrelated to profile/upstream configuration's lifecycle. Plain SQLite via SQLiteOpenHelper,
- * matching the existing project convention (TailnetDatabaseHelper) rather than introducing Room
- * for what is, in the end, two simple tables with a handful of columns.
+ * matching the existing project convention (TailnetDatabaseHelper) rather than introducing Room for
+ * what is, in the end, two simple tables with a handful of columns.
  *
  * Retention (see [prune]):
- *  - Samples: kept at ~1-minute resolution for the most recent [SAMPLE_FULL_RES_MILLIS] (6h),
- *    downsampled to 15-minute resolution beyond that, and dropped entirely beyond
- *    [SAMPLE_MAX_AGE_MILLIS] (7 days). Downsampling keeps one row per 15-minute bucket (the last
- *    sample observed in that bucket) rather than averaging, which is cheap (a DELETE, not a
- *    recompute) and good enough for a "what happened around here" graph at that zoom level - see
- *    docs/multi_tailnet_proxy_app/observability.md for the tradeoff.
- *  - Events: kept for [EVENT_MAX_AGE_MILLIS] (7 days), capped at [EVENT_MAX_ROWS] regardless of
- *    age so a pathological flapping condition cannot grow the table unboundedly between prune
- *    calls.
+ * - Samples: kept at ~1-minute resolution for the most recent [SAMPLE_FULL_RES_MILLIS] (6h),
+ *   downsampled to 15-minute resolution beyond that, and dropped entirely beyond
+ *   [SAMPLE_MAX_AGE_MILLIS] (7 days). Downsampling keeps one row per 15-minute bucket (the last
+ *   sample observed in that bucket) rather than averaging, which is cheap (a DELETE, not a
+ *   recompute) and good enough for a "what happened around here" graph at that zoom level - see
+ *   docs/multi_tailnet_proxy_app/observability.md for the tradeoff.
+ * - Events: kept for [EVENT_MAX_AGE_MILLIS] (7 days), capped at [EVENT_MAX_ROWS] regardless of age
+ *   so a pathological flapping condition cannot grow the table unboundedly between prune calls.
  */
 class ObservabilityDatabaseHelper(context: Context) :
     SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
@@ -78,7 +77,8 @@ class ObservabilityDatabaseHelper(context: Context) :
     // Per-upstream history, generic across upstream kinds (Tailnet/regular, exit node, SOCKS5,
     // WireGuard, @direct) - the same UpstreamStatSnapshot the Proxies & tunnels screen already
     // polls, just persisted at the observability sampler's own cadence so the Tailnets tab can
-    // graph it instead of only showing a live number. See upstreamSamplesSince/insertUpstreamSamples.
+    // graph it instead of only showing a live number. See
+    // upstreamSamplesSince/insertUpstreamSamples.
     const val TABLE_UPSTREAM_SAMPLES = "upstream_samples"
     const val COL_UPSTREAM_ID_COL = "upstream_id"
     const val COL_DIAL_ATTEMPTS = "dial_attempts"
@@ -229,10 +229,9 @@ class ObservabilityDatabaseHelper(context: Context) :
   }
 
   /**
-   * Writes one row per app for this sampler tick, capped to the busiest
-   * [APP_SAMPLE_MAX_PER_TICK] apps by total bytes - see that constant's doc
-   * comment. `samples` is expected already sorted or unsorted; this sorts and
-   * truncates itself so callers don't need to.
+   * Writes one row per app for this sampler tick, capped to the busiest [APP_SAMPLE_MAX_PER_TICK]
+   * apps by total bytes - see that constant's doc comment. `samples` is expected already sorted or
+   * unsorted; this sorts and truncates itself so callers don't need to.
    */
   fun insertAppSamples(ts: Long, samples: List<AppSample>) {
     val top = samples.sortedByDescending { it.bytesIn + it.bytesOut }.take(APP_SAMPLE_MAX_PER_TICK)
@@ -289,9 +288,7 @@ class ObservabilityDatabaseHelper(context: Context) :
         .rawQuery(
             "SELECT DISTINCT $COL_APP_UID FROM $TABLE_APP_SAMPLES WHERE $COL_TS >= ?",
             arrayOf(sinceMillis.toString()))
-        .use { c ->
-          while (c.moveToNext()) out.add(c.getInt(0))
-        }
+        .use { c -> while (c.moveToNext()) out.add(c.getInt(0)) }
     return out
   }
 
@@ -414,9 +411,9 @@ class ObservabilityDatabaseHelper(context: Context) :
   }
 
   /**
-   * "Reset stats" support for persisted history: [sinceMillis] null clears every row in all
-   * three tables; otherwise only rows newer than [sinceMillis] are dropped ("reset last X" -
-   * older history is left alone, since the ask is to clear recent noise, not the whole record).
+   * "Reset stats" support for persisted history: [sinceMillis] null clears every row in all three
+   * tables; otherwise only rows newer than [sinceMillis] are dropped ("reset last X" - older
+   * history is left alone, since the ask is to clear recent noise, not the whole record).
    */
   fun resetHistory(sinceMillis: Long?) {
     val db = writableDatabase
@@ -474,8 +471,7 @@ class ObservabilityDatabaseHelper(context: Context) :
           arrayOf(downsampleCutoff, downsampleCutoff))
 
       db.execSQL(
-          "DELETE FROM $TABLE_EVENTS WHERE $COL_TS < ?",
-          arrayOf(nowMillis - EVENT_MAX_AGE_MILLIS))
+          "DELETE FROM $TABLE_EVENTS WHERE $COL_TS < ?", arrayOf(nowMillis - EVENT_MAX_AGE_MILLIS))
       db.execSQL(
           "DELETE FROM $TABLE_EVENTS WHERE _id NOT IN (SELECT _id FROM $TABLE_EVENTS ORDER BY _id DESC LIMIT $EVENT_MAX_ROWS)")
 

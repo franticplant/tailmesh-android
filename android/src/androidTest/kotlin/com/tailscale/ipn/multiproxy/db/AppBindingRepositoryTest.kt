@@ -17,10 +17,10 @@ import org.junit.runner.RunWith
 
 /**
  * Exercises [AppBindingRepository] against a real on-device database. In particular, proves the
- * "preserve the other column" behaviour its `upsert` helper depends on: [AppBindingRepository.bind],
- * [AppBindingRepository.setDNSUpstream], and [AppBindingRepository.setTunnelLAN] each write only one
- * column but must never clobber the others, which is exactly what a plain column-keyed
- * `INSERT OR REPLACE` would do.
+ * "preserve the other column" behaviour its `upsert` helper depends on:
+ * [AppBindingRepository.bind], [AppBindingRepository.setDNSUpstream], and
+ * [AppBindingRepository.setTunnelLAN] each write only one column but must never clobber the others,
+ * which is exactly what a plain column-keyed `INSERT OR REPLACE` would do.
  */
 @RunWith(AndroidJUnit4::class)
 class AppBindingRepositoryTest {

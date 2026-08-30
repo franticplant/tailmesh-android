@@ -9,11 +9,11 @@ import android.graphics.drawable.Drawable
 /**
  * Resolves an Android UID to a human-readable app label (and icon) for the diagnostics screen.
  *
- * This is display-only and never touches the datapath: uidStats (observability.go) already
- * accounts traffic by raw UID without any package lookup, exactly as PHASE 6 of the observability
- * spec requires ("do not perform package-manager lookups in packet handling"). This resolver runs
- * only when the Apps tab actually renders a row, well off any hot path, and caches results since a
- * UID's owning package does not change within a process lifetime.
+ * This is display-only and never touches the datapath: uidStats (observability.go) already accounts
+ * traffic by raw UID without any package lookup, exactly as PHASE 6 of the observability spec
+ * requires ("do not perform package-manager lookups in packet handling"). This resolver runs only
+ * when the Apps tab actually renders a row, well off any hot path, and caches results since a UID's
+ * owning package does not change within a process lifetime.
  */
 object AppNameResolver {
   private val labelCache = mutableMapOf<Int, String>()

@@ -75,7 +75,6 @@ import com.tailscale.ipn.ui.view.LoginQRView
 import com.tailscale.ipn.ui.view.LoginWithAuthKeyView
 import com.tailscale.ipn.ui.view.LoginWithCustomControlURLView
 import com.tailscale.ipn.ui.view.MDMSettingsDebugView
-import com.tailscale.ipn.ui.view.UpstreamsView
 import com.tailscale.ipn.ui.view.MainView
 import com.tailscale.ipn.ui.view.MainViewNavigation
 import com.tailscale.ipn.ui.view.ManagedByView
@@ -94,6 +93,7 @@ import com.tailscale.ipn.ui.view.SubnetRoutingView
 import com.tailscale.ipn.ui.view.TaildropDirView
 import com.tailscale.ipn.ui.view.TaildropDirectoryPickerPrompt
 import com.tailscale.ipn.ui.view.TailnetLockSetupView
+import com.tailscale.ipn.ui.view.UpstreamsView
 import com.tailscale.ipn.ui.view.UserSwitcherNav
 import com.tailscale.ipn.ui.view.UserSwitcherView
 import com.tailscale.ipn.ui.viewModel.AppViewModel
@@ -315,9 +315,7 @@ class MainActivity : ComponentActivity() {
                           onNavigateToPermissions = { navController.navigate("permissions") },
                           onNavigateToNetcheck = { navController.navigate("netcheck") },
                           onNavigateToMultiProxy = { navController.navigate("multiProxy") },
-                          onNavigateToProxyUpstreams = {
-                            navController.navigate("proxyUpstreams")
-                          },
+                          onNavigateToProxyUpstreams = { navController.navigate("proxyUpstreams") },
                           onNavigateToAppRouting = { navController.navigate("appRouting") },
                           onBackToSettings = backTo("settings"),
                           onNavigateBackHome = backTo("main"))
@@ -381,9 +379,13 @@ class MainActivity : ComponentActivity() {
                       }
                   composable("bugReport") { BugReportView(backTo("settings")) }
                   composable("dnsSettings") { DNSSettingsView(backTo("settings")) }
-                  composable("netcheck") { com.tailscale.ipn.ui.view.NetcheckView(onBack = backTo("settings")) }
-                  composable("multiProxy") { 
-                    val mpViewModel = androidx.lifecycle.viewmodel.compose.viewModel<com.tailscale.ipn.ui.viewModel.MultiProxyViewModel>()
+                  composable("netcheck") {
+                    com.tailscale.ipn.ui.view.NetcheckView(onBack = backTo("settings"))
+                  }
+                  composable("multiProxy") {
+                    val mpViewModel =
+                        androidx.lifecycle.viewmodel.compose.viewModel<
+                            com.tailscale.ipn.ui.viewModel.MultiProxyViewModel>()
                     mpViewModel.setSession(com.tailscale.ipn.App.get().multiProxySession)
                     com.tailscale.ipn.ui.view.MultiProxyView(
                         mpViewModel,

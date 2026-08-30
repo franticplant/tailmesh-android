@@ -35,16 +35,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.tailscale.ipn.ui.theme.listItem
 import com.tailscale.ipn.ui.viewModel.DERPRegionLatency
 import com.tailscale.ipn.ui.viewModel.NetcheckReport
 import com.tailscale.ipn.ui.viewModel.NetcheckViewModel
 
 @Composable
-fun NetcheckView(
-    onBack: () -> Unit,
-    viewModel: NetcheckViewModel = viewModel()
-) {
+fun NetcheckView(onBack: () -> Unit, viewModel: NetcheckViewModel = viewModel()) {
   val report by viewModel.reportState.collectAsState()
   val isLoading by viewModel.isLoading.collectAsState()
 
@@ -126,8 +122,7 @@ fun NetcheckHeroCard(report: NetcheckReport) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 val natType =
                     if (report.udp && !report.mappingVariesByDestIP) "Direct UDP Mesh"
-                    else if (report.udp) "Restricted / CGNAT"
-                    else "Relay Only"
+                    else if (report.udp) "Restricted / CGNAT" else "Relay Only"
                 val natColor =
                     if (report.udp && !report.mappingVariesByDestIP) Color(0xFF2E7D32)
                     else Color(0xFFE65100)

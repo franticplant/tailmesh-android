@@ -12,7 +12,6 @@ import com.tailscale.ipn.multiproxy.db.Upstream
 import com.tailscale.ipn.multiproxy.db.UpstreamKind
 import com.tailscale.ipn.util.TSLog
 import java.util.UUID
-import libtailscale.Libtailscale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -21,6 +20,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import libtailscale.Libtailscale
 import org.json.JSONObject
 
 /**
@@ -38,7 +38,10 @@ data class RoutableUpstream(
     val enabled: Boolean,
 )
 
-/** One peer of some tailnet that offers to be an exit node. See [UpstreamRoutingViewModel.fetchExitNodeCandidates]. */
+/**
+ * One peer of some tailnet that offers to be an exit node. See
+ * [UpstreamRoutingViewModel.fetchExitNodeCandidates].
+ */
 data class ExitNodeCandidate(
     val id: String,
     val hostname: String,
@@ -49,8 +52,9 @@ data class ExitNodeCandidate(
 /**
  * Backs both the upstream list and the per-app routing screens.
  *
- * They share every repository and would otherwise have to keep two copies of the same state in sync,
- * which is exactly the bug this avoids: a picker offering an upstream the list has just deleted.
+ * They share every repository and would otherwise have to keep two copies of the same state in
+ * sync, which is exactly the bug this avoids: a picker offering an upstream the list has just
+ * deleted.
  */
 class UpstreamRoutingViewModel : ViewModel() {
   private val session = App.get().multiProxySession
@@ -73,10 +77,12 @@ class UpstreamRoutingViewModel : ViewModel() {
       MutableStateFlow(settings.defaultDNSUpstreamId)
 
   /** Whether the Multi-Tailnet VPN captures ordinary internet and LAN traffic. Off by default. */
-  val broadCaptureEnabled: MutableStateFlow<Boolean> = MutableStateFlow(settings.broadCaptureEnabled)
+  val broadCaptureEnabled: MutableStateFlow<Boolean> =
+      MutableStateFlow(settings.broadCaptureEnabled)
 
   /** Whether LAN-destination traffic stays direct regardless of routing. On by default. */
-  val lanExclusionEnabled: MutableStateFlow<Boolean> = MutableStateFlow(settings.lanExclusionEnabled)
+  val lanExclusionEnabled: MutableStateFlow<Boolean> =
+      MutableStateFlow(settings.lanExclusionEnabled)
 
   /** Surfaces a failed save to the screen that asked for it. */
   val errorMessage: MutableStateFlow<String?> = MutableStateFlow(null)
@@ -84,8 +90,8 @@ class UpstreamRoutingViewModel : ViewModel() {
   /**
    * Everything a rule can route to: ready Tailnets, configured upstreams, and the direct bypass.
    *
-   * A disabled entry is still listed, marked not enabled, so the UI can show that an app is bound to
-   * something currently switched off. Hiding it would make the binding look lost.
+   * A disabled entry is still listed, marked not enabled, so the UI can show that an app is bound
+   * to something currently switched off. Hiding it would make the binding look lost.
    */
   val routableUpstreams: StateFlow<List<RoutableUpstream>> =
       combine(session.profileRepository.profiles, upstreamRepository.upstreams) {
@@ -195,10 +201,10 @@ class UpstreamRoutingViewModel : ViewModel() {
 
   /**
    * Adds an exit-node upstream: a dedicated node identity, logged into `sourceTailnetId` with its
-   * own `authKey`, pinned to route through `peerAddr` (a peer from
-   * [fetchExitNodeCandidates]'s result for that tailnet). This costs a real device slot in that
-   * tailnet's admin console - it is not a free operation the way picking a tailnet's own exit node
-   * in place is (see [setTailnetExitNode]).
+   * own `authKey`, pinned to route through `peerAddr` (a peer from [fetchExitNodeCandidates]'s
+   * result for that tailnet). This costs a real device slot in that tailnet's admin console - it is
+   * not a free operation the way picking a tailnet's own exit node in place is (see
+   * [setTailnetExitNode]).
    *
    * Only adding is supported, not editing: the peer and the node identity are set together at
    * creation, and changing either is a new upstream (delete and re-add) rather than a mutation of a
@@ -345,8 +351,8 @@ class UpstreamRoutingViewModel : ViewModel() {
   }
 
   /**
-   * Splits where default-route DNS goes from where default-route data goes. A policy-only
-   * change, like [setLanExclusionEnabled] - takes effect on [applyNow] with no VPN restart.
+   * Splits where default-route DNS goes from where default-route data goes. A policy-only change,
+   * like [setLanExclusionEnabled] - takes effect on [applyNow] with no VPN restart.
    */
   fun setDefaultDNSUpstream(id: String) {
     settings.defaultDNSUpstreamId = id
@@ -365,8 +371,10 @@ class UpstreamRoutingViewModel : ViewModel() {
     settings.broadCaptureEnabled = enabled
     broadCaptureEnabled.value = enabled
     if (session.engine != null) {
-      val intent = android.content.Intent(session.app, com.tailscale.ipn.IPNService::class.java)
-          .setAction(com.tailscale.ipn.IPNService.ACTION_RESTART_VPN)
+      val intent =
+          android.content
+              .Intent(session.app, com.tailscale.ipn.IPNService::class.java)
+              .setAction(com.tailscale.ipn.IPNService.ACTION_RESTART_VPN)
       session.app.startService(intent)
     }
   }
@@ -398,8 +406,8 @@ class UpstreamRoutingViewModel : ViewModel() {
   }
 
   /**
-   * Sets (or, with an empty id, clears) one app's DNS override, independent of its data route.
-   * Only takes effect once the app also has a non-empty upstream binding - see
+   * Sets (or, with an empty id, clears) one app's DNS override, independent of its data route. Only
+   * takes effect once the app also has a non-empty upstream binding - see
    * AppBindingRepository.setDNSUpstream's doc comment.
    */
   fun setAppDNSUpstream(packageName: String, dnsUpstreamId: String) {
@@ -421,14 +429,15 @@ class UpstreamRoutingViewModel : ViewModel() {
     }
   }
 
-  fun bindingFor(packageName: String): AppBinding? = bindingRepository.getAllImmediate()[packageName]
+  fun bindingFor(packageName: String): AppBinding? =
+      bindingRepository.getAllImmediate()[packageName]
 
   /**
    * Pushes the current configuration into the running engine, if there is one.
    *
    * Upstream registration and policy are both designed to be replaced live, so a routing change
-   * takes effect on the next flow rather than needing the VPN restarted. With no engine running this
-   * does nothing and the configuration is applied at the next VPN build instead.
+   * takes effect on the next flow rather than needing the VPN restarted. With no engine running
+   * this does nothing and the configuration is applied at the next VPN build instead.
    */
   private suspend fun applyNow() {
     val engine = session.engine ?: return

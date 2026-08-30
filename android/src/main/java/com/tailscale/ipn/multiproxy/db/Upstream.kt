@@ -43,8 +43,8 @@ enum class UpstreamKind {
  * EncryptedSharedPreferences. Nothing sensitive is written to the profiles database.
  *
  * @param via another upstream's id to reach this one through, or empty to reach it from the device.
- *   Chaining is resolved in Go at dial time; a chain that would loop is refused when the upstream is
- *   registered.
+ *   Chaining is resolved in Go at dial time; a chain that would loop is refused when the upstream
+ *   is registered.
  */
 data class Upstream(
     val id: String,

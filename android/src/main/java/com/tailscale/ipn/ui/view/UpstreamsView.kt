@@ -39,8 +39,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tailscale.ipn.MultiProxySessionCoordinator
-import com.tailscale.ipn.UpstreamStatSnapshot
 import com.tailscale.ipn.R
+import com.tailscale.ipn.UpstreamStatSnapshot
 import com.tailscale.ipn.multiproxy.db.Upstream
 import com.tailscale.ipn.multiproxy.db.UpstreamKind
 import com.tailscale.ipn.ui.util.Lists
@@ -303,7 +303,8 @@ private fun ExitNodeIdentityLine(enabled: Boolean, state: String?) {
   if (!enabled || state.isNullOrEmpty()) return
   val fontSize = MaterialTheme.typography.bodySmall.fontSize
   val needsAttention = state == "NEEDS_MACHINE_AUTH" || state == "NEEDS_LOGIN" || state == "ERROR"
-  val color = if (needsAttention) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondary
+  val color =
+      if (needsAttention) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondary
   val text =
       when (state) {
         "RUNNING" -> stringResource(R.string.upstream_exitnode_identity_running)
@@ -350,9 +351,7 @@ fun UpstreamPickerRow(
                 !selected.enabled -> stringResource(R.string.upstream_disabled, selected.label)
                 else -> selected.label
               }
-          TextButton(onClick = { expanded = true }) {
-            Text(stringResource(buttonFormatRes, label))
-          }
+          TextButton(onClick = { expanded = true }) { Text(stringResource(buttonFormatRes, label)) }
           DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(
                 text = { Text(unsetLabel) },
@@ -401,7 +400,9 @@ fun UpstreamEditorDialog(
   var address by remember { mutableStateOf(initial.address) }
   var username by remember { mutableStateOf(initial.username) }
   var password by remember { mutableStateOf(initial.password) }
-  var wireGuardConfig by remember { mutableStateOf(if (existing?.kind == UpstreamKind.WIREGUARD) initialConfig.orEmpty() else "") }
+  var wireGuardConfig by remember {
+    mutableStateOf(if (existing?.kind == UpstreamKind.WIREGUARD) initialConfig.orEmpty() else "")
+  }
   var kindMenuOpen by remember { mutableStateOf(false) }
   var viaMenuOpen by remember { mutableStateOf(false) }
 
@@ -428,8 +429,7 @@ fun UpstreamEditorDialog(
       onDismissRequest = onDismiss,
       title = {
         Text(
-            stringResource(
-                if (existing == null) R.string.upstream_add else R.string.upstream_edit))
+            stringResource(if (existing == null) R.string.upstream_add else R.string.upstream_edit))
       },
       text = {
         Column(
@@ -606,8 +606,7 @@ fun UpstreamEditorDialog(
               when (kind) {
                 UpstreamKind.SOCKS5 ->
                     onSaveSocks5(existing?.id, label, address, username, password, via)
-                UpstreamKind.WIREGUARD ->
-                    onSaveWireGuard(existing?.id, label, wireGuardConfig, via)
+                UpstreamKind.WIREGUARD -> onSaveWireGuard(existing?.id, label, wireGuardConfig, via)
                 UpstreamKind.EXITNODE ->
                     onSaveExitNode(label, exitSourceTailnetId, exitAuthKey, exitPeerAddr)
               }
@@ -615,9 +614,7 @@ fun UpstreamEditorDialog(
               Text(stringResource(R.string.save))
             }
       },
-      dismissButton = {
-        TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
-      },
+      dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
   )
 }
 

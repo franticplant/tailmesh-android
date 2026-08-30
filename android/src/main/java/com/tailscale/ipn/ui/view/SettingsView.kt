@@ -146,44 +146,48 @@ fun SettingsView(
 
           if (viewModel.localProxyEnabled.collectAsState().value) {
             Lists.ItemDivider()
-            var localProxyDraft by remember { mutableStateOf<String>(viewModel.localProxyAddress.value) }
+            var localProxyDraft by remember {
+              mutableStateOf<String>(viewModel.localProxyAddress.value)
+            }
             var showLocalProxyDialog by remember { mutableStateOf(false) }
 
             Setting.Text(
                 title = "Local Proxy Address",
                 subtitle = viewModel.localProxyAddress.collectAsState().value,
                 onClick = {
-                    localProxyDraft = viewModel.localProxyAddress.value
-                    showLocalProxyDialog = true
+                  localProxyDraft = viewModel.localProxyAddress.value
+                  showLocalProxyDialog = true
                 })
 
             if (showLocalProxyDialog) {
-                AlertDialog(
-                    onDismissRequest = { showLocalProxyDialog = false },
-                    title = { Text("Local Proxy Address") },
-                    text = {
-                        Column {
-                            Text("Configure the address and port where the proxy listens (e.g. 127.0.0.1:1055)")
-                            OutlinedTextField(
-                                value = localProxyDraft,
-                                onValueChange = { localProxyDraft = it },
-                                label = { Text("Address") },
-                                singleLine = true
-                            )
-                        }
-                    },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            viewModel.updateLocalProxyAddress(localProxyDraft)
-                            showLocalProxyDialog = false
-                        }) { Text(stringResource(R.string.save)) }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { showLocalProxyDialog = false }) {
-                            Text(stringResource(R.string.cancel))
-                        }
+              AlertDialog(
+                  onDismissRequest = { showLocalProxyDialog = false },
+                  title = { Text("Local Proxy Address") },
+                  text = {
+                    Column {
+                      Text(
+                          "Configure the address and port where the proxy listens (e.g. 127.0.0.1:1055)")
+                      OutlinedTextField(
+                          value = localProxyDraft,
+                          onValueChange = { localProxyDraft = it },
+                          label = { Text("Address") },
+                          singleLine = true)
                     }
-                )
+                  },
+                  confirmButton = {
+                    TextButton(
+                        onClick = {
+                          viewModel.updateLocalProxyAddress(localProxyDraft)
+                          showLocalProxyDialog = false
+                        }) {
+                          Text(stringResource(R.string.save))
+                        }
+                  },
+                  dismissButton = {
+                    TextButton(onClick = { showLocalProxyDialog = false }) {
+                      Text(stringResource(R.string.cancel))
+                    }
+                  })
             }
           }
 

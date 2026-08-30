@@ -16,9 +16,11 @@ object PublicDoHProviders {
               "Cloudflare",
               listOf(
                   PublicDoHEndpoint("Standard", "https://cloudflare-dns.com/dns-query"),
-                  PublicDoHEndpoint("Malware blocking", "https://security.cloudflare-dns.com/dns-query"),
+                  PublicDoHEndpoint(
+                      "Malware blocking", "https://security.cloudflare-dns.com/dns-query"),
                   PublicDoHEndpoint("Family", "https://family.cloudflare-dns.com/dns-query"))),
-          PublicDoHProvider("Google", listOf(PublicDoHEndpoint("Standard", "https://dns.google/dns-query"))),
+          PublicDoHProvider(
+              "Google", listOf(PublicDoHEndpoint("Standard", "https://dns.google/dns-query"))),
           PublicDoHProvider(
               "Quad9",
               listOf(
@@ -54,7 +56,8 @@ object PublicDoHProviders {
               "CIRA Canadian Shield",
               listOf(
                   PublicDoHEndpoint("Private", "https://private.canadianshield.cira.ca/dns-query"),
-                  PublicDoHEndpoint("Protected", "https://protected.canadianshield.cira.ca/dns-query"),
+                  PublicDoHEndpoint(
+                      "Protected", "https://protected.canadianshield.cira.ca/dns-query"),
                   PublicDoHEndpoint("Family", "https://family.canadianshield.cira.ca/dns-query"))))
 
   fun labelFor(url: String): String {
@@ -62,9 +65,11 @@ object PublicDoHProviders {
       return "Tailnet default"
     }
     grouped.forEach { provider ->
-      provider.endpoints.firstOrNull { it.url == url }?.let { endpoint ->
-        return "${provider.name} · ${endpoint.label}"
-      }
+      provider.endpoints
+          .firstOrNull { it.url == url }
+          ?.let { endpoint ->
+            return "${provider.name} · ${endpoint.label}"
+          }
     }
     return url
   }

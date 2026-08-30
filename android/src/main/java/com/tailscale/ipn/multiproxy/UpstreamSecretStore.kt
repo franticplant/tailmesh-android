@@ -14,8 +14,8 @@ import org.json.JSONObject
  * it would mean a WireGuard config lived half in each, with the reassembly - and the chance of
  * writing a key to the wrong half - repeated at every call site.
  *
- * Backed by the same EncryptedSharedPreferences instance as [CredentialStore]; the key prefixes keep
- * the two from colliding.
+ * Backed by the same EncryptedSharedPreferences instance as [CredentialStore]; the key prefixes
+ * keep the two from colliding.
  */
 class UpstreamSecretStore(private val encryptedPrefs: SharedPreferences) {
 

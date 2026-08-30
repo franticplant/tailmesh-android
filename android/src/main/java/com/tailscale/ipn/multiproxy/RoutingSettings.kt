@@ -45,13 +45,13 @@ class RoutingSettings(context: Context) {
     }
 
   /**
-   * Whether traffic to well-known local/private destinations (a printer, a NAS, a dev server on
-   * the same network) stays direct instead of following an app's or the default route.
+   * Whether traffic to well-known local/private destinations (a printer, a NAS, a dev server on the
+   * same network) stays direct instead of following an app's or the default route.
    *
    * On by default: LAN reachability breaking because an app got routed through a remote proxy is
    * the more surprising failure mode. This is a single global choice today - there is no per-app
-   * override yet to deliberately tunnel LAN traffic for one app (e.g. to reach a remote LAN
-   * through a WireGuard upstream); turning this off entirely is the only way to get that today.
+   * override yet to deliberately tunnel LAN traffic for one app (e.g. to reach a remote LAN through
+   * a WireGuard upstream); turning this off entirely is the only way to get that today.
    */
   var lanExclusionEnabled: Boolean
     get() = prefs.getBoolean(KEY_LAN_EXCLUSION, true)
@@ -60,10 +60,10 @@ class RoutingSettings(context: Context) {
     }
 
   /**
-   * Where DNS lookups go for apps with no route of their own, independent of where their data
-   * goes ([defaultUpstreamId]). Empty means "same as the data path" - today's auto-follow
-   * behaviour. Set to the direct upstream's id to keep DNS on the device while data still
-   * tunnels, or to a different upstream's id for split DNS.
+   * Where DNS lookups go for apps with no route of their own, independent of where their data goes
+   * ([defaultUpstreamId]). Empty means "same as the data path" - today's auto-follow behaviour. Set
+   * to the direct upstream's id to keep DNS on the device while data still tunnels, or to a
+   * different upstream's id for split DNS.
    */
   var defaultDNSUpstreamId: String
     get() = prefs.getString(KEY_DEFAULT_DNS_UPSTREAM, "") ?: ""

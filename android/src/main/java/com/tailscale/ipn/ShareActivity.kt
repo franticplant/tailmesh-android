@@ -11,8 +11,8 @@ import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -70,8 +70,7 @@ class ShareActivity : ComponentActivity() {
                     TaildropView(
                         requestedTransfers = requestedTransfers,
                         applicationScope = lifecycleScope,
-                        autoSendToNodeId = intent?.getStringExtra("destNodeId")
-                    )
+                        autoSendToNodeId = intent?.getStringExtra("destNodeId"))
                   }
                 }
           }

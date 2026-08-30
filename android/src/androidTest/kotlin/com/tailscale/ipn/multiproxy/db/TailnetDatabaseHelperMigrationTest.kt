@@ -14,9 +14,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * TailnetDatabaseHelper implements AutoCloseable, not Closeable, so Kotlin's [use] extension
- * (which requires Closeable) does not apply to it directly - this wraps it in an equivalent
- * try/finally instead.
+ * TailnetDatabaseHelper implements AutoCloseable, not Closeable, so Kotlin's [use] extension (which
+ * requires Closeable) does not apply to it directly - this wraps it in an equivalent try/finally
+ * instead.
  */
 private inline fun <R> withHelper(
     context: android.content.Context,
@@ -196,9 +196,9 @@ class TailnetDatabaseHelperMigrationTest {
   }
 
   /**
-   * The exact shape that caused a real "duplicate column name" crash before it was fixed
-   * (commit dd185aa): a device at v3 (upstreams/app_bindings exist, but without the v4/v5
-   * columns) jumping straight to the current version in one onUpgrade call.
+   * The exact shape that caused a real "duplicate column name" crash before it was fixed (commit
+   * dd185aa): a device at v3 (upstreams/app_bindings exist, but without the v4/v5 columns) jumping
+   * straight to the current version in one onUpgrade call.
    */
   @Test
   fun upgradeFromVersion3_appliesV4AndV5BranchesInOneCallWithoutDuplicateColumnError() {

@@ -34,8 +34,7 @@ class AppBindingRepository(context: Context) {
     dbHelper.readableDatabase
         .query(TailnetDatabaseHelper.TABLE_APP_BINDINGS, null, null, null, null, null, null)
         .use { cursor ->
-          val packageIndex =
-              cursor.getColumnIndexOrThrow(TailnetDatabaseHelper.COL_BINDING_PACKAGE)
+          val packageIndex = cursor.getColumnIndexOrThrow(TailnetDatabaseHelper.COL_BINDING_PACKAGE)
           val upstreamIndex =
               cursor.getColumnIndexOrThrow(TailnetDatabaseHelper.COL_BINDING_UPSTREAM)
           val dnsUpstreamIndex =
@@ -62,9 +61,9 @@ class AppBindingRepository(context: Context) {
 
   /**
    * Writes one column of a package's binding row, preserving whatever else is already there (or
-   * defaulting a new row's other column to empty). Both [bind] and [setDNSUpstream] go through
-   * this so that setting one never silently clears the other - a plain column-keyed
-   * INSERT OR REPLACE would otherwise wipe out a DNS override every time the data route changes.
+   * defaulting a new row's other column to empty). Both [bind] and [setDNSUpstream] go through this
+   * so that setting one never silently clears the other - a plain column-keyed INSERT OR REPLACE
+   * would otherwise wipe out a DNS override every time the data route changes.
    *
    * The "existing" read happens from the database itself, inside the same transaction as the
    * write - not from the in-memory [_bindings] snapshot - so that two calls for the same package
@@ -135,8 +134,8 @@ class AppBindingRepository(context: Context) {
       upsert(packageName) { put(TailnetDatabaseHelper.COL_BINDING_UPSTREAM, upstreamId) }
 
   /**
-   * Sets (or, with an empty id, clears) an app's DNS override, independent of its data route.
-   * Only takes effect while the app also has a non-empty upstream binding - see
+   * Sets (or, with an empty id, clears) an app's DNS override, independent of its data route. Only
+   * takes effect while the app also has a non-empty upstream binding - see
    * COL_BINDING_DNS_UPSTREAM's doc comment - but is stored regardless, so choosing a data route
    * later picks the override back up rather than requiring it to be re-entered.
    */
