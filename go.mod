@@ -5,6 +5,7 @@ go 1.26.5
 require (
 	github.com/miekg/dns v1.1.58
 	github.com/tailscale/wireguard-go v0.0.0-20260813211458-aa425f19bcbf
+	golang.org/x/crypto v0.54.0
 	golang.org/x/mobile v0.0.0-20240806205939-81131f6468ab
 	gvisor.dev/gvisor v0.0.0-20260224225140-573d5e7127a8
 	tailscale.com v1.103.0-pre.0.20260810100007-25877455e79d
@@ -78,7 +79,6 @@ require (
 	github.com/x448/float16 v0.8.4 // indirect
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745 // indirect
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
-	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f // indirect
 	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/net v0.57.1-0.20260729233039-99c3b0a8f463 // indirect
