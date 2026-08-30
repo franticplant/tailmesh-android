@@ -22,7 +22,12 @@ jobs:
         with:
           repository: franticplant/tailscale
           ref: tailmesh-android-base
-          path: ../tailscale
+          path: tailscale-core
+      - name: Place patched core as a workspace sibling
+        # go.mod has `replace tailscale.com => ../tailscale`, but
+        # actions/checkout refuses to check out outside $GITHUB_WORKSPACE
+        # directly, so bring it in as a subdirectory and move it out.
+        run: mv tailscale-core ../tailscale
       - uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b # v5.4.0
         with:
           go-version-file: "go.mod"
