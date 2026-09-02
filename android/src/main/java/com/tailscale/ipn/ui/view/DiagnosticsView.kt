@@ -13,6 +13,8 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -115,6 +117,8 @@ fun DiagnosticsView(onNavigateBack: () -> Unit) {
   var captureStatus by remember { mutableStateOf<String?>(null) }
   var showResetDialog by remember { mutableStateOf(false) }
   var dnsLogEnabled by remember { mutableStateOf(false) }
+  var dnsSearchQuery by remember { mutableStateOf("") }
+  var dnsErrorsOnly by remember { mutableStateOf(false) }
 
   DisposableEffect(Unit) {
     MultiProxySessionCoordinator.setDiagnosticsUiVisible(true)
@@ -200,10 +204,19 @@ fun DiagnosticsView(onNavigateBack: () -> Unit) {
           DiagSection.UPSTREAMS -> upstreamsSection(this, snapshot, range, resolution)
           DiagSection.APPS -> appsSection(this, snapshot, range, resolution)
           DiagSection.NETWORK ->
-              networkSection(this, liveEvents, dnsLogEnabled) {
-                dnsLogEnabled = it
-                App.get().multiProxySession.engine?.setDNSQueryLogEnabled(it)
-              }
+              networkSection(
+                  this,
+                  liveEvents,
+                  dnsLogEnabled,
+                  onDnsLogEnabledChange = {
+                    dnsLogEnabled = it
+                    App.get().multiProxySession.engine?.setDNSQueryLogEnabled(it)
+                  },
+                  dnsSearchQuery = dnsSearchQuery,
+                  onDnsSearchQueryChange = { dnsSearchQuery = it },
+                  dnsErrorsOnly = dnsErrorsOnly,
+                  onDnsErrorsOnlyChange = { dnsErrorsOnly = it },
+              )
         }
         item {
           Spacer(modifier = Modifier.height(16.dp))
@@ -1136,11 +1149,17 @@ private fun AppRow(
   }
 }
 
+private val networkTimestampFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+
 private fun networkSection(
     scope: LazyListScope,
     events: List<com.tailscale.ipn.ObservabilityEvent>,
     dnsLogEnabled: Boolean,
     onDnsLogEnabledChange: (Boolean) -> Unit,
+    dnsSearchQuery: String,
+    onDnsSearchQueryChange: (String) -> Unit,
+    dnsErrorsOnly: Boolean,
+    onDnsErrorsOnlyChange: (Boolean) -> Unit,
 ) {
   scope.item {
     Text(
@@ -1157,7 +1176,7 @@ private fun networkSection(
   scope.items(events.filter { it.eventType == "NETWORK_SOURCE_CHANGED" }.takeLast(30).reversed()) {
       e ->
     Text(
-        "${e.previousState} -> ${e.newState}",
+        "${networkTimestampFormat.format(Date(e.timestampMillis))}  ${e.previousState} -> ${e.newState}",
         style = MaterialTheme.typography.bodySmall,
         modifier = Modifier.padding(vertical = 2.dp))
   }
@@ -1170,7 +1189,9 @@ private fun networkSection(
         "Off by default - logs every DNS lookup app-wide (which upstream it went through and " +
             "the outcome: synthetic answer, forwarded ok/failed, blocked, fail-closed, ambiguous). " +
             "Useful for tracking down a query leaking to the wrong upstream, but writes a row " +
-            "per query while on, so turn it off again once you've caught what you're looking for.",
+            "per query while on, so turn it off again once you've caught what you're looking for. " +
+            "Timestamps line up with the network transitions above, so a burst of DNS failures " +
+            "right after a transition is visible at a glance.",
         style = MaterialTheme.typography.bodySmall,
     )
     Row(
@@ -1182,22 +1203,67 @@ private fun networkSection(
         }
   }
   if (dnsLogEnabled) {
-    scope.items(events.filter { it.eventType == "DNS_QUERY" }.takeLast(50).reversed()) { e ->
-      Text(
-          "${e.previousState} (${e.networkSource})  " +
-              "${if (e.upstreamId.isNotEmpty()) upstreamDisplayLabel(e.upstreamId) else "device"} -> ${e.newState}" +
-              (if (e.appUid > 0) "  uid=${e.appUid}" else ""),
-          style = MaterialTheme.typography.bodySmall,
-          color =
-              if (e.newState.contains("fail") ||
-                  e.newState == "blocked" ||
-                  e.newState == "ambiguous") {
-                MaterialTheme.colorScheme.error
-              } else {
-                Color.Unspecified
-              },
-          modifier = Modifier.padding(vertical = 2.dp),
+    scope.item {
+      OutlinedTextField(
+          value = dnsSearchQuery,
+          onValueChange = onDnsSearchQueryChange,
+          modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+          placeholder = { Text("Search query name, upstream, or app uid") },
+          leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+          singleLine = true,
       )
+    }
+    scope.item {
+      Row(modifier = Modifier.padding(vertical = 4.dp)) {
+        FilterChip(
+            selected = dnsErrorsOnly,
+            onClick = { onDnsErrorsOnlyChange(!dnsErrorsOnly) },
+            label = { Text("Errors only") },
+        )
+      }
+    }
+    val dnsEvents =
+        events
+            .filter { it.eventType == "DNS_QUERY" }
+            .filter { e ->
+              !dnsErrorsOnly ||
+                  e.newState.contains("fail") ||
+                  e.newState == "blocked" ||
+                  e.newState == "ambiguous"
+            }
+            .filter { e ->
+              dnsSearchQuery.isBlank() ||
+                  e.previousState.contains(dnsSearchQuery, ignoreCase = true) ||
+                  upstreamDisplayLabel(e.upstreamId).contains(dnsSearchQuery, ignoreCase = true) ||
+                  e.appUid.toString() == dnsSearchQuery.trim()
+            }
+            .takeLast(200)
+            .reversed()
+    if (dnsEvents.isEmpty()) {
+      scope.item {
+        Text(
+            "No DNS queries match.",
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(vertical = 4.dp))
+      }
+    } else {
+      scope.items(dnsEvents) { e ->
+        Text(
+            "${networkTimestampFormat.format(Date(e.timestampMillis))}  ${e.previousState} (${e.networkSource})  " +
+                "${if (e.upstreamId.isNotEmpty()) upstreamDisplayLabel(e.upstreamId) else "device"} -> ${e.newState}" +
+                (if (e.appUid > 0) "  uid=${e.appUid}" else ""),
+            style = MaterialTheme.typography.bodySmall,
+            color =
+                if (e.newState.contains("fail") ||
+                    e.newState == "blocked" ||
+                    e.newState == "ambiguous") {
+                  MaterialTheme.colorScheme.error
+                } else {
+                  Color.Unspecified
+                },
+            modifier = Modifier.padding(vertical = 2.dp),
+        )
+      }
     }
   }
 }

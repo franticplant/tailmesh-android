@@ -4245,6 +4245,59 @@ autonomous overnight session. **Required evidence:** open App routing on a
 device with 100+ apps installed and confirm the filters actually narrow the
 list and the search field is responsive.
 
+## 85. Added: search, "errors only" filter, and timestamps on the DNS query log, correlated with network transitions (2026-09-02, Android-built, not device-verified)
+
+**User report.** "only, dns logging viewable int he app itself with good
+search filters correlatble to other network events."
+
+**BEFORE.** `DiagnosticsView.kt`'s `networkSection` rendered the DNS query
+log (when the opt-in toggle was on) as a raw, unfiltered tail of the last 50
+`DNS_QUERY`-typed `ObservabilityEvent`s, one line each
+(`"$qname ($qtype)  $upstream -> $outcome  uid=$uid"`), no timestamp, no way
+to narrow it. The "Network transitions" list just above it (from the same
+`events` stream, filtered to `NETWORK_SOURCE_CHANGED`) also had no
+timestamp, so there was no way to tell whether a burst of DNS failures
+happened around a given network transition - the two lists were visually
+adjacent but not actually correlatable.
+
+**NEW.**
+
+- Both the network-transitions list and the DNS query log now show a
+  `HH:mm:ss` timestamp (from `ObservabilityEvent.timestampMillis`, already
+  present on the data class - unused before this change) as the leading
+  token of each row, so a reader can eyeball whether DNS failures cluster
+  around a transition without any new data plumbing.
+- The DNS query log gained a search field (matches query name, upstream
+  display label, or an exact app-uid) and an "Errors only" `FilterChip`
+  (matches the same fail/blocked/ambiguous predicate already used for the
+  existing red-text styling), both screen-local `remember` state reset on
+  leaving the screen - a stale filter silently hiding rows on return would
+  be worse than losing it.
+- Capped the log at the last 200 matching entries (up from an unfiltered 50)
+  since filtering makes a larger backing window more useful without paying
+  for it in the common (few-matches) case.
+
+**Scope note.** Address-crossover (`_addressCrossovers`) and upstream-health
+(`_upstreamHealthEvents`) events live in separate `StateFlow`s from
+`_observabilityEvents` and are not surfaced in this view - confirmed by
+reading `IPNService.kt`'s `EngineCallback` overrides
+(`onAddressCrossover`/`onUpstreamHealthChanged` write to their own
+coordinator methods; `onTailnetStateChange` doesn't write to any flow at
+all, it only logs). Merging those two into the same searchable timeline
+would directly serve the "correlatable to other network events" ask further,
+but was left out of this pass to keep the change reviewable - worth a
+follow-up if the user wants transitions/health events searchable the same
+way DNS queries now are.
+
+**Evidence.** Compiles (`compileDebugKotlin`), `make fmt-check` and
+`make test` (full Robolectric suite) both green, license headers clean on
+tracked source. Not verified live in the running app - no device was
+connected during this autonomous overnight session. **Required evidence:**
+open Diagnostics > Network with the DNS log on, generate some DNS traffic
+(including at least one failure, e.g. an unreachable upstream), and confirm
+the search field and "Errors only" chip actually narrow the list and the
+timestamps line up with a nearby network transition.
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.
