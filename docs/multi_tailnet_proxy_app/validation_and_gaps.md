@@ -4155,6 +4155,60 @@ eviction wiring are correct - not that this was the user's root cause.
 confirming the "cloudflare.com is invalid" symptom stops recurring on a
 WireGuard upstream over an extended real-network session after this fix.
 
+## 83. Investigated, not changed: DNS "falls back to a different route" is an existing, deliberate, already-documented and already-observable behavior - not a defect (2026-09-02)
+
+**User report.** "DNS still sometimes falls back to a different route for
+DNS" - a follow-up concern raised alongside #82, phrased as a suspected bug.
+
+**Finding.** `dnsRoute.provider`'s doc comment (dns_policy.go) already states
+the design plainly: "`provider` carries the query, or nil to leave from the
+device as before." `Policy.MatchAppOnly` deliberately skips any rule
+carrying a destination/port/protocol constraint, because DNS-forward time is
+*before* the destination is known - matching a destination-scoped rule here
+would either wrongly capture every lookup or wrongly miss the one it should
+catch. The consequence, also already reasoned through in that function's own
+doc comment: an app whose *only* routing rule is destination-scoped (no
+plain app-level rule, no default/wildcard rule covering it) gets `dnsRoute{}`
+back - the zero value - and its DNS query leaves from the device directly,
+not through whatever upstream that app's data traffic will eventually be
+routed to once the destination is known. This is a real, verified-by-reading
+behavior, but it is not new, not accidental, and was already weighed against
+the alternative (failing closed, which would break DNS entirely for any app
+whose only rule is destination-scoped) when `MatchAppOnly` was written.
+
+It is also **already observable**, not silent: this path already calls
+`logDNS("", "device-ok")` / `logDNS("", "device-fail")` (dns.go), which the
+existing opt-in per-query DNS log (`observability.go`'s
+`dnsQueryLogEnabled`, DiagnosticsView's Network tab) already surfaces
+distinctly from `"forward-ok"`/`"forward-fail"` (a query that *did* go
+through a specific upstream). A user who enables that toggle can already see
+which of their queries took this path, one query at a time.
+
+**Why nothing was changed here.** The only way to actually change the
+*outcome* (not just its visibility) is a real trade-off with no clearly
+correct default: fail closed for a destination-scoped-only app's DNS (safer,
+but breaks DNS outright for anyone relying on that rule shape until they add
+an explicit app-level or default rule) vs. keep the device fallback (current
+behavior, matches "an app with no applicable DNS rule uses the device's own
+resolver" which is arguably the least surprising default). This is a product
+decision, not a bug fix, and the user was asleep when this was investigated
+- changing default DNS-forwarding behavior without them present to confirm
+the trade-off is exactly the kind of irreversible-in-spirit call this
+engagement's standing practice defers to them for.
+
+**Recommended options for a future decision** (none implemented):
+1. Leave as-is; call the existing per-query log's `"device-ok"`/`"device-fail"`
+   distinction good enough observability.
+2. Add a policy-level opt-in ("fail DNS closed for apps with no matching
+   app-level/default DNS rule") alongside the existing per-app
+   UID-unattributed fail-closed behavor (dns.go's `policyUsesAppUID` check),
+   defaulting to *off* so it can't change anyone's existing behavior by
+   surprise.
+3. Surface this specific outcome more prominently in the UI (e.g. a distinct
+   badge/count on the Upstreams or Network diagnostics tab) rather than only
+   inside the opt-in raw event log - a natural fit for task #17's planned DNS
+   log viewer rework.
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.
