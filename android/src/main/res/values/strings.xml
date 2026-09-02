@@ -458,4 +458,9 @@
     <string name="app_routing_subtitle">Send specific apps through a proxy, tunnel, or Tailnet</string>
     <string name="upstreams_subtitle">SOCKS5 proxies and WireGuard tunnels to route traffic through</string>
 
+    <string name="app_routing_search_hint">Search apps</string>
+    <string name="app_routing_hide_system_apps">Hide system apps</string>
+    <string name="app_routing_customized_only">Customized only</string>
+    <string name="app_routing_no_apps_match">No apps match</string>
+
 </resources>

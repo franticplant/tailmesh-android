@@ -4209,6 +4209,42 @@ engagement's standing practice defers to them for.
    inside the opt-in raw event log - a natural fit for task #17's planned DNS
    log viewer rework.
 
+## 84. Added: search, "hide system apps", and "customized only" filters on the App routing picker (2026-09-02, Android-built, not device-verified)
+
+**User report.** "i want app selecting routing to be much better ux too. i
+have to scroll down 150 apps rn. there should be hide system apps option,
+there should be show only customized apps button and search app name button
+and things like that."
+
+**BEFORE.** `AppRoutingView.kt` rendered every app `InstalledAppsManager`
+returned (every app with the INTERNET permission - includes most system
+apps) as one flat `LazyColumn`, no way to narrow it beyond scrolling.
+
+**NEW.**
+
+- `InstalledAppsManager.kt`: `InstalledApp` gained `isSystemApp: Boolean`,
+  computed as `FLAG_SYSTEM` set and `FLAG_UPDATED_SYSTEM_APP` *not* set - the
+  latter exclusion is deliberate: an app like Chrome or the Play Store ships
+  preinstalled (`FLAG_SYSTEM`) but then updates through the Play Store like
+  any other app (`FLAG_UPDATED_SYSTEM_APP`), and a user hiding "system apps"
+  expects those to stay visible - only the ones nobody ever interacts with
+  (radio config, system UI internals) should disappear.
+- `AppRoutingView.kt`: a search field (matches app name or package name,
+  case-insensitive) and two `FilterChip`s ("Hide system apps", "Customized
+  only" - the latter filters to `bindings.containsKey(packageName)`), all
+  screen-local `rememberSaveable` state (survives rotation, not persisted
+  beyond the screen - a search query outliving navigation away and back isn't
+  useful). An empty-result state (`app_routing_no_apps_match`) replaces the
+  list when the filters produce nothing, distinct from the existing
+  apps-still-loading spinner state.
+
+**Evidence.** Compiles (`compileDebugKotlin`), `make fmt-check` and
+`make test` (full Robolectric suite) both green, license headers clean. Not
+verified live in the running app - no device was connected during this
+autonomous overnight session. **Required evidence:** open App routing on a
+device with 100+ apps installed and confirm the filters actually narrow the
+list and the search field is responsive.
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.

@@ -4,7 +4,9 @@
 package com.tailscale.ipn.ui.view
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -12,15 +14,23 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
@@ -55,6 +65,21 @@ fun AppRoutingView(
   val defaultUpstreamId by model.defaultUpstreamId.collectAsState()
   val lanExclusionEnabled by model.lanExclusionEnabled.collectAsState()
 
+  // Screen-local, not persisted: a search/filter state that outlives this view isn't useful, and
+  // rememberSaveable keeps it across rotation without needing a ViewModel round-trip.
+  var searchQuery by rememberSaveable { mutableStateOf("") }
+  var hideSystemApps by rememberSaveable { mutableStateOf(false) }
+  var customizedOnly by rememberSaveable { mutableStateOf(false) }
+
+  val filteredApps =
+      installedApps.filter { app ->
+        (!hideSystemApps || !app.isSystemApp) &&
+            (!customizedOnly || bindings.containsKey(app.packageName)) &&
+            (searchQuery.isBlank() ||
+                app.name.contains(searchQuery, ignoreCase = true) ||
+                app.packageName.contains(searchQuery, ignoreCase = true))
+      }
+
   val defaultLabel =
       routable.firstOrNull { it.id == defaultUpstreamId }?.label
           ?: stringResource(R.string.default_route_unset)
@@ -64,6 +89,33 @@ fun AppRoutingView(
     LazyColumn(modifier = Modifier.padding(innerPadding)) {
       item("explanation") {
         ListItem(headlineContent = { Text(stringResource(R.string.app_routing_explanation)) })
+      }
+      item("search") {
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            placeholder = { Text(stringResource(R.string.app_routing_search_hint)) },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            singleLine = true,
+        )
+      }
+      item("filters") {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          FilterChip(
+              selected = hideSystemApps,
+              onClick = { hideSystemApps = !hideSystemApps },
+              label = { Text(stringResource(R.string.app_routing_hide_system_apps)) },
+          )
+          FilterChip(
+              selected = customizedOnly,
+              onClick = { customizedOnly = !customizedOnly },
+              label = { Text(stringResource(R.string.app_routing_customized_only)) },
+          )
+        }
       }
       item("appsHeader") {
         Lists.SectionDivider(
@@ -80,8 +132,12 @@ fun AppRoutingView(
             )
           }
         }
+      } else if (filteredApps.isEmpty()) {
+        item("noMatches") {
+          ListItem(headlineContent = { Text(stringResource(R.string.app_routing_no_apps_match)) })
+        }
       } else {
-        items(installedApps, key = { it.packageName }) { app ->
+        items(filteredApps, key = { it.packageName }) { app ->
           val binding = bindings[app.packageName]
           ListItem(
               headlineContent = { Text(app.name) },
