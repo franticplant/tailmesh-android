@@ -344,7 +344,13 @@ func (e *Engine) RegisterUpstream(p Provider) error {
 	if p != nil && p.Kind() == UpstreamKindExitNode {
 		return errors.New("multiproxy: register exit node upstreams through AddExitNodeUpstream")
 	}
-	return e.upstreams.Register(p)
+	err := e.upstreams.Register(p)
+	if err == nil && p != nil {
+		// A reconfigured upstream (same ID, new provider) shouldn't keep
+		// pooled DoH connections dialed under the old configuration.
+		e.dohClients().evict(p.ID())
+	}
+	return err
 }
 
 // UnregisterUpstream removes a non-tailnet upstream.
@@ -352,7 +358,9 @@ func (e *Engine) UnregisterUpstream(id UpstreamID) error {
 	if e.upstreams == nil {
 		return nil
 	}
-	return e.upstreams.Unregister(id)
+	err := e.upstreams.Unregister(id)
+	e.dohClients().evict(id)
+	return err
 }
 
 // UpstreamInfo is a UI-facing snapshot of one upstream.

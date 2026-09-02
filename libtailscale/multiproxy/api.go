@@ -762,6 +762,7 @@ func (e *Engine) RemoveTailnet(identifier string) error {
 	e.rebuildTargetsUnlocked()
 	e.targetMutex.Unlock()
 
+	e.dohClients().evict(uid)
 	e.enqueueStateEvent(identifier, "REMOVED")
 
 	return nil

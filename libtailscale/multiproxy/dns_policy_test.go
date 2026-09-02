@@ -508,3 +508,73 @@ func TestDoHDialResolvesHostnameForLiteralOnlyUpstream(t *testing.T) {
 		t.Fatalf("provider was dialed with %q, want a literal IP", fp.lastAddr)
 	}
 }
+
+// The DoH transport must bound its pooled-connection lifetime and count
+// rather than leaving both unset (net/http's zero value for both means
+// "unlimited") - see dohIdleConnTimeout's doc comment for why an unbounded
+// pool is exactly what "DNS errors accumulate over time on a WireGuard
+// upstream" looks like from the outside.
+func TestDoHTransportBoundsIdleConnections(t *testing.T) {
+	e := NewEngine(t.TempDir(), &MockCallback{})
+
+	transport, ok := e.dohClientFor("wg").Transport.(*http.Transport)
+	if !ok {
+		t.Fatal("expected the DoH client to use an *http.Transport")
+	}
+	if transport.IdleConnTimeout != dohIdleConnTimeout {
+		t.Fatalf("IdleConnTimeout = %v, want %v (unset means unbounded)", transport.IdleConnTimeout, dohIdleConnTimeout)
+	}
+	if transport.MaxIdleConnsPerHost != dohMaxIdleConnsPerHost {
+		t.Fatalf("MaxIdleConnsPerHost = %d, want %d (unset means unbounded)", transport.MaxIdleConnsPerHost, dohMaxIdleConnsPerHost)
+	}
+
+	if transport, ok := dohHTTPClient.Transport.(*http.Transport); !ok {
+		t.Fatal("expected the device-direct DoH client to use an *http.Transport")
+	} else if transport.IdleConnTimeout != dohIdleConnTimeout || transport.MaxIdleConnsPerHost != dohMaxIdleConnsPerHost {
+		t.Fatal("device-direct dohHTTPClient must bound its pool the same way as the per-upstream one")
+	}
+}
+
+// Removing an upstream must forget its cached DoH client, not just close the
+// provider - otherwise the client (and any pooled connections it still
+// holds) outlives the upstream it was built for, for as long as the Engine
+// runs.
+func TestDoHClientEvictedWhenUpstreamRemoved(t *testing.T) {
+	e := NewEngine(t.TempDir(), &MockCallback{})
+
+	fp := &literalOnlyProvider{id: "wg"}
+	if err := e.RegisterUpstream(fp); err != nil {
+		t.Fatalf("RegisterUpstream: %v", err)
+	}
+	first := e.dohClientFor("wg")
+
+	if err := e.UnregisterUpstream("wg"); err != nil {
+		t.Fatalf("UnregisterUpstream: %v", err)
+	}
+
+	if second := e.dohClientFor("wg"); second == first {
+		t.Fatal("dohClientFor returned the same client after its upstream was removed")
+	}
+}
+
+// Reconfiguring an upstream (same ID, replacement provider) must also evict
+// the old client - otherwise queries keep using a client whose pooled
+// connections were dialed under the previous configuration.
+func TestDoHClientEvictedOnReconfigure(t *testing.T) {
+	e := NewEngine(t.TempDir(), &MockCallback{})
+
+	first := &literalOnlyProvider{id: "wg"}
+	if err := e.RegisterUpstream(first); err != nil {
+		t.Fatalf("RegisterUpstream: %v", err)
+	}
+	firstClient := e.dohClientFor("wg")
+
+	second := &literalOnlyProvider{id: "wg"}
+	if err := e.RegisterUpstream(second); err != nil {
+		t.Fatalf("RegisterUpstream (replace): %v", err)
+	}
+
+	if secondClient := e.dohClientFor("wg"); secondClient == firstClient {
+		t.Fatal("dohClientFor returned the pre-reconfigure client")
+	}
+}

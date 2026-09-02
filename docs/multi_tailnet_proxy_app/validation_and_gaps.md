@@ -4088,6 +4088,73 @@ Multi-Tailnet mode to a tailnet with a real VIP service, confirming the
 completes (not just that a `TargetRecord` was constructed correctly in
 isolation).
 
+## 82. Fixed (plausible root cause, not device-confirmed): unbounded DoH connection pool, worst on WireGuard upstreams (2026-09-02, unit-tested/Android-built, not device-verified)
+
+**User report.** "DNS errors seem [to have] problems... theres [an] issue
+where we get dns cloudflare.com is invalid or sth and this is on[e] o[f]
+the wireguard upstreams that ive tried. when that upstream[']s used those
+kind of errors accumulate and dns dont work or faulty kinda idk."
+
+**BEFORE.** `dohClientFor` (dns_policy.go) caches one `*http.Client` per
+upstream ID, built once and reused for the Engine's whole lifetime -
+correct, and documented as deliberate (a client per query would mean a TLS
+handshake per name). But neither its `http.Transport` nor the device-direct
+`dohHTTPClient` (dns.go) set `IdleConnTimeout` or `MaxIdleConnsPerHost`.
+`net/http`'s zero value for both means *unlimited*: a pooled idle connection
+is never closed by timeout, and the pool has no size cap. Nothing ever
+evicted a upstream's cached client either, even when that upstream was
+removed (`UnregisterUpstream`, `RemoveTailnet`, `ForgetExitNodeUpstream` all
+left the entry in place) - a deleted upstream's client, and any connections
+still pooled in it, simply lived on.
+
+**WHY this lands hardest on WireGuard specifically.** A SOCKS5 or Tailnet
+upstream's DoH connections ride on the OS's real socket table - large,
+well-behaved, and connections there get reaped by the peer or the kernel in
+the ordinary course of things. A WireGuard upstream's transport
+(`wireguardProvider.Dial`, wireguard.go) is a userspace gVisor netstack over
+one peer link with its own handshake/rekey lifecycle. A rekey or a dropped
+handshake doesn't just interrupt in-flight traffic - it's exactly the kind
+of event that leaves a pooled HTTP/2 connection half-dead: `net/http` still
+believes it's reusable and tries it first on the next query, that query
+fails, and only *then* does it fall through to dialing a fresh connection.
+With no idle timeout to age out the half-dead ones, they keep accumulating
+and keep being tried-and-failed-first on every query, which matches the
+user's exact description - errors that accumulate over time on a WireGuard
+upstream specifically, not a one-shot failure.
+
+**NEW.**
+
+- `dns_policy.go`: `dohIdleConnTimeout` (60s) and `dohMaxIdleConnsPerHost`
+  (4), applied to `dohClientFor`'s per-upstream `http.Transport` and to
+  `dohHTTPClient`'s (dns.go) device-direct one, so both pools age out and cap
+  the same way.
+- `dohClientCache.evict(id)` (dns_policy.go, new): removes and
+  `CloseIdleConnections()`s the cached client for one upstream ID. Called
+  from `UnregisterUpstream` and from `RegisterUpstream` on a same-ID replace
+  (upstream.go), `RemoveTailnet` (api.go), and `ForgetExitNodeUpstream`
+  (upstream_exitnode.go) - every path that removes or reconfigures an
+  upstream now also forgets its DoH client instead of leaving it cached
+  forever.
+
+**Evidence level - be precise about what this is not.** This is a real,
+verified-by-reading defect (confirmed: both transports had zero-value
+`IdleConnTimeout`/`MaxIdleConnsPerHost` before this change, confirmed: no
+removal path ever called anything resembling eviction before this change),
+and the fix cannot make idle-connection handling *worse* for any upstream
+type. But nothing in this session reproduced the user's exact symptom on a
+real WireGuard upstream against a real flaky link - the causal chain above
+(rekey/handshake drop -> half-dead pooled HTTP/2 connection -> tried-and-
+failed-first on the next query -> repeats and accumulates without an idle
+timeout to clear it) is the most plausible explanation found, not a
+confirmed one. `go test ./libtailscale/multiproxy/...` passes, including new
+tests (`TestDoHTransportBoundsIdleConnections`,
+`TestDoHClientEvictedWhenUpstreamRemoved`,
+`TestDoHClientEvictedOnReconfigure`) that only prove the pool bounds and
+eviction wiring are correct - not that this was the user's root cause.
+**Required evidence:** the user (or a future session with device access)
+confirming the "cloudflare.com is invalid" symptom stops recurring on a
+WireGuard upstream over an extended real-network session after this fix.
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.

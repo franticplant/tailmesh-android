@@ -158,6 +158,23 @@ func exchangePlainVia(p Provider, r *dns.Msg, netType, server string) (*dns.Msg,
 	return resp, nil
 }
 
+// dohIdleConnTimeout bounds how long a pooled DoH connection may sit idle
+// before net/http closes it, and dohMaxIdleConnsPerHost bounds how many such
+// connections accumulate per upstream. http.Transport's zero value for both
+// means "unlimited" - previously neither was set here, so a connection pool
+// only ever grew. That is most visible on a WireGuard upstream: its transport
+// is a userspace gVisor netstack over one flaky peer link, not the OS's real
+// socket table, so reconnect churn from a rekey or a dropped handshake pools
+// up stale HTTP/2 connections (each holding a goroutine, an fd, and a netstack
+// endpoint on that tunnel) faster than on a SOCKS5 or Tailnet upstream - and
+// each stale connection net/http still tries to reuse first is a query that
+// has to fail and retry before one succeeds, which is what "DNS errors
+// accumulate over time on a WireGuard upstream" looks like from the outside.
+const (
+	dohIdleConnTimeout     = 60 * time.Second
+	dohMaxIdleConnsPerHost = 4
+)
+
 // dohClientCache holds one HTTP client per upstream.
 //
 // A client per query would mean a TLS handshake per name looked up, which is
@@ -172,6 +189,23 @@ func exchangePlainVia(p Provider, r *dns.Msg, netType, server string) (*dns.Msg,
 type dohClientCache struct {
 	mu      sync.Mutex
 	entries map[UpstreamID]*http.Client
+}
+
+// evict closes and forgets the cached client for id, if any. Called when an
+// upstream is removed so its pooled connections (and the goroutines/fds they
+// hold) don't outlive it - previously nothing ever called this, so every
+// UpstreamID that had ever used DoH kept its client, and that client's
+// connection pool, for the life of the Engine.
+func (c *dohClientCache) evict(id UpstreamID) {
+	c.mu.Lock()
+	client, ok := c.entries[id]
+	if ok {
+		delete(c.entries, id)
+	}
+	c.mu.Unlock()
+	if ok {
+		client.CloseIdleConnections()
+	}
 }
 
 // dohClients returns this engine's cache, built on first use so that an Engine
@@ -230,7 +264,9 @@ func (e *Engine) dohClientFor(id UpstreamID) *http.Client {
 			},
 			// Same reason as dohHTTPClient: setting DialContext otherwise
 			// suppresses HTTP/2, and some providers serve HTTP/2 only.
-			ForceAttemptHTTP2: true,
+			ForceAttemptHTTP2:   true,
+			IdleConnTimeout:     dohIdleConnTimeout,
+			MaxIdleConnsPerHost: dohMaxIdleConnsPerHost,
 		},
 	}
 	c.entries[id] = client

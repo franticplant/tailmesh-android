@@ -306,6 +306,7 @@ func (e *Engine) ForgetExitNodeUpstream(identifier string) error {
 		srv.Close()
 	}
 
+	e.dohClients().evict(uid)
 	return os.RemoveAll(stateDir)
 }
 

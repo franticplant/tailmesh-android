@@ -51,6 +51,11 @@ var dohHTTPClient = &http.Client{
 		// only, and answer an HTTP/1.1 request with a raw SETTINGS frame that
 		// the client then reports as a malformed response.
 		ForceAttemptHTTP2: true,
+		// See dohIdleConnTimeout's doc comment (dns_policy.go) - bounds the
+		// pooled-connection accumulation the same way for the device-direct
+		// DoH path as for the per-upstream one.
+		IdleConnTimeout:     dohIdleConnTimeout,
+		MaxIdleConnsPerHost: dohMaxIdleConnsPerHost,
 	},
 }
 
