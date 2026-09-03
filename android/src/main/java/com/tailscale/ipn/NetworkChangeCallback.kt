@@ -193,6 +193,48 @@ object NetworkChangeCallback {
     return null
   }
 
+  // hasUsableIPv6 reports whether a network's LinkProperties show an actual
+  // IPv6 default route - not just an IPv6 link-local/ULA address, which
+  // every interface tends to have regardless of whether the upstream
+  // actually forwards v6 traffic. Broken/absent IPv6 uplinks are common
+  // (a Wi-Fi AP or carrier with v4-only backhaul, tethering, some VPNs) and
+  // Android still reports the interface as "up" with an IPv6 address in
+  // that case - only the default route distinguishes "has an address" from
+  // "can actually reach the v6 internet".
+  private fun hasUsableIPv6(linkProps: LinkProperties): Boolean =
+      linkProps.routes.any { it.isDefaultRoute && it.destination.address is java.net.Inet6Address }
+
+  // pickNetworkForDial returns the network to bind an outbound socket of the
+  // given IP family to. IPv4 dials use the same single "default network" as
+  // before; IPv6 dials are family-aware, because the chosen default network
+  // can be IPv4-only (or have a broken v6 uplink) even when some other
+  // active network does carry usable IPv6 - forcing an IPv6 socket onto a
+  // v4-only network doesn't fail cleanly, it produces a connection that
+  // completes a TCP handshake / TLS ClientHello and then hangs for hundreds
+  // of milliseconds before the remote resets it, instead of failing fast
+  // enough for the caller's own Happy Eyeballs logic to retry over IPv4.
+  // Returns null when no active network can carry the requested family, so
+  // the caller can fail the dial immediately rather than binding to a
+  // network that will not actually deliver it.
+  fun pickNetworkForDial(isIPv6: Boolean): Network? =
+      lock.withLock {
+        if (!isIPv6) return@withLock cachedDefaultNetwork
+
+        cachedDefaultNetworkInfo?.let { info ->
+          if (hasUsableIPv6(info.linkProps)) return@withLock cachedDefaultNetwork
+        }
+
+        for ((network, info) in activeNetworks) {
+          if (info.caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+              info.caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) &&
+              hasUsableIPv6(info.linkProps)) {
+            return@withLock network
+          }
+        }
+
+        null
+      }
+
   // Update cached default network + log interface name.
   // Last network-source label reported to the observability event store, so
   // a transition event only fires on an actual change - not on every

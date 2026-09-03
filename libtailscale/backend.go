@@ -482,8 +482,21 @@ func AcquireAndroidNetworkHooks(mode string, s IPNService, appCtx AppContext) bo
 					retErr = fmt.Errorf("recovered panic in bind: %v", r)
 				}
 			}()
+			// A false return is now an expected outcome, not just a bind
+			// syscall failure: the Android side declines to bind an IPv6
+			// socket when no active network actually carries usable IPv6
+			// (see App.bindSocketToNetwork/NetworkChangeCallback.pickNetworkForDial).
+			// Returning a real error here - rather than swallowing it and
+			// letting the dial continue on an unbound socket - matters
+			// because this func is netns's net.Dialer.Control callback
+			// (controlC in the vendored tailscale.com fork): a non-nil
+			// error there aborts the dial immediately, before connect() is
+			// attempted, so the caller's own Happy-Eyeballs-style retry
+			// logic can fall back to IPv4 right away instead of waiting on
+			// a v6 handshake that will hang for hundreds of milliseconds
+			// before the remote resets it.
 			if ok := appCtx.BindSocketToNetwork(int32(fd)); !ok {
-				log.Printf("[unexpected] BindSocketToNetwork(%d) returned false", fd)
+				return fmt.Errorf("no active network available to bind socket %d to", fd)
 			}
 			return nil
 		})

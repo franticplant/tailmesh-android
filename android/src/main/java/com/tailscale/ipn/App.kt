@@ -463,28 +463,44 @@ class App : UninitializedApp(), libtailscale.AppContext, ViewModelStoreOwner {
   }
 
   override fun bindSocketToNetwork(fd: Int): Boolean {
-    val net =
-        NetworkChangeCallback.cachedDefaultNetwork
-            ?: run {
-              TSLog.d(TAG, "bindSocketToActiveNetwork: no cached default network; noop")
-              return false
+    return try {
+      android.os.ParcelFileDescriptor.fromFd(fd).use { pfd ->
+        val javaFd = pfd.fileDescriptor
+        // The socket's own address family (set at socket() creation, before
+        // this callback ever runs, so this reflects the caller's intent
+        // regardless of whether the socket is bound/connected yet) - see
+        // NetworkChangeCallback.pickNetworkForDial's doc comment for why an
+        // IPv6 dial can't just reuse the IPv4 "default network" logic.
+        val isIPv6 =
+            try {
+              val addr = android.system.Os.getsockname(javaFd)
+              (addr as? java.net.InetSocketAddress)?.address is java.net.Inet6Address
+            } catch (e: Exception) {
+              false
             }
 
-    val iface = NetworkChangeCallback.cachedDefaultInterfaceName
+        val net =
+            NetworkChangeCallback.pickNetworkForDial(isIPv6)
+                ?: run {
+                  if (isIPv6) {
+                    TSLog.d(
+                        TAG,
+                        "bindSocketToActiveNetwork: no active network has usable IPv6 for fd=$fd; failing the dial so the caller can retry over IPv4")
+                  } else {
+                    TSLog.d(TAG, "bindSocketToActiveNetwork: no cached default network; noop")
+                  }
+                  return false
+                }
 
-    TSLog.d(
-        TAG,
-        "bindSocketToActiveNetwork: binding fd=$fd to net=$net iface=$iface",
-    )
-
-    return try {
-      android.os.ParcelFileDescriptor.fromFd(fd).use { pfd -> net.bindSocket(pfd.fileDescriptor) }
-      true
+        TSLog.d(
+            TAG,
+            "bindSocketToActiveNetwork: binding fd=$fd (isIPv6=$isIPv6) to net=$net",
+        )
+        net.bindSocket(javaFd)
+        true
+      }
     } catch (e: Exception) {
-      TSLog.w(
-          TAG,
-          "bindSocketToActiveNetwork: bind failed fd=$fd net=$net iface=$iface: $e",
-      )
+      TSLog.w(TAG, "bindSocketToActiveNetwork: bind failed fd=$fd: $e")
       false
     }
   }
