@@ -5,4 +5,8 @@
     <!-- Matches the "captures" subdirectory PacketCaptureView writes PCAP files
          into under context.filesDir - see PacketCaptureView.kt's capturesDir. -->
     <files-path name="captures" path="captures/" />
+    <!-- Matches the "profiles" subdirectory DiagnosticsView writes CPU/heap/goroutine
+         profiles and Android method-trace files into under context.cacheDir - see
+         DiagnosticsView.kt's profilesDir. -->
+    <cache-path name="profiles" path="profiles/" />
 </paths>

@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: BSD-3-Clause
 package com.tailscale.ipn.ui.view
 
+import android.content.Intent
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
+import android.os.Debug
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -25,6 +27,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
 import androidx.core.graphics.drawable.toBitmap
 import com.patrykandpatrick.vico.compose.axis.axisGuidelineComponent
 import com.patrykandpatrick.vico.compose.axis.horizontal.rememberBottomAxis
@@ -61,6 +64,7 @@ import java.util.Locale
 import kotlin.math.max
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -78,6 +82,30 @@ private enum class DiagRange(val label: String, val millis: Long) {
   H6("6h", 6 * 60L * 60_000),
   H24("24h", 24 * 60L * 60_000),
   D7("7d", 7 * 24 * 60L * 60_000),
+}
+
+/**
+ * Where CPU/heap/goroutine profiles and Android method-trace files land - a dedicated cacheDir
+ * subdirectory (not the top-level cacheDir the buttons used to write into directly) so a single
+ * `<cache-path>` entry in pcap_file_paths.xml can grant FileProvider access to exactly this, not
+ * every other cache file the app happens to have lying around.
+ */
+private fun profilesDir(context: android.content.Context): File {
+  val dir = File(context.cacheDir, "profiles")
+  dir.mkdirs()
+  return dir
+}
+
+/** Shares one file via the FileProvider already wired for PacketCaptureView's .pcap exports. */
+private fun shareFile(context: android.content.Context, file: File, mimeType: String) {
+  val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+  val intent =
+      Intent(Intent.ACTION_SEND).apply {
+        type = mimeType
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      }
+  context.startActivity(Intent.createChooser(intent, file.name))
 }
 
 private enum class DiagSection {
@@ -105,6 +133,7 @@ private enum class GraphResolution(val label: String, val targetPoints: Int) {
 @Composable
 fun DiagnosticsView(onNavigateBack: () -> Unit) {
   val context = LocalContext.current
+  val scope = rememberCoroutineScope()
   val snapshot by MultiProxySessionCoordinator.observabilitySnapshot.collectAsState()
   val liveEvents by MultiProxySessionCoordinator.observabilityEvents.collectAsState()
   var section by remember { mutableStateOf(DiagSection.OVERVIEW) }
@@ -115,6 +144,11 @@ fun DiagnosticsView(onNavigateBack: () -> Unit) {
     mutableStateOf(App.get().multiProxySession.engine?.advancedDiagnosticsEnabled() ?: false)
   }
   var captureStatus by remember { mutableStateOf<String?>(null) }
+  var lastCpuProfile by remember { mutableStateOf<File?>(null) }
+  var lastHeapProfile by remember { mutableStateOf<File?>(null) }
+  var lastGoroutineDump by remember { mutableStateOf<File?>(null) }
+  var lastMethodTrace by remember { mutableStateOf<File?>(null) }
+  var methodTracing by remember { mutableStateOf(false) }
   var showResetDialog by remember { mutableStateOf(false) }
   var dnsLogEnabled by remember { mutableStateOf(false) }
   var dnsSearchQuery by remember { mutableStateOf("") }
@@ -243,49 +277,162 @@ fun DiagnosticsView(onNavigateBack: () -> Unit) {
                 Text(if (advancedEnabled) "Enabled" else "Disabled")
               }
           if (advancedEnabled) {
-            Button(
-                onClick = {
-                  val engine = App.get().multiProxySession.engine
-                  val out =
-                      File(context.cacheDir, "cpu_profile_${System.currentTimeMillis()}.pprof")
-                  try {
-                    engine?.captureCPUProfileToFile(out.absolutePath, 30)
-                    captureStatus = "CPU profile saved: ${out.name}"
-                  } catch (e: Exception) {
-                    captureStatus = "CPU profile capture failed: ${e.message}"
+            Text(
+                "Go-engine profiles are the standard pprof format - after exporting, open " +
+                    "with \"go tool pprof -http=:PORT <file>\" on a computer for an " +
+                    "interactive, clickable flame graph. The goroutine dump is plain text.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.secondary,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+              Button(
+                  onClick = {
+                    // Fetched fresh here (not a `val` captured earlier in the composable) and
+                    // checked for null explicitly - PacketCaptureView.kt hit exactly this bug
+                    // once already: engine?.foo() on a null engine silently does nothing while
+                    // the surrounding code still claims success, because the safe-call itself
+                    // never throws. See validation_and_gaps.md's device-verification entry for
+                    // that bug for the full writeup.
+                    val engine = App.get().multiProxySession.engine
+                    if (engine == null) {
+                      captureStatus = "VPN engine not running yet - connect and try again"
+                    } else {
+                      val out =
+                          File(
+                              profilesDir(context),
+                              "cpu_profile_${System.currentTimeMillis()}.pprof")
+                      captureStatus = "Capturing CPU profile (30s)..."
+                      // CaptureCPUProfileToFile blocks its calling thread for the full
+                      // duration (it's a real time.Sleep on the Go side, not just a fire-and-
+                      // forget start) - running that on the composable's click-handler thread
+                      // (the main/UI thread) would freeze the whole app for 30s and likely
+                      // trip Android's ANR watchdog. Dispatchers.IO instead, same as this
+                      // screen already does for its own samples query in the LaunchedEffect
+                      // above.
+                      scope.launch(Dispatchers.IO) {
+                        try {
+                          engine.captureCPUProfileToFile(out.absolutePath, 30)
+                          lastCpuProfile = out
+                          captureStatus = "CPU profile saved: ${out.name}"
+                        } catch (e: Exception) {
+                          captureStatus = "CPU profile capture failed: ${e.message}"
+                        }
+                      }
+                    }
+                  }) {
+                    Text("Capture 30-second CPU profile")
                   }
-                }) {
-                  Text("Capture 30-second CPU profile")
+              lastCpuProfile?.let { f ->
+                TextButton(onClick = { shareFile(context, f, "application/octet-stream") }) {
+                  Text("Export")
                 }
+              }
+            }
             Spacer(modifier = Modifier.height(4.dp))
-            Button(
-                onClick = {
-                  val engine = App.get().multiProxySession.engine
-                  val out =
-                      File(context.cacheDir, "heap_profile_${System.currentTimeMillis()}.pprof")
-                  try {
-                    engine?.captureHeapProfileToFile(out.absolutePath)
-                    captureStatus = "Heap profile saved: ${out.name}"
-                  } catch (e: Exception) {
-                    captureStatus = "Heap profile capture failed: ${e.message}"
+            Row(verticalAlignment = Alignment.CenterVertically) {
+              Button(
+                  onClick = {
+                    val engine = App.get().multiProxySession.engine
+                    if (engine == null) {
+                      captureStatus = "VPN engine not running yet - connect and try again"
+                    } else {
+                      val out =
+                          File(
+                              profilesDir(context),
+                              "heap_profile_${System.currentTimeMillis()}.pprof")
+                      try {
+                        engine.captureHeapProfileToFile(out.absolutePath)
+                        lastHeapProfile = out
+                        captureStatus = "Heap profile saved: ${out.name}"
+                      } catch (e: Exception) {
+                        captureStatus = "Heap profile capture failed: ${e.message}"
+                      }
+                    }
+                  }) {
+                    Text("Capture heap profile")
                   }
-                }) {
-                  Text("Capture heap profile")
+              lastHeapProfile?.let { f ->
+                TextButton(onClick = { shareFile(context, f, "application/octet-stream") }) {
+                  Text("Export")
                 }
+              }
+            }
             Spacer(modifier = Modifier.height(4.dp))
-            Button(
-                onClick = {
-                  val engine = App.get().multiProxySession.engine
-                  val out = File(context.cacheDir, "goroutines_${System.currentTimeMillis()}.txt")
-                  try {
-                    engine?.captureGoroutineDumpToFile(out.absolutePath)
-                    captureStatus = "Goroutine dump saved: ${out.name}"
-                  } catch (e: Exception) {
-                    captureStatus = "Goroutine dump failed: ${e.message}"
+            Row(verticalAlignment = Alignment.CenterVertically) {
+              Button(
+                  onClick = {
+                    val engine = App.get().multiProxySession.engine
+                    if (engine == null) {
+                      captureStatus = "VPN engine not running yet - connect and try again"
+                    } else {
+                      val out =
+                          File(profilesDir(context), "goroutines_${System.currentTimeMillis()}.txt")
+                      try {
+                        engine.captureGoroutineDumpToFile(out.absolutePath)
+                        lastGoroutineDump = out
+                        captureStatus = "Goroutine dump saved: ${out.name}"
+                      } catch (e: Exception) {
+                        captureStatus = "Goroutine dump failed: ${e.message}"
+                      }
+                    }
+                  }) {
+                    Text("Capture goroutine dump")
                   }
-                }) {
-                  Text("Capture goroutine dump")
+              lastGoroutineDump?.let { f ->
+                TextButton(onClick = { shareFile(context, f, "text/plain") }) { Text("Export") }
+              }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                "App-level (Kotlin/UI) method trace - Android's own ART tracing, separate from " +
+                    "the Go engine above. Open the exported .trace file in Android Studio's " +
+                    "profiler, or \"perfetto --convert\" it, for a per-method flame graph of " +
+                    "the app process (Compose recomposition, main-thread work, etc).",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.secondary,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+              if (!methodTracing) {
+                Button(
+                    onClick = {
+                      val out =
+                          File(
+                              profilesDir(context),
+                              "method_trace_${System.currentTimeMillis()}.trace")
+                      try {
+                        Debug.startMethodTracing(out.absolutePath)
+                        lastMethodTrace = out
+                        methodTracing = true
+                        captureStatus = "Method trace started: ${out.name}"
+                      } catch (e: Exception) {
+                        captureStatus = "Method trace failed to start: ${e.message}"
+                      }
+                    }) {
+                      Text("Start method trace")
+                    }
+              } else {
+                Button(
+                    onClick = {
+                      try {
+                        Debug.stopMethodTracing()
+                        captureStatus = "Method trace saved: ${lastMethodTrace?.name}"
+                      } catch (e: Exception) {
+                        captureStatus = "Method trace failed to stop: ${e.message}"
+                      } finally {
+                        methodTracing = false
+                      }
+                    }) {
+                      Text("Stop method trace")
+                    }
+              }
+              lastMethodTrace?.let { f ->
+                if (!methodTracing) {
+                  TextButton(onClick = { shareFile(context, f, "application/octet-stream") }) {
+                    Text("Export")
+                  }
                 }
+              }
+            }
           }
           Spacer(modifier = Modifier.height(4.dp))
           OutlinedButton(
@@ -712,6 +859,26 @@ private fun overviewSection(
         "Go heap",
         "${snapshot.process.goHeapAllocBytes / 1024 / 1024} MiB alloc, ${snapshot.process.goroutineCount} goroutines")
     StatRow("Engine uptime", "${snapshot.process.engineUptimeSeconds}s")
+    Spacer(modifier = Modifier.height(8.dp))
+    Text("Goroutines", style = MaterialTheme.typography.titleMedium)
+    val (goroutineEntries, goroutineTimestamps) =
+        remember(samples, resolution) {
+          chartSeries(
+              bucketize(samples.map { it.ts to it.goroutines.toFloat() }, resolution.targetPoints))
+        }
+    // A live, interactive history of the same runtime.NumGoroutine() count the "Go heap" row
+    // above shows as a single snapshot number - a slow climb here across a long-running session
+    // is the signature of a goroutine leak (e.g. the kind §82's dohClientFor pooling fix was
+    // meant to stop), which a single point-in-time number can never show on its own.
+    ChartSummaryLine(goroutineEntries) { "%.0f".format(it) }
+    InteractiveLineChart(
+        entries = goroutineEntries,
+        timestamps = goroutineTimestamps,
+        color = MaterialTheme.colorScheme.tertiary,
+        modifier = Modifier.fillMaxWidth().height(160.dp).padding(vertical = 8.dp),
+        formatValue = { "%.0f".format(it) },
+        resetKey = range,
+    )
     Spacer(modifier = Modifier.height(8.dp))
     Text("Dataplane (TUN)", style = MaterialTheme.typography.titleMedium)
     StatRow(
