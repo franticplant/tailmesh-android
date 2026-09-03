@@ -57,9 +57,10 @@ type flowKey struct {
 type packetCapture struct {
 	mode int32 // captureMode, accessed via sync/atomic
 
-	mu      sync.RWMutex
-	appUIDs map[int32]bool
-	file    *pcapFile
+	mu       sync.RWMutex
+	appUIDs  map[int32]bool
+	appNames map[int32]string // UID -> human-readable app name/label, for per-packet comments
+	file     *pcapFile
 
 	flowsMu sync.RWMutex
 	flows   map[flowKey]int32 // -> AppUID
@@ -67,8 +68,9 @@ type packetCapture struct {
 
 func newPacketCapture() *packetCapture {
 	return &packetCapture{
-		appUIDs: make(map[int32]bool),
-		flows:   make(map[flowKey]int32),
+		appUIDs:  make(map[int32]bool),
+		appNames: make(map[int32]string),
+		flows:    make(map[flowKey]int32),
 	}
 }
 
@@ -76,8 +78,14 @@ func newPacketCapture() *packetCapture {
 // previous one. mode must be captureAll or captureApps; appUIDsCSV is
 // consulted only for captureApps and may be empty (matches nothing, i.e. a
 // no-op capture - the caller's UI should prevent this, but it's not this
-// layer's job to second-guess an empty selection).
-func (c *packetCapture) start(mode captureMode, appUIDsCSV, path string, maxBytes int64) error {
+// layer's job to second-guess an empty selection). appNamesLines maps UID
+// to a human-readable app name/label, one "uid:name" pair per line
+// (newline-separated rather than comma-separated, since app names may
+// themselves contain commas) - used to label every captured packet's
+// per-packet comment regardless of mode, so "All traffic" captures are just
+// as attributable as "Selected apps" ones once opened in a pcapng-aware
+// tool. A UID with no entry falls back to "uid:N" in the comment.
+func (c *packetCapture) start(mode captureMode, appUIDsCSV, appNamesLines, path string, maxBytes int64) error {
 	if maxBytes <= 0 {
 		maxBytes = defaultCaptureMaxBytes
 	}
@@ -97,10 +105,26 @@ func (c *packetCapture) start(mode captureMode, appUIDsCSV, path string, maxByte
 		}
 	}
 
+	names := make(map[int32]string)
+	for _, line := range strings.Split(appNamesLines, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		k, v, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		if uid, err := strconv.ParseInt(strings.TrimSpace(k), 10, 32); err == nil {
+			names[int32(uid)] = strings.TrimSpace(v)
+		}
+	}
+
 	c.mu.Lock()
 	old := c.file
 	c.file = f
 	c.appUIDs = uids
+	c.appNames = names
 	c.mu.Unlock()
 
 	storeCaptureMode(&c.mode, mode)
@@ -173,22 +197,25 @@ func (c *packetCapture) uidForFlow(proto string, src, dst netip.AddrPort) (int32
 
 // observe is the hot-path entry point: given one raw IP packet as it
 // crosses the TUN link endpoint (either direction), decide whether the
-// active session wants it and, if so, append it. Cheap no-op when capture
-// is off (a single atomic load), and the 5-tuple parse only happens in
-// captureApps mode - captureAll never needs to know which flow a packet
-// belongs to.
+// active session wants it and, if so, append it with a per-packet comment
+// naming the owning app. Cheap no-op when capture is off (a single atomic
+// load). The 5-tuple parse now runs in both modes - captureAll needs it too
+// for attribution comments, not just captureApps for filtering - a
+// deliberate cost accepted for the per-packet naming this exists to
+// provide; capture is already an opt-in debug feature, not a
+// steady-state-always-on one.
 func (c *packetCapture) observe(data []byte) {
 	mode := loadCaptureMode(&c.mode)
 	if mode == captureOff {
 		return
 	}
-	if mode == captureApps {
-		proto, src, dst, ok := parseFiveTuple(data)
-		if !ok {
-			return
-		}
-		uid, ok := c.uidForFlow(proto, src, dst)
-		if !ok {
+
+	proto, src, dst, parsed := parseFiveTuple(data)
+	var uid int32
+	var attributed bool
+	if parsed {
+		uid, attributed = c.uidForFlow(proto, src, dst)
+		if !attributed {
 			// Packets can arrive slightly before registerFlow runs (SYN
 			// racing the forwarder goroutine) or slightly after
 			// unregisterFlow (final ACK/FIN after the pump loop returns) -
@@ -197,20 +224,29 @@ func (c *packetCapture) observe(data []byte) {
 			// from a UID-scoped view rather than guessed at. Also tries
 			// the reverse direction, since a reply's src/dst are swapped
 			// relative to how the flow was registered.
-			uid, ok = c.uidForFlow(proto, dst, src)
+			uid, attributed = c.uidForFlow(proto, dst, src)
 		}
-		if !ok || !c.appUIDs[uid] {
-			return
-		}
+	}
+
+	if mode == captureApps && (!attributed || !c.appUIDs[uid]) {
+		return
 	}
 
 	c.mu.RLock()
 	f := c.file
+	comment := ""
+	if attributed {
+		if name, ok := c.appNames[uid]; ok && name != "" {
+			comment = name
+		} else {
+			comment = "uid:" + strconv.Itoa(int(uid))
+		}
+	}
 	c.mu.RUnlock()
 	if f == nil {
 		return
 	}
-	f.write(data, time.Now())
+	f.write(data, time.Now(), comment)
 }
 
 // parseFiveTuple extracts (protocol, src, dst) from a raw IPv4 or IPv6
@@ -323,10 +359,14 @@ func (c *captureLinkEndpoint) Attach(dispatcher stack.NetworkDispatcher) {
 // --- Engine-facing API, exposed to Android via gomobile. ---
 
 // StartPacketCaptureAll begins capturing every packet crossing the TUN to
-// path, bounded to maxBytes (0 uses a sane default). Any previous capture
-// is stopped first.
-func (e *Engine) StartPacketCaptureAll(path string, maxBytes int64) error {
-	return e.capture.start(captureAll, "", path, maxBytes)
+// path, bounded to maxBytes (0 uses a sane default). appNamesLines maps
+// Android UID to a human-readable app name/label, one "uid:name" pair per
+// line (not comma-separated - app names may contain commas), used to label
+// every packet's pcapng comment with its owning app; a UID with no entry
+// here falls back to "uid:N" in the comment. Any previous capture is
+// stopped first.
+func (e *Engine) StartPacketCaptureAll(path string, maxBytes int64, appNamesLines string) error {
+	return e.capture.start(captureAll, "", appNamesLines, path, maxBytes)
 }
 
 // StartPacketCaptureApps begins capturing only packets attributed to one of
@@ -335,8 +375,10 @@ func (e *Engine) StartPacketCaptureAll(path string, maxBytes int64) error {
 // candidateTailnetIDsCSV on the Kotlin side). A flow whose UID can't be
 // resolved (see FlowInfo.AppUID's UnknownAppUID) is never captured in this
 // mode, the same way it's excluded from any other UID-scoped view.
-func (e *Engine) StartPacketCaptureApps(appUIDsCSV, path string, maxBytes int64) error {
-	return e.capture.start(captureApps, appUIDsCSV, path, maxBytes)
+// appNamesLines is the same "uid:name" per-line mapping StartPacketCaptureAll
+// takes, used for per-packet comments.
+func (e *Engine) StartPacketCaptureApps(appUIDsCSV, path string, maxBytes int64, appNamesLines string) error {
+	return e.capture.start(captureApps, appUIDsCSV, appNamesLines, path, maxBytes)
 }
 
 // StopPacketCapture ends the active capture session, if any, and closes its

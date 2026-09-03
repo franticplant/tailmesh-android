@@ -66,9 +66,10 @@ private fun capturesDir(context: android.content.Context): File {
 }
 
 /**
- * Records raw IP traffic crossing the VPN tunnel to a .pcap file, either every packet or only
- * packets belonging to a chosen set of apps - see multiproxy/capture.go for how attribution and the
- * size cap work on the Go side.
+ * Records raw IP traffic crossing the VPN tunnel to a .pcapng file, either every packet or only
+ * packets belonging to a chosen set of apps. Every packet, in either mode, carries a per-packet
+ * comment naming its owning app (see appNamesLines below) - see multiproxy/capture.go for how
+ * attribution and the size cap work on the Go side.
  */
 @Composable
 fun PacketCaptureView(backToSettings: BackNavigation) {
@@ -126,6 +127,20 @@ fun PacketCaptureView(backToSettings: BackNavigation) {
         null
       }
 
+  // "uid:name" per line, one per installed app - passed to the engine so
+  // every captured packet's pcapng comment can name its owning app, not
+  // just the ones selected in "Selected apps" mode (see capture.go's
+  // packetCapture.start doc comment for why "All traffic" mode wants
+  // attribution too). Built fresh at capture start rather than cached,
+  // since installedApps was itself only fetched once at composition time
+  // and a newly installed app wouldn't otherwise get a name until this
+  // screen is reopened - not worth chasing further since that's an
+  // edge case a capture restart already covers.
+  fun appNamesLines(): String =
+      installedApps
+          .mapNotNull { app -> uidFor(app.packageName)?.let { uid -> "$uid:${app.name}" } }
+          .joinToString("\n")
+
   fun startCapture() {
     errorMessage = null
     val e = engine()
@@ -141,13 +156,18 @@ fun PacketCaptureView(backToSettings: BackNavigation) {
     }
     val dir = capturesDir(context)
     val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
-    val file = File(dir, "capture-$stamp.pcap")
+    // .pcapng, not .pcap: per-packet app-name comments (see appNamesLines
+    // above) require pcapng's per-block options, which the older classic
+    // pcap format has no room for.
+    val file = File(dir, "capture-$stamp.pcapng")
     try {
+      val names = appNamesLines()
       when (mode) {
-        CaptureMode.ALL -> e.startPacketCaptureAll(file.absolutePath, captureMaxBytes)
+        CaptureMode.ALL -> e.startPacketCaptureAll(file.absolutePath, captureMaxBytes, names)
         CaptureMode.APPS -> {
           val uids = selectedPackages.mapNotNull { uidFor(it) }
-          e.startPacketCaptureApps(uids.joinToString(","), file.absolutePath, captureMaxBytes)
+          e.startPacketCaptureApps(
+              uids.joinToString(","), file.absolutePath, captureMaxBytes, names)
         }
         CaptureMode.OFF -> return
       }
@@ -182,7 +202,13 @@ fun PacketCaptureView(backToSettings: BackNavigation) {
     val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
     val intent =
         Intent(Intent.ACTION_SEND).apply {
-          type = "application/vnd.tcpdump.pcap"
+          // pcapng, not classic pcap - "application/vnd.tcpdump.pcap" would be
+          // misleading here (that MIME's classic-format connotation is exactly
+          // what per-packet app-name comments needed to move away from).
+          // There's no registered pcapng MIME type, so this is generic; every
+          // pcapng-capable tool (Wireshark included) identifies the format
+          // from its magic bytes, not the MIME type on the share intent.
+          type = "application/octet-stream"
           putExtra(Intent.EXTRA_STREAM, uri)
           addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }

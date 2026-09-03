@@ -125,8 +125,84 @@ func TestParseFiveTupleRejectsGarbage(t *testing.T) {
 	}
 }
 
+// pcapngPacket is one parsed Enhanced Packet Block, as read back by
+// readPcapngFile - just enough to assert on in tests, not a general pcapng
+// reader.
+type pcapngPacket struct {
+	data    []byte
+	comment string
+}
+
+// readPcapngFile parses a file written by pcapFile/openPcapFile back into
+// its Section Header, Interface Description, and packet blocks, asserting
+// on the framing invariants (block type, matching leading/trailing length,
+// 4-byte alignment) along the way so a malformed file fails the test
+// immediately rather than via a confusing slice-bounds panic.
+func readPcapngFile(t *testing.T, raw []byte) (linkType uint32, snapLen uint32, packets []pcapngPacket) {
+	t.Helper()
+	off := 0
+	readBlock := func() (blockType uint32, body []byte) {
+		if off+8 > len(raw) {
+			t.Fatalf("truncated block header at offset %d", off)
+		}
+		blockType = binary.LittleEndian.Uint32(raw[off : off+4])
+		total := binary.LittleEndian.Uint32(raw[off+4 : off+8])
+		if off+int(total) > len(raw) {
+			t.Fatalf("block claims length %d past end of file at offset %d", total, off)
+		}
+		trailing := binary.LittleEndian.Uint32(raw[off+int(total)-4 : off+int(total)])
+		if trailing != total {
+			t.Fatalf("block trailing length %d != leading length %d at offset %d", trailing, total, off)
+		}
+		body = raw[off+8 : off+int(total)-4]
+		off += int(total)
+		return blockType, body
+	}
+
+	bt, body := readBlock()
+	if bt != pcapngBlockSectionHeader {
+		t.Fatalf("first block type = %#x, want Section Header Block", bt)
+	}
+	if magic := binary.LittleEndian.Uint32(body[0:4]); magic != pcapngByteOrderMagic {
+		t.Fatalf("byte-order magic = %#x, want %#x", magic, pcapngByteOrderMagic)
+	}
+
+	bt, body = readBlock()
+	if bt != pcapngBlockInterfaceDesc {
+		t.Fatalf("second block type = %#x, want Interface Description Block", bt)
+	}
+	linkType = uint32(binary.LittleEndian.Uint16(body[0:2]))
+	snapLen = binary.LittleEndian.Uint32(body[4:8])
+
+	for off < len(raw) {
+		bt, body := readBlock()
+		if bt != pcapngBlockEnhancedPkt {
+			t.Fatalf("unexpected block type %#x among packets", bt)
+		}
+		capLen := binary.LittleEndian.Uint32(body[12:16])
+		data := body[20 : 20+capLen]
+		rest := body[20+pad4(int(capLen)):]
+
+		var comment string
+		for len(rest) >= 4 {
+			code := binary.LittleEndian.Uint16(rest[0:2])
+			length := binary.LittleEndian.Uint16(rest[2:4])
+			if code == pcapngOptEndOfOpt {
+				break
+			}
+			val := rest[4 : 4+int(length)]
+			if code == pcapngOptComment {
+				comment = string(val)
+			}
+			rest = rest[4+pad4(int(length)):]
+		}
+		packets = append(packets, pcapngPacket{data: append([]byte(nil), data...), comment: comment})
+	}
+	return linkType, snapLen, packets
+}
+
 func TestPcapFileWritesValidHeaderAndRecords(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "capture.pcap")
+	path := filepath.Join(t.TempDir(), "capture.pcapng")
 	f, err := openPcapFile(path, 1<<20)
 	if err != nil {
 		t.Fatalf("openPcapFile: %v", err)
@@ -134,8 +210,8 @@ func TestPcapFileWritesValidHeaderAndRecords(t *testing.T) {
 	pkt1 := buildIPv4UDPPacket(t, "10.0.0.1", 1000, "10.0.0.2", 53, []byte("one"))
 	pkt2 := buildIPv4UDPPacket(t, "10.0.0.2", 53, "10.0.0.1", 1000, []byte("two"))
 	at := time.Unix(1700000000, 123000)
-	f.write(pkt1, at)
-	f.write(pkt2, at)
+	f.write(pkt1, at, "com.example.one")
+	f.write(pkt2, at, "")
 
 	bytesWritten, packets, full := f.stats()
 	if full {
@@ -143,10 +219,6 @@ func TestPcapFileWritesValidHeaderAndRecords(t *testing.T) {
 	}
 	if packets != 2 {
 		t.Fatalf("packets = %d, want 2", packets)
-	}
-	wantBytes := int64(24 + 16 + len(pkt1) + 16 + len(pkt2))
-	if bytesWritten != wantBytes {
-		t.Fatalf("bytesWritten = %d, want %d", bytesWritten, wantBytes)
 	}
 	if err := f.close(); err != nil {
 		t.Fatalf("close: %v", err)
@@ -156,43 +228,53 @@ func TestPcapFileWritesValidHeaderAndRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read capture file: %v", err)
 	}
-	if len(raw) != int(wantBytes) {
-		t.Fatalf("file size = %d, want %d", len(raw), wantBytes)
+	if int64(len(raw)) != bytesWritten {
+		t.Fatalf("file size = %d, want %d (bytesWritten)", len(raw), bytesWritten)
 	}
-	if magic := binary.LittleEndian.Uint32(raw[0:4]); magic != 0xa1b2c3d4 {
-		t.Fatalf("magic = %#x, want 0xa1b2c3d4", magic)
+
+	linkType, snapLen, pkts := readPcapngFile(t, raw)
+	if linkType != pcapLinkTypeRaw {
+		t.Fatalf("linktype = %d, want %d", linkType, pcapLinkTypeRaw)
 	}
-	if linktype := binary.LittleEndian.Uint32(raw[20:24]); linktype != pcapLinkTypeRaw {
-		t.Fatalf("linktype = %d, want %d", linktype, pcapLinkTypeRaw)
+	if snapLen != pcapSnapLen {
+		t.Fatalf("snaplen = %d, want %d", snapLen, pcapSnapLen)
 	}
-	rec1 := raw[24:]
-	inclLen := binary.LittleEndian.Uint32(rec1[8:12])
-	origLen := binary.LittleEndian.Uint32(rec1[12:16])
-	if int(inclLen) != len(pkt1) || int(origLen) != len(pkt1) {
-		t.Fatalf("record1 incl=%d orig=%d, want %d", inclLen, origLen, len(pkt1))
+	if len(pkts) != 2 {
+		t.Fatalf("parsed %d packets, want 2", len(pkts))
 	}
-	gotPkt1 := rec1[16 : 16+inclLen]
-	if string(gotPkt1) != string(pkt1) {
-		t.Fatalf("record1 payload mismatch")
+	if string(pkts[0].data) != string(pkt1) {
+		t.Fatalf("packet 1 payload mismatch")
+	}
+	if pkts[0].comment != "com.example.one" {
+		t.Fatalf("packet 1 comment = %q, want %q", pkts[0].comment, "com.example.one")
+	}
+	if string(pkts[1].data) != string(pkt2) {
+		t.Fatalf("packet 2 payload mismatch")
+	}
+	if pkts[1].comment != "" {
+		t.Fatalf("packet 2 comment = %q, want empty (none written)", pkts[1].comment)
 	}
 }
 
 func TestPcapFileStopsAtCapacity(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "capture.pcap")
-	// Global header (24) + exactly one small record fits; a second must not.
+	path := filepath.Join(t.TempDir(), "capture.pcapng")
 	pkt := buildIPv4UDPPacket(t, "10.0.0.1", 1000, "10.0.0.2", 53, []byte("x"))
-	maxBytes := int64(24 + 16 + len(pkt))
-	f, err := openPcapFile(path, maxBytes)
+	f, err := openPcapFile(path, 1<<20)
 	if err != nil {
 		t.Fatalf("openPcapFile: %v", err)
 	}
+	// Cap exactly at the header blocks plus one record, computed the same
+	// way pcapFile.write does, so a second write must be rejected.
+	base, _, _ := f.stats()
+	f.maxBytes = base + pcapngRecordSize(len(pkt), "")
+	maxBytes := f.maxBytes
 	defer f.close()
 
-	f.write(pkt, time.Now())
+	f.write(pkt, time.Now(), "")
 	if _, _, full := f.stats(); full {
 		t.Fatalf("full = true after first packet, want false")
 	}
-	f.write(pkt, time.Now())
+	f.write(pkt, time.Now(), "")
 	bytesWritten, packets, full := f.stats()
 	if !full {
 		t.Fatalf("full = false after exceeding capacity, want true")
@@ -206,7 +288,7 @@ func TestPcapFileStopsAtCapacity(t *testing.T) {
 
 	// Once full, further writes are also dropped, not just the one that
 	// tipped it over.
-	f.write(pkt, time.Now())
+	f.write(pkt, time.Now(), "")
 	bytesWritten2, packets2, _ := f.stats()
 	if bytesWritten2 != bytesWritten || packets2 != packets {
 		t.Fatalf("write after full changed stats: %d/%d -> %d/%d", bytesWritten, packets, bytesWritten2, packets2)
@@ -215,8 +297,8 @@ func TestPcapFileStopsAtCapacity(t *testing.T) {
 
 func TestPacketCaptureAllModeIgnoresFlowRegistry(t *testing.T) {
 	c := newPacketCapture()
-	path := filepath.Join(t.TempDir(), "capture.pcap")
-	if err := c.start(captureAll, "", path, 1<<20); err != nil {
+	path := filepath.Join(t.TempDir(), "capture.pcapng")
+	if err := c.start(captureAll, "", "", path, 1<<20); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	defer c.stop()
@@ -226,14 +308,14 @@ func TestPacketCaptureAllModeIgnoresFlowRegistry(t *testing.T) {
 
 	_, packets, _ := c.stats()
 	if packets != 1 {
-		t.Fatalf("packets = %d, want 1 (captureAll should not consult the flow registry)", packets)
+		t.Fatalf("packets = %d, want 1 (captureAll should not consult appUIDs)", packets)
 	}
 }
 
 func TestPacketCaptureAppsModeFiltersByUID(t *testing.T) {
 	c := newPacketCapture()
-	path := filepath.Join(t.TempDir(), "capture.pcap")
-	if err := c.start(captureApps, "1001, 1002", path, 1<<20); err != nil {
+	path := filepath.Join(t.TempDir(), "capture.pcapng")
+	if err := c.start(captureApps, "1001, 1002", "", path, 1<<20); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	defer c.stop()
@@ -268,6 +350,52 @@ func TestPacketCaptureAppsModeFiltersByUID(t *testing.T) {
 	}
 }
 
+// TestPacketCaptureAttributesEveryPacketWithAppName confirms the pcapng
+// migration's actual point: even in "All traffic" mode (no UID filtering),
+// every packet on a registered flow gets a per-packet comment naming its
+// owning app when a name is supplied via appNamesLines, falls back to
+// "uid:N" when the UID has no name entry, and is left uncommented when the
+// flow can't be attributed at all.
+func TestPacketCaptureAttributesEveryPacketWithAppName(t *testing.T) {
+	c := newPacketCapture()
+	path := filepath.Join(t.TempDir(), "capture.pcapng")
+	if err := c.start(captureAll, "", "1001:com.example.named\n1002:  com.example.spaced  ", path, 1<<20); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer c.stop()
+
+	namedSrc := netip.MustParseAddrPort("10.0.0.1:5000")
+	namedDst := netip.MustParseAddrPort("10.0.0.2:53")
+	c.registerFlow("udp", namedSrc, namedDst, 1001)
+	c.observe(buildIPv4UDPPacket(t, "10.0.0.1", 5000, "10.0.0.2", 53, []byte("named")))
+
+	unnamedSrc := netip.MustParseAddrPort("10.0.0.3:5001")
+	unnamedDst := netip.MustParseAddrPort("10.0.0.2:53")
+	c.registerFlow("udp", unnamedSrc, unnamedDst, 4242)
+	c.observe(buildIPv4UDPPacket(t, "10.0.0.3", 5001, "10.0.0.2", 53, []byte("unnamed")))
+
+	c.observe(buildIPv4UDPPacket(t, "192.168.1.1", 7000, "10.0.0.2", 53, []byte("unattributed")))
+
+	c.stop()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read capture file: %v", err)
+	}
+	_, _, pkts := readPcapngFile(t, raw)
+	if len(pkts) != 3 {
+		t.Fatalf("parsed %d packets, want 3", len(pkts))
+	}
+	if pkts[0].comment != "com.example.named" {
+		t.Fatalf("packet 1 comment = %q, want %q", pkts[0].comment, "com.example.named")
+	}
+	if pkts[1].comment != "uid:4242" {
+		t.Fatalf("packet 2 comment = %q, want %q (no name entry, falls back to uid)", pkts[1].comment, "uid:4242")
+	}
+	if pkts[2].comment != "" {
+		t.Fatalf("packet 3 comment = %q, want empty (unattributed flow)", pkts[2].comment)
+	}
+}
+
 func TestPacketCaptureOffDropsEverything(t *testing.T) {
 	c := newPacketCapture()
 	pkt := buildIPv4UDPPacket(t, "10.0.0.1", 1000, "10.0.0.2", 53, []byte("x"))
@@ -280,8 +408,8 @@ func TestPacketCaptureOffDropsEverything(t *testing.T) {
 
 func TestPacketCaptureStopClosesFile(t *testing.T) {
 	c := newPacketCapture()
-	path := filepath.Join(t.TempDir(), "capture.pcap")
-	if err := c.start(captureAll, "", path, 1<<20); err != nil {
+	path := filepath.Join(t.TempDir(), "capture.pcapng")
+	if err := c.start(captureAll, "", "", path, 1<<20); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	c.observe(buildIPv4UDPPacket(t, "10.0.0.1", 1000, "10.0.0.2", 53, []byte("x")))
@@ -306,15 +434,15 @@ func TestPacketCaptureStopClosesFile(t *testing.T) {
 
 func TestPacketCaptureRestartDiscardsPreviousSession(t *testing.T) {
 	c := newPacketCapture()
-	path1 := filepath.Join(t.TempDir(), "one.pcap")
-	path2 := filepath.Join(t.TempDir(), "two.pcap")
+	path1 := filepath.Join(t.TempDir(), "one.pcapng")
+	path2 := filepath.Join(t.TempDir(), "two.pcapng")
 
-	if err := c.start(captureAll, "", path1, 1<<20); err != nil {
+	if err := c.start(captureAll, "", "", path1, 1<<20); err != nil {
 		t.Fatalf("start 1: %v", err)
 	}
 	c.observe(buildIPv4UDPPacket(t, "10.0.0.1", 1000, "10.0.0.2", 53, []byte("x")))
 
-	if err := c.start(captureAll, "", path2, 1<<20); err != nil {
+	if err := c.start(captureAll, "", "", path2, 1<<20); err != nil {
 		t.Fatalf("start 2: %v", err)
 	}
 	defer c.stop()
@@ -344,8 +472,8 @@ func TestCaptureLinkEndpointSeesRealTraffic(t *testing.T) {
 	}
 	t.Cleanup(e.StopVPN)
 
-	path := filepath.Join(t.TempDir(), "capture.pcap")
-	if err := e.capture.start(captureAll, "", path, 1<<20); err != nil {
+	path := filepath.Join(t.TempDir(), "capture.pcapng")
+	if err := e.capture.start(captureAll, "", "", path, 1<<20); err != nil {
 		t.Fatalf("start capture: %v", err)
 	}
 	defer e.capture.stop()
@@ -364,8 +492,8 @@ func TestCaptureLinkEndpointSeesRealTraffic(t *testing.T) {
 	if packets != 2 {
 		t.Fatalf("packets = %d, want 2 (query + response)", packets)
 	}
-	if bytesWritten <= 24 {
-		t.Fatalf("bytesWritten = %d, want more than just the global header", bytesWritten)
+	if bytesWritten <= 32 {
+		t.Fatalf("bytesWritten = %d, want more than just the pcapng header blocks", bytesWritten)
 	}
 }
 

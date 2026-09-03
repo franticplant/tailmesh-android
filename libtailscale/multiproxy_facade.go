@@ -178,24 +178,28 @@ func (e *MultiProxyEngine) SetDNSQueryLogEnabled(enabled bool) {
 
 // StartPacketCaptureAll begins a global PCAP capture of every packet
 // crossing the TUN, written to path and bounded to maxBytes (pass 0 for a
-// sane default). Any previous capture session is stopped and discarded
-// first. See multiproxy/capture.go for the format and filtering details.
-func (e *MultiProxyEngine) StartPacketCaptureAll(path string, maxBytes int64) error {
+// sane default). appNamesLines maps Android UID to a human-readable app
+// name, one "uid:name" pair per line, used to label each packet's pcapng
+// comment with its owning app. Any previous capture session is stopped and
+// discarded first. See multiproxy/capture.go for the format and filtering
+// details.
+func (e *MultiProxyEngine) StartPacketCaptureAll(path string, maxBytes int64, appNamesLines string) error {
 	if e == nil || e.inner == nil {
 		return errors.New("engine not initialized")
 	}
-	return e.inner.StartPacketCaptureAll(path, maxBytes)
+	return e.inner.StartPacketCaptureAll(path, maxBytes, appNamesLines)
 }
 
 // StartPacketCaptureApps is StartPacketCaptureAll's per-app counterpart:
 // only packets attributed to one of appUIDsCSV (comma-separated Android
 // UIDs) are captured. A flow whose owning app couldn't be resolved is never
-// captured in this mode.
-func (e *MultiProxyEngine) StartPacketCaptureApps(appUIDsCSV, path string, maxBytes int64) error {
+// captured in this mode. appNamesLines is the same per-line "uid:name"
+// mapping StartPacketCaptureAll takes.
+func (e *MultiProxyEngine) StartPacketCaptureApps(appUIDsCSV, path string, maxBytes int64, appNamesLines string) error {
 	if e == nil || e.inner == nil {
 		return errors.New("engine not initialized")
 	}
-	return e.inner.StartPacketCaptureApps(appUIDsCSV, path, maxBytes)
+	return e.inner.StartPacketCaptureApps(appUIDsCSV, path, maxBytes, appNamesLines)
 }
 
 // StopPacketCapture ends the active capture session, if any, and closes its
