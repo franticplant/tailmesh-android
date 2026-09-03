@@ -4,6 +4,7 @@
 package multiproxy
 
 import (
+	"bufio"
 	"encoding/binary"
 	"io"
 	"os"
@@ -138,6 +139,7 @@ func pcapngRecordSize(dataLen int, comment string) int64 {
 type pcapFile struct {
 	mu       sync.Mutex
 	f        *os.File
+	bw       *bufio.Writer // buffers writes to f; every packet was previously its own write(2)
 	written  int64
 	maxBytes int64
 	packets  int64
@@ -154,20 +156,19 @@ func openPcapFile(path string, maxBytes int64) (*pcapFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := writePcapngSectionHeader(f); err != nil {
+	bw := bufio.NewWriter(f)
+	if err := writePcapngSectionHeader(bw); err != nil {
 		f.Close()
 		return nil, err
 	}
-	if err := writePcapngInterfaceDesc(f); err != nil {
+	if err := writePcapngInterfaceDesc(bw); err != nil {
 		f.Close()
 		return nil, err
 	}
-	info, err := f.Stat()
-	if err != nil {
-		f.Close()
-		return nil, err
-	}
-	return &pcapFile{f: f, written: info.Size(), maxBytes: maxBytes}, nil
+	// written starts from the buffered header bytes, not yet-flushed file
+	// size - Stat() here would report 0 until the first Flush.
+	written := int64(bw.Buffered())
+	return &pcapFile{f: f, bw: bw, written: written, maxBytes: maxBytes}, nil
 }
 
 // write appends one packet (with an optional per-packet app-name comment)
@@ -190,7 +191,7 @@ func (p *pcapFile) write(data []byte, at time.Time, comment string) {
 		p.full = true
 		return
 	}
-	if err := writePcapngPacket(p.f, data, at, comment); err != nil {
+	if err := writePcapngPacket(p.bw, data, at, comment); err != nil {
 		p.full = true
 		return
 	}
@@ -210,7 +211,12 @@ func (p *pcapFile) close() error {
 	if p.f == nil {
 		return nil
 	}
-	err := p.f.Close()
+	flushErr := p.bw.Flush()
+	closeErr := p.f.Close()
 	p.f = nil
-	return err
+	p.bw = nil
+	if flushErr != nil {
+		return flushErr
+	}
+	return closeErr
 }

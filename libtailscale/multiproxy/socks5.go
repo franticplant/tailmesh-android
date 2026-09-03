@@ -364,6 +364,15 @@ type socks5UDPConn struct {
 	// datapath dials one destination per association, so it never changes.
 	destHeader []byte
 
+	// readBuf/writeBuf are scratch space reused across calls instead of
+	// allocating a fresh 64KB+ buffer per datagram. Safe unsynchronized:
+	// runUDPAssociation's pumpUDPAssociation pairing guarantees exactly one
+	// goroutine ever calls Read on a given conn and a different single
+	// goroutine ever calls Write, never both from the same goroutine or
+	// either concurrently with itself.
+	readBuf  []byte
+	writeBuf []byte
+
 	closeOnce sync.Once
 }
 
@@ -410,7 +419,13 @@ func (p *socks5Provider) dialUDP(ctx context.Context, address string) (net.Conn,
 		return nil, err
 	}
 
-	c := &socks5UDPConn{control: control, relay: relay, destHeader: destHeader}
+	c := &socks5UDPConn{
+		control:    control,
+		relay:      relay,
+		destHeader: destHeader,
+		readBuf:    make([]byte, 65535+262),
+		writeBuf:   make([]byte, 0, 3+len(destHeader)+65535),
+	}
 
 	// The control connection carries no data; reading it only detects teardown.
 	// When the proxy drops the association, close the relay so the datapath sees
@@ -427,8 +442,7 @@ func (p *socks5Provider) dialUDP(ctx context.Context, address string) (net.Conn,
 // Write wraps the payload in a SOCKS5 UDP request header. FRAG is always 0:
 // fragmentation is optional in RFC 1928 and universally unimplemented.
 func (c *socks5UDPConn) Write(b []byte) (int, error) {
-	packet := make([]byte, 0, 3+len(c.destHeader)+len(b))
-	packet = append(packet, 0x00, 0x00, 0x00) // RSV RSV FRAG
+	packet := append(c.writeBuf[:0], 0x00, 0x00, 0x00) // RSV RSV FRAG
 	packet = append(packet, c.destHeader...)
 	packet = append(packet, b...)
 
@@ -443,7 +457,7 @@ func (c *socks5UDPConn) Write(b []byte) (int, error) {
 // Read strips the SOCKS5 UDP header and returns the payload.
 func (c *socks5UDPConn) Read(b []byte) (int, error) {
 	// Sized for a jumbo datagram plus header so nothing is silently truncated.
-	buf := make([]byte, 65535+262)
+	buf := c.readBuf
 	n, err := c.relay.Read(buf)
 	if err != nil {
 		return 0, err

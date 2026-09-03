@@ -44,7 +44,15 @@ type pathInfo struct {
 	derpRegion  string
 }
 
-func observedTailnetState(enabled bool, srv *tsnet.Server) (state, machineName, exitNodeIP string, path pathInfo) {
+// needPath controls whether a second, full Status() call (with the complete
+// peer list) is made to resolve the exit node's direct/DERP path when one is
+// set. GetExitNodeStatesJSON never reads path, so it passes false and this
+// never pays for a peer list at all; GetTailnetStatesJSON passes true. Either
+// way, the first call is always the peers-free StatusWithoutPeers - on a
+// tailnet with a large netmap and no exit node selected (the common case),
+// that avoids serializing/deserializing the full peer list on every 1s poll
+// tick for nothing.
+func observedTailnetState(enabled bool, srv *tsnet.Server, needPath bool) (state, machineName, exitNodeIP string, path pathInfo) {
 	if !enabled || srv == nil {
 		return "STOPPED", "", "", path
 	}
@@ -54,7 +62,7 @@ func observedTailnetState(enabled bool, srv *tsnet.Server) (state, machineName, 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	status, err := lc.Status(ctx)
+	status, err := lc.StatusWithoutPeers(ctx)
 	if err != nil || status == nil {
 		return "STARTING", "", "", path
 	}
@@ -67,13 +75,18 @@ func observedTailnetState(enabled bool, srv *tsnet.Server) (state, machineName, 
 	if status.ExitNodeStatus != nil && len(status.ExitNodeStatus.TailscaleIPs) > 0 {
 		exitNodeIP = status.ExitNodeStatus.TailscaleIPs[0].Addr().String()
 		path.hasExitNode = true
-		for _, peer := range status.Peer {
-			if peer == nil || peer.ID != status.ExitNodeStatus.ID {
-				continue
+		if needPath {
+			full, ferr := lc.Status(ctx)
+			if ferr == nil && full != nil {
+				for _, peer := range full.Peer {
+					if peer == nil || peer.ID != status.ExitNodeStatus.ID {
+						continue
+					}
+					path.direct = peer.CurAddr != ""
+					path.derpRegion = peer.Relay
+					break
+				}
 			}
-			path.direct = peer.CurAddr != ""
-			path.derpRegion = peer.Relay
-			break
 		}
 	}
 	return status.BackendState, machineName, exitNodeIP, path
@@ -106,7 +119,7 @@ func (e *Engine) GetTailnetStatesJSON() string {
 		wg.Add(1)
 		go func(i int, p tailnetStateProbe) {
 			defer wg.Done()
-			state, machineName, exitNodeIP, path := observedTailnetState(p.enabled, p.srv)
+			state, machineName, exitNodeIP, path := observedTailnetState(p.enabled, p.srv, true)
 			out[i] = TailnetRuntimeExport{
 				TailnetID:   p.id,
 				Enabled:     p.enabled,
@@ -184,7 +197,7 @@ func (e *Engine) GetExitNodeStatesJSON() string {
 		wg.Add(1)
 		go func(i int, p exitNodeStateProbe) {
 			defer wg.Done()
-			state, machineName, _, _ := observedTailnetState(p.enabled, p.srv)
+			state, machineName, _, _ := observedTailnetState(p.enabled, p.srv, false)
 			out[i] = ExitNodeRuntimeExport{
 				ID:              p.id,
 				SourceTailnetID: p.sourceTailnetID,
