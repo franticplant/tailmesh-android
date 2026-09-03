@@ -302,8 +302,13 @@ func (p *wireguardProvider) Close() error {
 	p.closed = true
 	p.mu.Unlock()
 	// Closing the device stops its goroutines and closes the TUN it was given,
-	// which tears down the channel endpoint feeding the stack.
+	// which tears down the channel endpoint feeding the stack. The stack
+	// itself is a separate object and is not released by that - it must be
+	// destroyed explicitly or its NIC/routes/protocol state leaks.
 	p.dev.Close()
+	if p.stack != nil {
+		p.stack.Destroy()
+	}
 	return nil
 }
 

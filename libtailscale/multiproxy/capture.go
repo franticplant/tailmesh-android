@@ -228,11 +228,11 @@ func (c *packetCapture) observe(data []byte) {
 		}
 	}
 
+	c.mu.RLock()
 	if mode == captureApps && (!attributed || !c.appUIDs[uid]) {
+		c.mu.RUnlock()
 		return
 	}
-
-	c.mu.RLock()
 	f := c.file
 	comment := ""
 	if attributed {
@@ -330,7 +330,9 @@ func wrapCaptureEndpoint(real stack.LinkEndpoint, cap *packetCapture) stack.Link
 func (c *captureLinkEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcpip.Error) {
 	if loadCaptureMode(&c.cap.mode) != captureOff {
 		for _, pkt := range pkts.AsSlice() {
-			c.cap.observe(pkt.ToView().AsSlice())
+			v := pkt.ToView()
+			c.cap.observe(v.AsSlice())
+			v.Release()
 		}
 	}
 	return c.LinkEndpoint.WritePackets(pkts)
@@ -343,7 +345,9 @@ type captureDispatcher struct {
 
 func (c *captureDispatcher) DeliverNetworkPacket(protocol tcpip.NetworkProtocolNumber, pkt *stack.PacketBuffer) {
 	if loadCaptureMode(&c.cap.mode) != captureOff {
-		c.cap.observe(pkt.ToView().AsSlice())
+		v := pkt.ToView()
+		c.cap.observe(v.AsSlice())
+		v.Release()
 	}
 	c.NetworkDispatcher.DeliverNetworkPacket(protocol, pkt)
 }

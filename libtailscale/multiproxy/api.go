@@ -971,6 +971,12 @@ func (e *Engine) Close() {
 		}
 	}
 
+	// Every WireGuard/SOCKS5 upstream registered via RegisterUpstream lives in
+	// e.upstreams, not e.tailnets/e.exitNodes, and was previously never torn
+	// down here - each Multi-Tailnet stop/start cycle leaked a full set of
+	// tunnels (goroutines, UDP conns, gVisor stacks). See validation_and_gaps.md.
+	e.upstreams.CloseAll()
+
 	e.obs.stop()
 
 	e.mu.Lock()
