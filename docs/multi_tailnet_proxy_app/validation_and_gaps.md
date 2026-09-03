@@ -4398,6 +4398,53 @@ and confirm it opens correctly in Wireshark (or `tcpdump -r`) with sane
 IP/TCP/UDP headers; separately confirm a "Selected apps" capture actually
 excludes traffic from apps not selected.
 
+## 87. Added: current/peak readout above every graph in Diagnostics (2026-09-03, Android-built, not device-verified)
+
+**User report.** "i want much better ux with every graphable things under
+the emtrics i want em much more better UX come up with ways."
+
+**Scope decision.** This ask is intentionally vague and general - the
+memory notes for this backlog flagged it as needing "its own concrete
+design pass" once the more concrete items landed. Rather than guess at a
+large redesign the user can't currently give feedback on (they're asleep -
+see the overnight backlog's no-questions constraint), this pass makes one
+small, low-risk, genuinely-useful change that applies to literally every
+chart in the screen at once, and leaves a bigger redesign (if still wanted)
+for a cycle where the user can react to what's already there.
+
+**BEFORE.** Every chart in `DiagnosticsView.kt` (CPU%, TUN throughput,
+per-upstream traffic, per-app traffic - four call sites) required either
+tapping a specific point (to see that one value via the existing Vico
+marker) or eyeballing the y-axis gridlines to answer "what's it at right
+now" or "what's the highest it's gotten." Both existed but neither is a
+glance.
+
+**NEW.** A `ChartSummaryLine` composable - "current: X · peak: Y" using the
+chart's own already-computed `formatValue` function, so units stay
+consistent with the chart itself - placed directly above all four
+`InteractiveLineChart` call sites (CPU%, TUN throughput in `overviewSection`;
+per-upstream and per-app traffic in their respective expandable rows). Pure
+derived display from data the screen was already fetching - no new queries,
+no new polling.
+
+**Evidence.** `compileDebugKotlin`, `make fmt-check`, `make test` (full
+Robolectric suite) all green, license headers clean. Not verified live in
+the running app - no device was connected during this autonomous overnight
+session. **Required evidence:** open Diagnostics, generate some traffic,
+and confirm the current/peak numbers above each chart track visually with
+what the chart itself shows.
+
+**Left for a future pass, now that the concrete overnight backlog is
+exhausted:** a fuller redesign of this screen (the ask's literal words) -
+candidates worth the user's input before building: sparkline previews on
+collapsed Upstreams/Apps rows so scanning doesn't require expanding each
+one (deliberately not built this pass - it would mean fetching history for
+every row all the time instead of only expanded ones, a real polling-cost
+tradeoff the user should weigh in on); a combined/overlaid chart comparing
+two upstreams or apps at once; anomaly highlighting (e.g. color a point red
+if it's an outlier vs. the visible range). None of these have a clearly
+correct default, unlike the current/peak line above.
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.

@@ -476,6 +476,23 @@ private fun chartSeries(points: List<Pair<Long, Float>>): Pair<List<FloatEntry>,
     points.mapIndexed { i, (_, v) -> FloatEntry(i.toFloat(), v) } to points.map { it.first }
 
 /**
+ * "current: X · peak: Y" above a chart, so its two most-asked-about numbers are readable without
+ * tapping a point or eyeballing the y-axis against gridlines - the single change here that applies
+ * to every graph in this screen at once, rather than to one section at a time.
+ */
+@Composable
+private fun ChartSummaryLine(entries: List<FloatEntry>, formatValue: (Float) -> String) {
+  if (entries.isEmpty()) return
+  val current = entries.last().y
+  val peak = entries.maxOf { it.y }
+  Text(
+      "current: ${formatValue(current)}  ·  peak: ${formatValue(peak)}",
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.secondary,
+  )
+}
+
+/**
  * A gradient-filled, tap-to-inspect line chart. `formatValue` controls what the tooltip and axis
  * show (e.g. "42.3%" vs "1.2 MB/s") - the chart itself only ever deals in plain floats.
  *
@@ -753,6 +770,7 @@ private fun overviewSection(
           chartSeries(
               bucketize(samples.map { it.ts to it.cpuPercent.toFloat() }, resolution.targetPoints))
         }
+    ChartSummaryLine(cpuEntries) { "%.1f%%".format(it) }
     InteractiveLineChart(
         entries = cpuEntries,
         timestamps = cpuTimestamps,
@@ -769,6 +787,7 @@ private fun overviewSection(
                   deltaSeries(samples, { it.ts }, { (it.tunRxBytes + it.tunTxBytes).toFloat() }),
                   resolution.targetPoints))
         }
+    ChartSummaryLine(tunEntries, ::formatBytesPerSample)
     InteractiveLineChart(
         entries = tunEntries,
         timestamps = tunTimestamps,
@@ -992,6 +1011,7 @@ private fun UpstreamRow(
                         deltaSeries(history, { it.ts }, { (it.bytesIn + it.bytesOut).toFloat() }),
                         resolution.targetPoints))
               }
+          ChartSummaryLine(trafficEntries, ::formatBytesPerSample)
           InteractiveLineChart(
               entries = trafficEntries,
               timestamps = trafficTimestamps,
@@ -1136,6 +1156,7 @@ private fun AppRow(
                     deltaSeries(history, { it.ts }, { (it.bytesIn + it.bytesOut).toFloat() }),
                     resolution.targetPoints))
           }
+      ChartSummaryLine(entries, ::formatBytesPerSample)
       InteractiveLineChart(
           entries = entries,
           timestamps = timestamps,
