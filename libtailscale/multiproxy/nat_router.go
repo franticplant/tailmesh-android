@@ -379,7 +379,17 @@ func (e *Engine) handleTCPConnection(r *tcp.ForwarderRequest) {
 			return
 		}
 		defer conn.Close()
-		log.Printf("[flow-%d] TCP upstream dial %s %s success (path=%s)", flowID, decision.UpstreamID, dialAddr, decision.Upstream.PeerPathInfo(ctx, decision.Destination))
+		// e.peerPathFor reads an already-cached path (or, for kinds like
+		// WireGuard, inspects local state with no I/O) instead of
+		// decision.Upstream.PeerPathInfo's own tsnet Status()/IpcGet() round
+		// trip - this line runs on the connection-setup critical path for
+		// every new TCP flow, so a live upstream query here was on the
+		// latency-sensitive side of "success", not just logging overhead.
+		path := "unknown"
+		if p, ok := e.lookupProvider(decision.UpstreamID); ok {
+			path = e.peerPathFor(decision.UpstreamID, p.Kind())
+		}
+		log.Printf("[flow-%d] TCP upstream dial %s %s success (path=%s)", flowID, decision.UpstreamID, dialAddr, path)
 
 		gonetConn := gonet.NewTCPConn(wq, ep)
 		defer gonetConn.Close()

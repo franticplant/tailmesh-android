@@ -128,6 +128,12 @@ type bootstrapEntry struct {
 
 const bootstrapCacheTTL = 5 * time.Minute
 
+// synthDNSTTL is the TTL on every synthetic A/AAAA answer this engine
+// generates for a tailnet peer name. Matches miekg/dns's own defaultTtl
+// (3600s), the value dns.NewRR silently applied when the answer was built by
+// parsing a zone-file line with no explicit TTL field.
+const synthDNSTTL = 3600
+
 func setBootstrapPlainDNS(addr string) {
 	bootstrapState.mu.Lock()
 	defer bootstrapState.mu.Unlock()
@@ -516,8 +522,17 @@ func (e *Engine) handleDNSMsg(r *dns.Msg, netType string, flow FlowInfo) *dns.Ms
 
 		switch q.Qtype {
 		case dns.TypeAAAA:
-			rr, _ := dns.NewRR(fmt.Sprintf("%s AAAA %s", qName, ips[0].String()))
-			m.Answer = append(m.Answer, rr)
+			// Built directly rather than round-tripped through
+			// dns.NewRR(fmt.Sprintf(...)) - that ran the packet's own
+			// hostname/address through a full zone-file parser for what a
+			// struct literal does exactly, and its discarded error meant a
+			// parse failure would append a nil RR here, panicking later in
+			// resp.Pack(). synthDNSTTL matches miekg/dns's own default TTL
+			// (3600s) used implicitly by the text form this replaces.
+			m.Answer = append(m.Answer, &dns.AAAA{
+				Hdr:  dns.RR_Header{Name: qName, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: synthDNSTTL},
+				AAAA: ips[0].AsSlice(),
+			})
 			hasAnswer = true
 		case dns.TypeA:
 			v4, okV4 := e.dnsTableV4[qName]
@@ -525,8 +540,10 @@ func (e *Engine) handleDNSMsg(r *dns.Msg, netType string, flow FlowInfo) *dns.Ms
 				v4, okV4 = e.baseDnsTableV4[qName]
 			}
 			if okV4 && len(v4) == 1 {
-				rr, _ := dns.NewRR(fmt.Sprintf("%s A %s", qName, v4[0].String()))
-				m.Answer = append(m.Answer, rr)
+				m.Answer = append(m.Answer, &dns.A{
+					Hdr: dns.RR_Header{Name: qName, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: synthDNSTTL},
+					A:   v4[0].AsSlice(),
+				})
 				hasAnswer = true
 			} else {
 				// Known name, no usable v4 address: NODATA, never NXDOMAIN,

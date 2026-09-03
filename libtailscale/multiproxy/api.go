@@ -977,6 +977,11 @@ func (e *Engine) Close() {
 	// tunnels (goroutines, UDP conns, gVisor stacks). See validation_and_gaps.md.
 	e.upstreams.CloseAll()
 
+	// A capture left running when the VPN stops otherwise keeps its file
+	// handle open with no engine left to ever close it - stop() is a safe
+	// no-op when nothing is active.
+	e.capture.stop()
+
 	e.obs.stop()
 
 	e.mu.Lock()
