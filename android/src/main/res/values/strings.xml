@@ -463,4 +463,19 @@
     <string name="app_routing_customized_only">Customized only</string>
     <string name="app_routing_no_apps_match">No apps match</string>
 
+    <string name="packet_capture">Packet capture</string>
+    <string name="packet_capture_subtitle">Record raw traffic to a .pcap file for Wireshark</string>
+    <string name="packet_capture_explanation">Captures raw IP packets crossing the VPN tunnel to a file you can export and open in Wireshark or a similar tool. Stops recording once the size limit below is reached, rather than silently dropping older packets - check "Capacity reached" if a capture looks short.</string>
+    <string name="packet_capture_mode_off">Off</string>
+    <string name="packet_capture_mode_all">All traffic</string>
+    <string name="packet_capture_mode_apps">Selected apps</string>
+    <string name="packet_capture_start">Start capture</string>
+    <string name="packet_capture_stop">Stop capture</string>
+    <string name="packet_capture_export">Export</string>
+    <string name="packet_capture_clear">Clear</string>
+    <string name="packet_capture_capacity_reached">Capacity reached - older packets were not recorded, only ones captured before the limit</string>
+    <string name="packet_capture_no_apps_selected">Select at least one app to start a per-app capture</string>
+    <string name="packet_capture_search_hint">Search apps</string>
+    <string name="packet_capture_no_file">No capture yet</string>
+
 </resources>

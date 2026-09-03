@@ -343,8 +343,11 @@ func (e *Engine) handleTCPConnection(r *tcp.ForwarderRequest) {
 		dialAddr = fmt.Sprintf("[%s]:%d", decision.Destination, targetPort)
 	}
 
+	e.capture.registerFlow("tcp", flow.Src, flow.Dst, flow.AppUID)
+
 	go func() {
 		defer recoverAndLog("handleTCPConnection.pump")
+		defer e.capture.unregisterFlow("tcp", flow.Src, flow.Dst)
 		defer e.releaseDynamicAddr(targetIP)
 		defer ep.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -540,8 +543,11 @@ func (e *Engine) handleUDPConnection(r *udp.ForwarderRequest) bool {
 	gvisorConn := gonet.NewUDPConn(&wq, ep)
 	flowID := atomic.AddUint64(&e.flowCounter, 1)
 
+	e.capture.registerFlow("udp", flow.Src, flow.Dst, flow.AppUID)
+
 	go func() {
 		defer recoverAndLog("handleUDPConnection.pump")
+		defer e.capture.unregisterFlow("udp", flow.Src, flow.Dst)
 		defer e.releaseDynamicAddr(targetIP)
 		defer gvisorConn.Close()
 

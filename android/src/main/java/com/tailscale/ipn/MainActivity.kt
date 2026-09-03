@@ -317,6 +317,7 @@ class MainActivity : ComponentActivity() {
                           onNavigateToMultiProxy = { navController.navigate("multiProxy") },
                           onNavigateToProxyUpstreams = { navController.navigate("proxyUpstreams") },
                           onNavigateToAppRouting = { navController.navigate("appRouting") },
+                          onNavigateToPacketCapture = { navController.navigate("packetCapture") },
                           onBackToSettings = backTo("settings"),
                           onNavigateBackHome = backTo("main"))
                   val exitNodePickerNav =
@@ -401,6 +402,9 @@ class MainActivity : ComponentActivity() {
                   composable("splitTunneling") { SplitTunnelAppPickerView(backTo("settings")) }
                   composable("proxyUpstreams") { UpstreamsView(backTo("settings")) }
                   composable("appRouting") { AppRoutingView(backTo("settings")) }
+                  composable("packetCapture") {
+                    com.tailscale.ipn.ui.view.PacketCaptureView(backTo("settings"))
+                  }
                   composable("tailnetLock") { TailnetLockSetupView(backTo("settings")) }
                   composable("subnetRouting") { SubnetRoutingView(backTo("settings")) }
                   composable("about") { AboutView(backTo("settings")) }

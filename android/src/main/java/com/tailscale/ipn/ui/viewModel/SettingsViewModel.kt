@@ -29,6 +29,7 @@ data class SettingsNav(
     val onNavigateToMultiProxy: () -> Unit,
     val onNavigateToProxyUpstreams: () -> Unit,
     val onNavigateToAppRouting: () -> Unit,
+    val onNavigateToPacketCapture: () -> Unit,
     val onNavigateBackHome: () -> Unit,
     val onBackToSettings: () -> Unit,
 )

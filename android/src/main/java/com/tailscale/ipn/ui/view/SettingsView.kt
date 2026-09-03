@@ -131,6 +131,12 @@ fun SettingsView(
               onClick = settingsNav.onNavigateToAppRouting)
 
           Lists.ItemDivider()
+          Setting.Text(
+              title = stringResource(R.string.packet_capture),
+              subtitle = stringResource(R.string.packet_capture_subtitle),
+              onClick = settingsNav.onNavigateToPacketCapture)
+
+          Lists.ItemDivider()
           Setting.Switch(
               title = "Proxy-Only Mode (No VPN)",
               subtitle = "Connect to Tailnet without intercepting device traffic",
@@ -440,5 +446,5 @@ fun SettingsPreview() {
   vm.tailNetLockEnabled.set(true)
   vm.isAdmin.set(true)
   vm.managedByOrganization.set("Tails and Scales Inc.")
-  SettingsView(SettingsNav({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}), vm)
+  SettingsView(SettingsNav({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}), vm)
 }

@@ -176,6 +176,63 @@ func (e *MultiProxyEngine) SetDNSQueryLogEnabled(enabled bool) {
 	e.inner.SetDNSQueryLogEnabled(enabled)
 }
 
+// StartPacketCaptureAll begins a global PCAP capture of every packet
+// crossing the TUN, written to path and bounded to maxBytes (pass 0 for a
+// sane default). Any previous capture session is stopped and discarded
+// first. See multiproxy/capture.go for the format and filtering details.
+func (e *MultiProxyEngine) StartPacketCaptureAll(path string, maxBytes int64) error {
+	if e == nil || e.inner == nil {
+		return errors.New("engine not initialized")
+	}
+	return e.inner.StartPacketCaptureAll(path, maxBytes)
+}
+
+// StartPacketCaptureApps is StartPacketCaptureAll's per-app counterpart:
+// only packets attributed to one of appUIDsCSV (comma-separated Android
+// UIDs) are captured. A flow whose owning app couldn't be resolved is never
+// captured in this mode.
+func (e *MultiProxyEngine) StartPacketCaptureApps(appUIDsCSV, path string, maxBytes int64) error {
+	if e == nil || e.inner == nil {
+		return errors.New("engine not initialized")
+	}
+	return e.inner.StartPacketCaptureApps(appUIDsCSV, path, maxBytes)
+}
+
+// StopPacketCapture ends the active capture session, if any, and closes its
+// file so the UI can read/share it immediately. Safe to call when no
+// capture is running.
+func (e *MultiProxyEngine) StopPacketCapture() {
+	if e == nil || e.inner == nil {
+		return
+	}
+	e.inner.StopPacketCapture()
+}
+
+func (e *MultiProxyEngine) PacketCaptureBytesWritten() int64 {
+	if e == nil || e.inner == nil {
+		return 0
+	}
+	return e.inner.PacketCaptureBytesWritten()
+}
+
+func (e *MultiProxyEngine) PacketCapturePacketCount() int64 {
+	if e == nil || e.inner == nil {
+		return 0
+	}
+	return e.inner.PacketCapturePacketCount()
+}
+
+// PacketCaptureCapacityReached reports whether the active session hit its
+// maxBytes limit and has been silently dropping packets since - the UI
+// should surface this rather than let a suspiciously quiet capture read as
+// "the bug didn't recur."
+func (e *MultiProxyEngine) PacketCaptureCapacityReached() bool {
+	if e == nil || e.inner == nil {
+		return false
+	}
+	return e.inner.PacketCaptureCapacityReached()
+}
+
 // SetAdvancedDiagnostics turns higher-frequency sampling on/off. Off by
 // default. Does not itself start any profiler - see Capture* below.
 func (e *MultiProxyEngine) SetAdvancedDiagnostics(on bool) {

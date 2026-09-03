@@ -225,6 +225,11 @@ type Engine struct {
 	vpnFD        int
 	addrRefCount map[netip.Addr]int
 
+	// capture holds optional PCAP capture state (see capture.go). Always
+	// non-nil once NewEngineWithStateStore returns; capture itself only
+	// runs once StartPacketCaptureAll/Apps is called.
+	capture *packetCapture
+
 	upstreamDNS string
 
 	// Target Directory & DNS State
@@ -286,6 +291,7 @@ func NewEngineWithStateStore(dataDir string, cb EngineCallback, stateStoreFor fu
 		stats:     newStatsRegistry(),
 		uids:      newUIDRegistry(),
 		policy:    &policyStore{},
+		capture:   newPacketCapture(),
 	}
 	e.obs = newObservability(e)
 

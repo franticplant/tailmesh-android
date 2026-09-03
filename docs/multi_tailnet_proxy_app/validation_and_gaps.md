@@ -4298,6 +4298,106 @@ open Diagnostics > Network with the DNS log on, generate some DNS traffic
 the search field and "Errors only" chip actually narrow the list and the
 timestamps line up with a nearby network transition.
 
+## 86. Added: PCAP packet capture, global and per-app, exportable as a .pcap file (2026-09-02, unit-tested/Android-built, not device-verified)
+
+**User report.** "i'd like to have features lik ethese: pcap, pcap per app,
+and other pcap toggles like pcap onl ydns information itself or sth like
+that but maybe we already have that being logged ina  different way."
+
+**Scope decision on the DNS-only toggle.** The user's own hedge was
+correct: DNS-only capture already exists in a different, arguably more
+useful form - the DNS query log (`observability.go`'s `dnsQueryLogEnabled`,
+predating this change, and just given search/filters/timestamps in §85).
+That already parses and displays qname/upstream/outcome; a raw DNS-only
+*pcap* would only add back the packet bytes a human doesn't read. No new
+capture mode was built for this - the two "all traffic" / "selected apps"
+modes below are the new work.
+
+**BEFORE.** No packet-capture facility existed at all - the closest thing
+was the DNS query log (structured events, not packets) and the dataplane
+byte/packet *counters* (`dataplaneCounters` in observability.go, aggregate
+numbers only, never the packets themselves).
+
+**NEW - Go engine (`libtailscale/multiproxy/`).**
+
+- `pcap.go`: a small, dependency-free classic-libpcap file writer
+  (`openPcapFile`/`pcapFile.write`) - `LINKTYPE_RAW` (101), matching
+  `fdbased.Options{EthernetHeader: false}` in `StartVPN`, so no synthetic
+  Ethernet framing has to be invented. Size-bounded: once a session's
+  `maxBytes` is hit, further packets are dropped rather than the file being
+  truncated or rotated - a short-but-valid pcap beats one that ends mid-record
+  and won't open in any tool.
+- `capture.go`: `packetCapture` holds the capture mode (off / all / apps),
+  the per-app UID allowlist, and a live flow registry mapping each in-flight
+  flow's 5-tuple to its owning `AppUID`. `captureLinkEndpoint` decorates the
+  TUN's `stack.LinkEndpoint` exactly the way the existing
+  `countingLinkEndpoint` (tun_interceptor.go, PHASE 4 byte counters) already
+  does - `WritePackets`/`Attach`+`DeliverNetworkPacket` - so every packet
+  crossing the TUN in either direction is offered to the capture, cheaply
+  (one atomic load) skipped when capture is off. `parseFiveTuple` extracts
+  just enough of the IPv4/IPv6 + TCP/UDP headers to attribute a packet to a
+  flow for per-app filtering; "all traffic" mode never needs this and
+  captures unconditionally.
+- `handleTCPConnection`/`handleUDPConnection` (nat_router.go) now register
+  each new flow's 5-tuple → `AppUID` with the capture's flow registry right
+  where `flowFromEndpointID` already resolves that UID for policy/stats
+  purposes, and unregister it when the flow's pump loop returns - the exact
+  same attribution point every other UID-scoped feature in this engine
+  already uses, not a new resolution path.
+- `multiproxy_facade.go` (top-level `libtailscale` package, the actual type
+  gomobile binds - see the note below) gained
+  `StartPacketCaptureAll(path, maxBytes)`,
+  `StartPacketCaptureApps(appUIDsCSV, path, maxBytes)`, `StopPacketCapture()`,
+  `PacketCaptureBytesWritten()`, `PacketCapturePacketCount()`,
+  `PacketCaptureCapacityReached()`.
+
+**Caught during this pass: the facade, not `multiproxy.Engine`, is what
+gomobile actually exports.** The first implementation added the six methods
+only to `multiproxy.Engine` (api.go) and `make libtailscale` succeeded
+silently - `gomobile bind` only binds exported methods on types it's told to
+bind, and `MultiProxyEngine` (`multiproxy_facade.go`) is the one Android
+actually calls through (see `SetDNSQueryLogEnabled`'s existing forwarding
+method there). Decompiling the built AAR's `classes.jar` with `javap` after
+the first build showed the new methods simply absent from
+`MultiProxyEngine`; adding matching forwarding methods there and rebuilding
+fixed it, confirmed the same way. Recorded here because it's an easy trap
+for the next engine-side feature that needs a new gomobile-exposed method -
+verify with `javap` on the built AAR, not just a clean `go build`.
+
+**NEW - Android (`android/src/main/java/com/tailscale/ipn/`).**
+
+- `ui/view/PacketCaptureView.kt`: a new screen (Settings → Packet capture)
+  with "All traffic" / "Selected apps" mode chips, an app search+checklist
+  (reusing `InstalledAppsManager`) for the per-app case, Start/Stop, live
+  size/packet-count polled every 3s while a capture is running (not on every
+  recomposition - the overnight backlog's "don't poll too much" guidance),
+  a "Capacity reached" warning, and Export/Clear. Files are written to
+  `context.filesDir/captures/` and exported via a new `FileProvider`
+  (`AndroidManifest.xml` + `res/xml/pcap_file_paths.xml`) so the capture
+  can be shared/opened without granting broader storage access.
+- `SettingsNav`/`SettingsView.kt`/`MainActivity.kt`: wired the new
+  `"packetCapture"` route the same way `"appRouting"` already is.
+
+**Evidence.** `./tool/go build`/`go vet`/`go test` on
+`libtailscale/multiproxy` all clean, including new tests in
+`capture_test.go`: pcap header/record byte-format correctness, the
+size-cap-stops-not-corrupts behavior, five-tuple parsing (valid and
+malformed packets), per-app filtering (including matching a reply's
+reversed 5-tuple back to its registered flow, and correctly excluding both
+an unregistered flow and a registered-but-unselected app), and one
+end-to-end test wiring `captureLinkEndpoint` into a real gVisor stack via
+`bindVPNStackLocked` and confirming an actual DNS query/response round-trip
+is captured in both directions. On the Android side: `compileDebugKotlin`,
+`make fmt-check`, `make test` (full Robolectric suite), `make libtailscale`
+(gomobile bind + AAR repackaging), and `assembleDebug -PtestAbi=x86_64` all
+green; license headers clean on tracked source. **Not verified live in the
+running app** - no device was connected during this autonomous overnight
+session. **Required evidence:** on a real device, start an "All traffic"
+capture, generate some traffic, stop, export the file via the share sheet,
+and confirm it opens correctly in Wireshark (or `tcpdump -r`) with sane
+IP/TCP/UDP headers; separately confirm a "Selected apps" capture actually
+excludes traffic from apps not selected.
+
 ## 48. Bottom line
 
 The branch has progressed far beyond the original packet-routing PoC. Persistent profiles, bootstrap-key retirement, runtime observation, destructive Forget, V2 peer snapshots, DNS-over-TCP, UDP lifetime management, and a functional Android management screen now exist.

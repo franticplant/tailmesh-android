@@ -245,7 +245,8 @@ func (e *Engine) StartVPN(fd int32, mtu int32) error {
 	}
 
 	countedLink := wrapCountingEndpoint(linkID, &e.obs.dp)
-	if err := e.bindVPNStackLocked(countedLink); err != nil {
+	capturedLink := wrapCaptureEndpoint(countedLink, e.capture)
+	if err := e.bindVPNStackLocked(capturedLink); err != nil {
 		closeFD()
 		return err
 	}

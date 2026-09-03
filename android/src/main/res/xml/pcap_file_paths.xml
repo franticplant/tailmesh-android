@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Copyright (c) Tailscale Inc & AUTHORS
+     SPDX-License-Identifier: BSD-3-Clause -->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Matches the "captures" subdirectory PacketCaptureView writes PCAP files
+         into under context.filesDir - see PacketCaptureView.kt's capturesDir. -->
+    <files-path name="captures" path="captures/" />
+</paths>
