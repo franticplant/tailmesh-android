@@ -4298,7 +4298,7 @@ open Diagnostics > Network with the DNS log on, generate some DNS traffic
 the search field and "Errors only" chip actually narrow the list and the
 timestamps line up with a nearby network transition.
 
-## 86. Added: PCAP packet capture, global and per-app, exportable as a .pcap file (2026-09-02, unit-tested/Android-built, not device-verified)
+## 86. Added: PCAP packet capture, global and per-app, exportable as a .pcap file (2026-09-02, unit-tested/Android-built; device-verified 2026-09-03, see §88 for the bug that verification found and fixed)
 
 **User report.** "i'd like to have features lik ethese: pcap, pcap per app,
 and other pcap toggles like pcap onl ydns information itself or sth like
@@ -4444,6 +4444,93 @@ tradeoff the user should weigh in on); a combined/overlaid chart comparing
 two upstreams or apps at once; anomaly highlighting (e.g. color a point red
 if it's an outlier vs. the visible range). None of these have a clearly
 correct default, unlike the current/peak line above.
+
+## 88. Device-verified §86 (PCAP capture) and §87 (chart summary) - found and fixed a silent no-op bug in PCAP start (2026-09-03, live emulator, real captured traffic confirmed)
+
+**Context.** An emulator (`localhost:5555`, x86_64, see [[tailmesh-emulator-abi]])
+became reachable via adb for the first time since §84-87 were built and
+merely unit-tested. This entry records what live device testing actually
+confirmed, and a real bug it found in the process - upgrading both §86 and
+§87 from "not device-verified" to genuinely checked.
+
+**§87 (chart summary line) - confirmed correct as built.** Diagnostics
+Overview tab showed `current: -1.0% · peak: -1.0%` (CPU%, app was idle so
+-1.0 is the "no sample yet" sentinel, correctly propagated) and
+`current: 335.4 KB · peak: 498.1 KB` (TUN throughput) rendering above their
+charts with real historical data, values visually consistent with the
+chart's own y-axis range. No changes needed.
+
+**§86 (PCAP capture) - found a real bug via device testing that no unit
+test could have caught.** `PacketCaptureView.kt`'s "Start capture" button
+appeared to work (UI flipped to "Stop capture", showed a generated
+filename) but never created a file on disk. Root cause: `startCapture()`
+called `engine?.startPacketCaptureAll(...)` - a Kotlin safe-call - against
+`val engine = App.get().multiProxySession.engine` captured once when the
+composable entered. `MultiProxySession.engine` (`IPNService.kt`) is only
+non-null while Multi-Tailnet mode is running (`startMultiProxyVPNLocked`
+sets it; `stopMultiProxyVPNLocked` nulls it) - it stays null the entire
+time the app is in Standard (single-upstream) mode, which is where this
+screen was first opened. The safe-call on a null receiver silently
+evaluated to nothing, while the surrounding code still set
+`isCapturing = true` and a fake `capturePath` - confirmed via
+`adb shell run-as com.tailscale.ipn.multiproxy ls -la .../files/captures/`
+showing a completely empty directory across two separate "Start capture"
+attempts, despite real traffic actively flowing through the device at the
+time (confirmed via PID-scoped `adb logcat`).
+
+**Fix.** Changed the once-captured `val engine = ...` to
+`fun engine() = App.get().multiProxySession.engine`, fetched fresh at every
+call site (the `LaunchedEffect` poll loop, `startCapture()`,
+`stopCapture()`), and added an explicit null-check in `startCapture()`:
+when the engine isn't up yet, it now sets a visible
+`errorMessage = "VPN engine not running yet - connect and try again"` and
+returns, instead of faking success. This is a UI-layer bug only - the Go
+engine side and its facade forwarding (the gomobile gotcha from §86) were
+never at fault.
+
+**Evidence the fix is correct, both branches exercised live:**
+- **Engine null (Standard mode).** With the VPN connected in Standard mode
+  (`multiProxySession.engine == null` by design - confirmed by reading
+  `IPNService.kt`'s `startMultiProxyVPNLocked`/`stopMultiProxyVPNLocked`,
+  not guessed), tapping "Start capture" now shows the red
+  "VPN engine not running yet - connect and try again" message and leaves
+  the screen in "No capture yet" - no fake success state.
+- **Engine present (Multi-Tailnet mode).** Switched the device to
+  Multi-Tailnet mode (Settings → Upstreams → Start Multi-Tailnet), waited
+  for an account's `Runtime` to reach `RUNNING`, opened Packet capture,
+  started an "All traffic" capture, then browsed to neverssl.com to
+  generate traffic. The UI reported `535 packets, 44 KB` within two
+  seconds and kept growing. Pulled the actual file off the device
+  (`adb shell run-as ... cat .../capture-20260902-224904.pcap`, since
+  `adb pull` can't reach app-private storage directly) and verified it
+  independently of the app's own self-reported counters: valid libpcap
+  global header (`0xa1b2c3d4`, version 2.4, `LINKTYPE_RAW`=101,
+  snaplen=65536 matching `pcap.go`'s constants exactly), 37,141
+  well-formed 16-byte-header + payload records totaling ~2.47 MB parsed
+  with a standalone Python parser (not the app's code), and the first few
+  records decoded as real IPv4/TCP packets with real public destination
+  IPs (`176.58.88.183`, `68.183.90.120`, `209.177.158.15` -> `198.18.0.1`,
+  the multiproxy synthetic gateway). The file stopped growing at exactly
+  3,065,888 bytes once the VPN session was later interrupted by an
+  unrelated pre-existing mode-switch/process-restart flake (app cold-
+  restarted mid-test, VPN dropped to "Not connected") - the file was left
+  intact and still a valid, openable pcap, not truncated or corrupted,
+  consistent with `pcapFile.write`'s stop-not-corrupt design.
+
+**Not chased further (deliberately, to stay scoped to verifying tonight's
+work rather than opening a new investigation):** the Multi-Tailnet
+mode-switch flakiness that interrupted the second half of this test - the
+VPN dropped to "Not connected" and the app cold-restarted on its own
+partway through the live capture. This is a pre-existing app-state issue
+unrelated to anything touched this engagement; if it recurs and bothers the
+user, it deserves its own investigation with its own evidence trail rather
+than a guess bolted onto this entry.
+
+**Status.** §86 and §87 both now have real device evidence, and the one bug
+device-testing surfaced is fixed, unit-testable-behavior-compiled, and
+committed. Per-app filtering (the other piece of §86's "required evidence"
+list) is still not live-verified - only "all traffic" mode was exercised
+end-to-end above.
 
 ## 48. Bottom line
 

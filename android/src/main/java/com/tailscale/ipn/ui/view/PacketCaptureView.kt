@@ -74,7 +74,14 @@ private fun capturesDir(context: android.content.Context): File {
 fun PacketCaptureView(backToSettings: BackNavigation) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
-  val engine = App.get().multiProxySession.engine
+  // Fetched fresh at each use (a function, not a `val`) rather than once at composition time:
+  // the engine can still be null right after this screen opens (VPN still starting up) and
+  // become available moments later - capturing it once here would keep pointing at that
+  // initial null for the rest of this screen's lifetime instead of picking up the real engine
+  // once it exists. See validation_and_gaps.md's PCAP entry for the device-testing finding that
+  // led to this - a silent no-op here left a capture attempt looking "started" in the UI with
+  // no data and no file ever written.
+  fun engine() = App.get().multiProxySession.engine
 
   var mode by rememberSaveable { mutableStateOf(CaptureMode.ALL) }
   var isCapturing by remember { mutableStateOf(false) }
@@ -105,9 +112,9 @@ fun PacketCaptureView(backToSettings: BackNavigation) {
   // than on every recomposition.
   LaunchedEffect(isCapturing) {
     while (isCapturing) {
-      bytesWritten = engine?.packetCaptureBytesWritten() ?: 0L
-      packetCount = engine?.packetCapturePacketCount() ?: 0L
-      capacityReached = engine?.packetCaptureCapacityReached() ?: false
+      bytesWritten = engine()?.packetCaptureBytesWritten() ?: 0L
+      packetCount = engine()?.packetCapturePacketCount() ?: 0L
+      capacityReached = engine()?.packetCaptureCapacityReached() ?: false
       delay(3000)
     }
   }
@@ -121,15 +128,26 @@ fun PacketCaptureView(backToSettings: BackNavigation) {
 
   fun startCapture() {
     errorMessage = null
+    val e = engine()
+    if (e == null) {
+      // Previously this fell through silently (Kotlin's `?.` on a null receiver just
+      // evaluates to null) and still flipped isCapturing on with a filename that was never
+      // actually opened by the Go side - the UI claimed a capture was running while nothing
+      // was written and no file existed on disk. Surfacing it here instead of guessing why the
+      // engine isn't up yet (VPN still starting, no active session, etc.) - whatever the
+      // reason, "not running yet" is a real, sayable state, not silence.
+      errorMessage = "VPN engine not running yet - connect and try again"
+      return
+    }
     val dir = capturesDir(context)
     val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
     val file = File(dir, "capture-$stamp.pcap")
     try {
       when (mode) {
-        CaptureMode.ALL -> engine?.startPacketCaptureAll(file.absolutePath, captureMaxBytes)
+        CaptureMode.ALL -> e.startPacketCaptureAll(file.absolutePath, captureMaxBytes)
         CaptureMode.APPS -> {
           val uids = selectedPackages.mapNotNull { uidFor(it) }
-          engine?.startPacketCaptureApps(uids.joinToString(","), file.absolutePath, captureMaxBytes)
+          e.startPacketCaptureApps(uids.joinToString(","), file.absolutePath, captureMaxBytes)
         }
         CaptureMode.OFF -> return
       }
@@ -138,18 +156,19 @@ fun PacketCaptureView(backToSettings: BackNavigation) {
       packetCount = 0L
       capacityReached = false
       isCapturing = true
-    } catch (e: Exception) {
-      errorMessage = e.message ?: "Failed to start capture"
+    } catch (ex: Exception) {
+      errorMessage = ex.message ?: "Failed to start capture"
     }
   }
 
   fun stopCapture() {
-    engine?.stopPacketCapture()
+    val e = engine()
+    e?.stopPacketCapture()
     isCapturing = false
     scope.launch {
-      bytesWritten = engine?.packetCaptureBytesWritten() ?: bytesWritten
-      packetCount = engine?.packetCapturePacketCount() ?: packetCount
-      capacityReached = engine?.packetCaptureCapacityReached() ?: capacityReached
+      bytesWritten = e?.packetCaptureBytesWritten() ?: bytesWritten
+      packetCount = e?.packetCapturePacketCount() ?: packetCount
+      capacityReached = e?.packetCaptureCapacityReached() ?: capacityReached
     }
   }
 
