@@ -229,6 +229,54 @@ func (e *MultiProxyEngine) RemoveUpstream(id string) error {
 	return e.inner.UnregisterUpstream(multiproxy.UpstreamID(id))
 }
 
+// AddSOCKS5Listener starts (or, if id is already in use, replaces) an inbound
+// SOCKS5 listener: another app on the device - or a process reached via
+// `adb forward` - can point its own SOCKS5 proxy setting at bindAddr:port and
+// get routed through upstream, exactly as if it were the upstream's own
+// traffic. Unlike the VPN's own per-app policy routing, a listener routes
+// every connection it accepts through the one upstream it was configured
+// with, regardless of which app or process is on the other end - the
+// connecting process is never consulted or attributed.
+//
+// upstream is looked up at dial time, not here, so a listener can be created
+// before its upstream, or survive that upstream being removed and re-added.
+// Pass an empty username for no authentication.
+func (e *MultiProxyEngine) AddSOCKS5Listener(id, bindAddr string, port int32, upstream, username, password string) error {
+	if port <= 0 || port > 65535 {
+		return fmt.Errorf("socks5-listener: port %d out of range", port)
+	}
+	return e.inner.AddSOCKS5Listener(multiproxy.SOCKS5ListenerConfig{
+		ID:       id,
+		BindAddr: bindAddr,
+		Port:     uint16(port),
+		Upstream: multiproxy.UpstreamID(upstream),
+		Username: username,
+		Password: password,
+	})
+}
+
+// RemoveSOCKS5Listener stops the named listener. Removing one that does not
+// exist is not an error.
+func (e *MultiProxyEngine) RemoveSOCKS5Listener(id string) error {
+	return e.inner.RemoveSOCKS5Listener(id)
+}
+
+// GetSOCKS5ListenersJSON lists every configured listener, ordered by id, as
+// [{"id","bindAddr","port","upstream","hasAuth"}...]. Passwords are never
+// included - this is for a settings UI to render a list, not to round-trip
+// credentials.
+func (e *MultiProxyEngine) GetSOCKS5ListenersJSON() string {
+	infos := e.inner.SOCKS5ListenersSnapshot()
+	if infos == nil {
+		infos = []multiproxy.SOCKS5ListenerInfo{}
+	}
+	b, err := json.Marshal(infos)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
+}
+
 // GetExitNodeCandidatesJSON lists the peers of an already-configured, running
 // tailnet (named by tailnetIdentifier) that offer to be an exit node. Add one
 // as its own upstream with AddExitNodeUpstream.

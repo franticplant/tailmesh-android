@@ -183,6 +183,13 @@ type Engine struct {
 	// presents both behind one interface.
 	upstreams *upstreamRegistry
 
+	// socks5Listeners holds every inbound SOCKS5 listener, keyed by
+	// SOCKS5ListenerConfig.ID. See socks5_listener.go. Unlike upstreams and
+	// tailnets, a listener has no "not ready" state - it exists exactly when
+	// present in this map, and Add/RemoveSOCKS5Listener own its lifecycle
+	// directly rather than through the Provider/Ready interface.
+	socks5Listeners map[string]*socks5Listener
+
 	// stats holds live per-upstream dial/byte counters, recorded by every real
 	// dial regardless of call site. See stats.go.
 	stats *statsRegistry
@@ -930,6 +937,7 @@ func (e *Engine) Close() {
 	e.mu.Unlock()
 
 	e.StopVPN()
+	e.closeAllSOCKS5Listeners()
 
 	for _, id := range ids {
 		uid := UpstreamID(id)
