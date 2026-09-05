@@ -5,6 +5,7 @@ package multiproxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -38,6 +39,63 @@ const (
 	tcpDialMaxAttempts = 3
 	tcpDialRetryDelay  = 300 * time.Millisecond
 )
+
+// ErrNoUsableNetworkForFamily is returned (wrapped) by an Upstream's Dial
+// when the Android side has already determined, before attempting to
+// connect, that no active network can carry a socket of the dialed address
+// family - see App.bindSocketToNetwork / NetworkChangeCallback.pickNetworkForDial
+// in the Android source, and the netns.SetAndroidBindToNetworkFunc callback
+// in libtailscale/backend.go that turns a false return from that Java method
+// into this Go error.
+//
+// It is a permanent failure for the current dial, not a transient one:
+// nothing about which networks the device has changes between one dial
+// attempt and the next inside the same handleTCPConnection call, so
+// retrying the identical dial tcpDialMaxAttempts times cannot succeed - it
+// only spends tcpDialRetryDelay twice for no benefit, which used to show up
+// as a ~600ms delay before the caller (and the peer app's own TCP stack)
+// ever saw the connection fail. dialWithRetry treats this error as terminal
+// so that delay is gone; see validation_and_gaps.md §93.
+var ErrNoUsableNetworkForFamily = errors.New("multiproxy: no active network can carry this socket's address family")
+
+// dialWithRetry dials upstream up to tcpDialMaxAttempts times, sleeping
+// tcpDialRetryDelay between attempts, on the assumption (documented at
+// nat_router.go's call site) that retrying a dial that hasn't exchanged any
+// application data yet is safe. onRetry, if non-nil, is called before each
+// sleep so the caller can log per-attempt failures with its own context
+// (flow ID, upstream, address) without dialWithRetry needing to know about
+// any of that.
+//
+// A dial error that wraps ErrNoUsableNetworkForFamily aborts immediately,
+// without sleeping or retrying - see that error's doc comment for why.
+func dialWithRetry(
+	ctx context.Context,
+	upstream Upstream,
+	network, addr string,
+	onRetry func(attempt int, err error),
+) (net.Conn, error) {
+	var conn net.Conn
+	var dialErr error
+	for attempt := 1; attempt <= tcpDialMaxAttempts; attempt++ {
+		conn, dialErr = upstream.Dial(ctx, network, addr)
+		if dialErr == nil {
+			return conn, nil
+		}
+		if ctx.Err() != nil {
+			return nil, dialErr
+		}
+		if errors.Is(dialErr, ErrNoUsableNetworkForFamily) {
+			return nil, dialErr
+		}
+		if attempt < tcpDialMaxAttempts {
+			if onRetry != nil {
+				onRetry(attempt, dialErr)
+			}
+			time.Sleep(tcpDialRetryDelay)
+		}
+	}
+	return nil, dialErr
+}
 
 func (e *Engine) activeTailnetServer(id UpstreamID) (*tsnet.Server, bool) {
 	e.mu.RLock()
@@ -358,24 +416,18 @@ func (e *Engine) handleTCPConnection(r *tcp.ForwarderRequest) {
 		// is safe - unlike a mid-transfer stall, which can't be transparently
 		// resumed without breaking whatever session state the two real
 		// endpoints already believe they have. See validation_and_gaps.md §41
-		// for why this is bounded to dial-time only.
-		var conn net.Conn
-		var dialErr error
-		for attempt := 1; attempt <= tcpDialMaxAttempts; attempt++ {
-			conn, dialErr = decision.Upstream.Dial(ctx, "tcp", dialAddr)
-			if dialErr == nil {
-				break
-			}
-			if ctx.Err() != nil {
-				break
-			}
-			if attempt < tcpDialMaxAttempts {
-				log.Printf("[flow-%d] TCP upstream dial %s %s attempt %d/%d failed: %v, retrying", flowID, decision.UpstreamID, dialAddr, attempt, tcpDialMaxAttempts, dialErr)
-				time.Sleep(tcpDialRetryDelay)
-			}
-		}
+		// for why this is bounded to dial-time only, and §93 for why a dial
+		// that fails with ErrNoUsableNetworkForFamily doesn't get retried at
+		// all despite that.
+		conn, dialErr := dialWithRetry(ctx, decision.Upstream, "tcp", dialAddr, func(attempt int, err error) {
+			log.Printf("[flow-%d] TCP upstream dial %s %s attempt %d/%d failed: %v, retrying", flowID, decision.UpstreamID, dialAddr, attempt, tcpDialMaxAttempts, err)
+		})
 		if dialErr != nil {
-			log.Printf("[flow-%d] TCP upstream dial %s %s failed after %d attempts: %v", flowID, decision.UpstreamID, dialAddr, tcpDialMaxAttempts, dialErr)
+			if errors.Is(dialErr, ErrNoUsableNetworkForFamily) {
+				log.Printf("[flow-%d] TCP upstream dial %s %s failed: %v (not retrying - no active network can carry this address family right now)", flowID, decision.UpstreamID, dialAddr, dialErr)
+			} else {
+				log.Printf("[flow-%d] TCP upstream dial %s %s failed after %d attempts: %v", flowID, decision.UpstreamID, dialAddr, tcpDialMaxAttempts, dialErr)
+			}
 			return
 		}
 		defer conn.Close()

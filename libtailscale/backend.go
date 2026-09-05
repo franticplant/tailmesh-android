@@ -33,11 +33,14 @@ import (
 	"tailscale.com/paths"
 	"tailscale.com/tsd"
 	"tailscale.com/types/logger"
+
 	"tailscale.com/types/logid"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/netstack"
 	"tailscale.com/wgengine/router"
+
+	"github.com/tailscale/tailscale-android/libtailscale/multiproxy"
 )
 
 type App struct {
@@ -496,7 +499,13 @@ func AcquireAndroidNetworkHooks(mode string, s IPNService, appCtx AppContext) bo
 			// a v6 handshake that will hang for hundreds of milliseconds
 			// before the remote resets it.
 			if ok := appCtx.BindSocketToNetwork(int32(fd)); !ok {
-				return fmt.Errorf("no active network available to bind socket %d to", fd)
+				// Wrapped (not returned bare) so callers all the way up in
+				// multiproxy's dial-retry loop can identify this specific,
+				// permanent-for-this-dial failure with errors.Is despite the
+				// stdlib wrapping it again in a *net.OpError before it
+				// reaches them - see multiproxy.ErrNoUsableNetworkForFamily's
+				// doc comment for why that distinction matters.
+				return fmt.Errorf("bind fd %d: %w", fd, multiproxy.ErrNoUsableNetworkForFamily)
 			}
 			return nil
 		})
