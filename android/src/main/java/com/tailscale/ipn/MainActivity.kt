@@ -318,6 +318,9 @@ class MainActivity : ComponentActivity() {
                           onNavigateToProxyUpstreams = { navController.navigate("proxyUpstreams") },
                           onNavigateToAppRouting = { navController.navigate("appRouting") },
                           onNavigateToPacketCapture = { navController.navigate("packetCapture") },
+                          onNavigateToSOCKS5Listeners = {
+                            navController.navigate("socks5Listeners")
+                          },
                           onBackToSettings = backTo("settings"),
                           onNavigateBackHome = backTo("main"))
                   val exitNodePickerNav =
@@ -404,6 +407,9 @@ class MainActivity : ComponentActivity() {
                   composable("appRouting") { AppRoutingView(backTo("settings")) }
                   composable("packetCapture") {
                     com.tailscale.ipn.ui.view.PacketCaptureView(backTo("settings"))
+                  }
+                  composable("socks5Listeners") {
+                    com.tailscale.ipn.ui.view.SOCKS5ListenersView(backTo("settings"))
                   }
                   composable("tailnetLock") { TailnetLockSetupView(backTo("settings")) }
                   composable("subnetRouting") { SubnetRoutingView(backTo("settings")) }

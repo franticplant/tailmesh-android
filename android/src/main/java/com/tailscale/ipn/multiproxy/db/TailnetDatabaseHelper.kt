@@ -11,7 +11,7 @@ class TailnetDatabaseHelper(context: Context) :
     SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
   companion object {
     const val DATABASE_NAME = "multiproxy_profiles.db"
-    const val DATABASE_VERSION = 6
+    const val DATABASE_VERSION = 7
     const val TABLE_PROFILES = "profiles"
     const val COL_ID = "id"
     const val COL_DISPLAY_NAME = "display_name"
@@ -97,6 +97,31 @@ class TailnetDatabaseHelper(context: Context) :
             )
         """
 
+    // Inbound SOCKS5 listeners (see libtailscale/multiproxy/socks5_listener.go): each hands out
+    // one fixed upstream to whatever binds to bindAddr:port. Only the non-secret parts live here -
+    // an optional RFC 1929 username/password is held in UpstreamSecretStore, same split as
+    // TABLE_UPSTREAMS/UpstreamSecretStore's own config JSON.
+    const val TABLE_SOCKS5_LISTENERS = "socks5_listeners"
+    const val COL_LISTENER_ID = "id"
+    const val COL_LISTENER_BIND_ADDR = "bind_addr"
+    const val COL_LISTENER_PORT = "port"
+    const val COL_LISTENER_UPSTREAM = "upstream"
+    const val COL_LISTENER_HAS_AUTH = "has_auth"
+
+    private const val CREATE_SOCKS5_LISTENERS =
+        """
+            CREATE TABLE IF NOT EXISTS $TABLE_SOCKS5_LISTENERS (
+                $COL_LISTENER_ID TEXT PRIMARY KEY,
+                $COL_LISTENER_BIND_ADDR TEXT NOT NULL,
+                $COL_LISTENER_PORT INTEGER NOT NULL,
+                $COL_LISTENER_UPSTREAM TEXT NOT NULL,
+                $COL_LISTENER_HAS_AUTH INTEGER NOT NULL DEFAULT 0,
+                $COL_ENABLED INTEGER NOT NULL DEFAULT 1,
+                $COL_CREATED_AT INTEGER NOT NULL,
+                $COL_UPDATED_AT INTEGER NOT NULL
+            )
+        """
+
     private const val CREATE_APP_BINDINGS =
         """
             CREATE TABLE IF NOT EXISTS $TABLE_APP_BINDINGS (
@@ -144,6 +169,7 @@ class TailnetDatabaseHelper(context: Context) :
             .trimIndent())
     db.execSQL(CREATE_UPSTREAMS.trimIndent())
     db.execSQL(CREATE_APP_BINDINGS.trimIndent())
+    db.execSQL(CREATE_SOCKS5_LISTENERS.trimIndent())
   }
 
   override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -215,6 +241,17 @@ class TailnetDatabaseHelper(context: Context) :
       try {
         db.execSQL(
             "ALTER TABLE $TABLE_APP_BINDINGS ADD COLUMN $COL_BINDING_TUNNEL_LAN INTEGER NOT NULL DEFAULT 0")
+        db.setTransactionSuccessful()
+      } finally {
+        db.endTransaction()
+      }
+    }
+    if (oldVersion < 7) {
+      // New table, so this is the whole migration - IF NOT EXISTS keeps it
+      // idempotent alongside every other branch above.
+      db.beginTransaction()
+      try {
+        db.execSQL(CREATE_SOCKS5_LISTENERS.trimIndent())
         db.setTransactionSuccessful()
       } finally {
         db.endTransaction()

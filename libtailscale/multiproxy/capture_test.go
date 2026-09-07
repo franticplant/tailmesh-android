@@ -298,7 +298,7 @@ func TestPcapFileStopsAtCapacity(t *testing.T) {
 func TestPacketCaptureAllModeIgnoresFlowRegistry(t *testing.T) {
 	c := newPacketCapture()
 	path := filepath.Join(t.TempDir(), "capture.pcapng")
-	if err := c.start(captureAll, "", "", path, 1<<20); err != nil {
+	if err := c.start(captureAll, "", "", "", path, 1<<20); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	defer c.stop()
@@ -315,7 +315,7 @@ func TestPacketCaptureAllModeIgnoresFlowRegistry(t *testing.T) {
 func TestPacketCaptureAppsModeFiltersByUID(t *testing.T) {
 	c := newPacketCapture()
 	path := filepath.Join(t.TempDir(), "capture.pcapng")
-	if err := c.start(captureApps, "1001, 1002", "", path, 1<<20); err != nil {
+	if err := c.start(captureApps, "1001, 1002", "", "", path, 1<<20); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	defer c.stop()
@@ -359,7 +359,7 @@ func TestPacketCaptureAppsModeFiltersByUID(t *testing.T) {
 func TestPacketCaptureAttributesEveryPacketWithAppName(t *testing.T) {
 	c := newPacketCapture()
 	path := filepath.Join(t.TempDir(), "capture.pcapng")
-	if err := c.start(captureAll, "", "1001:com.example.named\n1002:  com.example.spaced  ", path, 1<<20); err != nil {
+	if err := c.start(captureAll, "", "", "1001:com.example.named\n1002:  com.example.spaced  ", path, 1<<20); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	defer c.stop()
@@ -409,7 +409,7 @@ func TestPacketCaptureOffDropsEverything(t *testing.T) {
 func TestPacketCaptureStopClosesFile(t *testing.T) {
 	c := newPacketCapture()
 	path := filepath.Join(t.TempDir(), "capture.pcapng")
-	if err := c.start(captureAll, "", "", path, 1<<20); err != nil {
+	if err := c.start(captureAll, "", "", "", path, 1<<20); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	c.observe(buildIPv4UDPPacket(t, "10.0.0.1", 1000, "10.0.0.2", 53, []byte("x")))
@@ -437,12 +437,12 @@ func TestPacketCaptureRestartDiscardsPreviousSession(t *testing.T) {
 	path1 := filepath.Join(t.TempDir(), "one.pcapng")
 	path2 := filepath.Join(t.TempDir(), "two.pcapng")
 
-	if err := c.start(captureAll, "", "", path1, 1<<20); err != nil {
+	if err := c.start(captureAll, "", "", "", path1, 1<<20); err != nil {
 		t.Fatalf("start 1: %v", err)
 	}
 	c.observe(buildIPv4UDPPacket(t, "10.0.0.1", 1000, "10.0.0.2", 53, []byte("x")))
 
-	if err := c.start(captureAll, "", "", path2, 1<<20); err != nil {
+	if err := c.start(captureAll, "", "", "", path2, 1<<20); err != nil {
 		t.Fatalf("start 2: %v", err)
 	}
 	defer c.stop()
@@ -473,7 +473,7 @@ func TestCaptureLinkEndpointSeesRealTraffic(t *testing.T) {
 	t.Cleanup(e.StopVPN)
 
 	path := filepath.Join(t.TempDir(), "capture.pcapng")
-	if err := e.capture.start(captureAll, "", "", path, 1<<20); err != nil {
+	if err := e.capture.start(captureAll, "", "", "", path, 1<<20); err != nil {
 		t.Fatalf("start capture: %v", err)
 	}
 	defer e.capture.stop()
@@ -513,5 +513,104 @@ func TestFlowRegistryRegisterUnregister(t *testing.T) {
 	c.unregisterFlow("tcp", src, dst)
 	if _, ok := c.uidForFlow("tcp", src, dst); ok {
 		t.Fatalf("uidForFlow found an entry after unregisterFlow")
+	}
+}
+
+// TestBuildSyntheticTCPSegment checks that observeListenerConn's synthesized
+// IPv4/TCP segment round-trips through the same gVisor header decoder a real
+// captured packet would, with the real endpoint addresses, a valid-looking
+// header (correct checksums, monotonically increasing per-direction
+// sequence numbers), and the exact payload bytes - see that function's doc
+// comment for why this is a synthesized packet rather than a tapped one.
+func TestBuildSyntheticTCPSegment(t *testing.T) {
+	client := netip.MustParseAddrPort("127.0.0.1:54321")
+	upstream := netip.MustParseAddrPort("100.64.0.5:443")
+	stream := newSyntheticTCPStream(client, upstream)
+
+	pkt1 := buildSyntheticTCPSegment(stream, []byte("hello"), true /* client -> upstream */)
+	proto, src, dst, ok := parseFiveTuple(pkt1)
+	if !ok {
+		t.Fatalf("parseFiveTuple could not parse the synthesized segment")
+	}
+	if proto != "tcp" {
+		t.Fatalf("proto = %q, want tcp", proto)
+	}
+	if src != client || dst != upstream {
+		t.Fatalf("src/dst = %v/%v, want %v/%v", src, dst, client, upstream)
+	}
+	ip := header.IPv4(pkt1)
+	if !ip.IsChecksumValid() {
+		t.Fatalf("synthesized IPv4 header checksum is invalid")
+	}
+	tcpHdr := header.TCP(pkt1[header.IPv4MinimumSize:])
+	if got := string(tcpHdr.Payload()); got != "hello" {
+		t.Fatalf("payload = %q, want %q", got, "hello")
+	}
+	if tcpHdr.SequenceNumber() != 0 {
+		t.Fatalf("first segment's SeqNum = %d, want 0", tcpHdr.SequenceNumber())
+	}
+
+	// A second client->upstream segment must advance the sequence number
+	// by the first segment's payload length, matching real TCP semantics
+	// closely enough for a "Follow TCP Stream" reconstruction to work.
+	pkt2 := buildSyntheticTCPSegment(stream, []byte("world!"), true)
+	tcpHdr2 := header.TCP(pkt2[header.IPv4MinimumSize:])
+	if tcpHdr2.SequenceNumber() != 5 {
+		t.Fatalf("second segment's SeqNum = %d, want 5", tcpHdr2.SequenceNumber())
+	}
+
+	// The reverse direction has its own independent sequence space.
+	pkt3 := buildSyntheticTCPSegment(stream, []byte("ack"), false /* upstream -> client */)
+	proto3, src3, dst3, ok3 := parseFiveTuple(pkt3)
+	if !ok3 || proto3 != "tcp" || src3 != upstream || dst3 != client {
+		t.Fatalf("reverse-direction segment parsed as %v/%v/%v/%v, want tcp/%v/%v/true", proto3, src3, dst3, ok3, upstream, client)
+	}
+	tcpHdr3 := header.TCP(pkt3[header.IPv4MinimumSize:])
+	if tcpHdr3.SequenceNumber() != 0 {
+		t.Fatalf("first reverse-direction segment's SeqNum = %d, want 0", tcpHdr3.SequenceNumber())
+	}
+	if tcpHdr3.AckNumber() != 11 {
+		// Both prior client->upstream segments (5 + 6 bytes) should be reflected.
+		t.Fatalf("reverse-direction AckNum = %d, want 11", tcpHdr3.AckNumber())
+	}
+}
+
+// TestObserveListenerConnFiltersByModeAndSelection checks that
+// observeListenerConn only writes when capture is in captureListeners mode
+// and the listener ID is one of the selected ones - the same selection
+// contract StartPacketCaptureApps makes for app UIDs.
+func TestObserveListenerConnFiltersByModeAndSelection(t *testing.T) {
+	dir := t.TempDir()
+	client := netip.MustParseAddrPort("127.0.0.1:1")
+	upstream := netip.MustParseAddrPort("127.0.0.1:2")
+
+	c := newPacketCapture()
+	// Off: nothing written regardless of selection.
+	c.observeListenerConn("listener-a", newSyntheticTCPStream(client, upstream), []byte("x"), true)
+	if b, _, _ := c.stats(); b != 0 {
+		t.Fatalf("bytes written while capture off = %d, want 0", b)
+	}
+
+	if err := c.start(captureListeners, "", "listener-a", "", filepath.Join(dir, "cap.pcapng"), 1<<20); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer c.stop()
+
+	// Not selected: no packet written (the file already has its fixed
+	// pcapng section/interface-description header bytes from start(), so
+	// this checks the packet count rather than raw byte count).
+	c.observeListenerConn("listener-b", newSyntheticTCPStream(client, upstream), []byte("skip me"), true)
+	if _, packets, _ := c.stats(); packets != 0 {
+		t.Fatalf("packets written for unselected listener = %d, want 0", packets)
+	}
+
+	// Selected: written.
+	c.observeListenerConn("listener-a", newSyntheticTCPStream(client, upstream), []byte("capture me"), true)
+	b, packets, _ := c.stats()
+	if packets != 1 {
+		t.Fatalf("packets = %d, want 1", packets)
+	}
+	if b <= 32 {
+		t.Fatalf("bytesWritten = %d, want more than just the pcapng header blocks", b)
 	}
 }

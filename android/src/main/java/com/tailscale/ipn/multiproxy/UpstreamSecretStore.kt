@@ -58,5 +58,25 @@ class UpstreamSecretStore(private val encryptedPrefs: SharedPreferences) {
     saveConfig(upstreamId, obj.toString())
   }
 
+  /**
+   * Stores a SOCKS5 listener's RFC 1929 username/password, as JSON (`{"username":"...",
+   * "password":"..."}`), separately from the non-secret parts of its configuration
+   * ([com.tailscale.ipn.multiproxy.db.SOCKS5ListenerRepository]) - same split as an upstream's own
+   * config vs. its database row, and for the same reason: nothing sensitive belongs in the plain
+   * SQLite database.
+   */
+  fun saveListenerAuth(listenerId: String, authJson: String) {
+    encryptedPrefs.edit().putString(listenerKey(listenerId), authJson).apply()
+  }
+
+  fun getListenerAuth(listenerId: String): String? =
+      encryptedPrefs.getString(listenerKey(listenerId), null)
+
+  fun deleteListenerAuth(listenerId: String) {
+    encryptedPrefs.edit().remove(listenerKey(listenerId)).apply()
+  }
+
   private fun key(upstreamId: String) = "upstream_config_$upstreamId"
+
+  private fun listenerKey(listenerId: String) = "listener_auth_$listenerId"
 }

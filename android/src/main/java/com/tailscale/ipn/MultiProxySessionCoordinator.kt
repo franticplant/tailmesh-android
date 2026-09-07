@@ -630,6 +630,20 @@ object MultiProxySessionCoordinator {
           }
           session.profileRepository.updateProfile(profile.copy(enabled = enabled))
           clearError(id)
+          // A SOCKS5 listener configured to hand out this tailnet is a
+          // "workload identity" the same way an app is: it should stop
+          // accepting connections it can only fail the instant its upstream
+          // goes away, and come back automatically once the upstream does.
+          // apply() is what makes that reactive rather than only applying
+          // on the next full VPN rebuild - see
+          // UpstreamPolicyApplier.applySOCKS5Listeners's doc comment.
+          session.engine?.let { engine ->
+            try {
+              session.upstreamPolicyApplier.apply(engine)
+            } catch (e: Exception) {
+              TSLog.e("MultiProxySession", "could not reconcile SOCKS5 listeners: $e")
+            }
+          }
         } catch (e: Exception) {
           setError(id, e.message ?: "Failed to ${if (enabled) "enable" else "disable"} Tailnet")
         }
@@ -669,6 +683,16 @@ object MultiProxySessionCoordinator {
           _runtimeStates.value = _runtimeStates.value - id
           _exitNodeIps.value = _exitNodeIps.value - id
           clearError(id)
+          // Same reasoning as setEnabled: a listener handing out this
+          // tailnet must stop once it's gone, not just once the engine
+          // happens to rebuild.
+          session.engine?.let { engine ->
+            try {
+              session.upstreamPolicyApplier.apply(engine)
+            } catch (e: Exception) {
+              TSLog.e("MultiProxySession", "could not reconcile SOCKS5 listeners: $e")
+            }
+          }
         } catch (e: Exception) {
           setError(id, e.message ?: "Failed to forget Tailnet")
         }

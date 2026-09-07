@@ -202,6 +202,21 @@ func (e *MultiProxyEngine) StartPacketCaptureApps(appUIDsCSV, path string, maxBy
 	return e.inner.StartPacketCaptureApps(appUIDsCSV, path, maxBytes, appNamesLines)
 }
 
+// StartPacketCaptureSOCKS5Listeners is StartPacketCaptureApps's counterpart
+// for inbound SOCKS5 listeners (multiproxy_policy_facade.go's
+// AddSOCKS5Listener/RemoveSOCKS5Listener): only traffic through one of
+// listenerIDsCSV (comma-separated listener IDs) is captured. See
+// multiproxy.Engine.StartPacketCaptureSOCKS5Listeners for why this capture
+// is synthesized from each listener connection's copied bytes rather than
+// tapped from the TUN, and why it currently only supports IPv4 listener/
+// upstream endpoints.
+func (e *MultiProxyEngine) StartPacketCaptureSOCKS5Listeners(listenerIDsCSV, path string, maxBytes int64) error {
+	if e == nil || e.inner == nil {
+		return errors.New("engine not initialized")
+	}
+	return e.inner.StartPacketCaptureSOCKS5Listeners(listenerIDsCSV, path, maxBytes)
+}
+
 // StopPacketCapture ends the active capture session, if any, and closes its
 // file so the UI can read/share it immediately. Safe to call when no
 // capture is running.

@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/netip"
 	"sort"
 	"strconv"
 	"sync"
@@ -345,23 +346,82 @@ func (l *socks5Listener) handleConnect(conn net.Conn, p Provider, host string, p
 	}
 	_ = conn.SetDeadline(time.Time{})
 
+	// clientToUpstream/upstreamToClient tap the copied bytes for
+	// StartPacketCaptureSOCKS5Listeners, when enabled - a no-op call
+	// (observeListenerConn checks the capture mode first) whenever it
+	// isn't. Built once per connection so both directions share one
+	// syntheticTCPStream's sequence-number state. If either address can't
+	// be read back as an AddrPort (e.g. a non-IP net.Addr from a
+	// non-standard Provider), capture instrumentation is simply skipped
+	// for this connection - the proxy still works normally.
+	var clientToUpstreamR, upstreamToClientR io.Reader = conn, upstreamConn
+	if clientAddr, ok1 := addrPortFromNetAddr(conn.RemoteAddr()); ok1 {
+		if upstreamAddr, ok2 := addrPortFromNetAddr(upstreamConn.RemoteAddr()); ok2 {
+			stream := newSyntheticTCPStream(clientAddr, upstreamAddr)
+			clientToUpstreamR = io.TeeReader(conn, &listenerCaptureTap{
+				cap: l.e.capture, listenerID: l.cfg.ID, stream: stream, clientToUpstream: true,
+			})
+			upstreamToClientR = io.TeeReader(upstreamConn, &listenerCaptureTap{
+				cap: l.e.capture, listenerID: l.cfg.ID, stream: stream, clientToUpstream: false,
+			})
+		}
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		io.Copy(upstreamConn, conn)
+		io.Copy(upstreamConn, clientToUpstreamR)
 		if cw, ok := upstreamConn.(interface{ CloseWrite() error }); ok {
 			cw.CloseWrite()
 		}
 	}()
 	go func() {
 		defer wg.Done()
-		io.Copy(conn, upstreamConn)
+		io.Copy(conn, upstreamToClientR)
 		if cw, ok := conn.(interface{ CloseWrite() error }); ok {
 			cw.CloseWrite()
 		}
 	}()
 	wg.Wait()
+}
+
+// addrPortFromNetAddr converts a net.Addr to a netip.AddrPort, for the
+// handful of concrete types Dial/Accept actually return (*net.TCPAddr in
+// practice for every Provider in this package).
+func addrPortFromNetAddr(a net.Addr) (netip.AddrPort, bool) {
+	if a == nil {
+		return netip.AddrPort{}, false
+	}
+	host, portStr, err := net.SplitHostPort(a.String())
+	if err != nil {
+		return netip.AddrPort{}, false
+	}
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return netip.AddrPort{}, false
+	}
+	port, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil {
+		return netip.AddrPort{}, false
+	}
+	return netip.AddrPortFrom(addr, uint16(port)), true
+}
+
+// listenerCaptureTap is an io.Writer that feeds copied bytes into
+// packetCapture.observeListenerConn without storing them, for use as the
+// sink half of an io.TeeReader around each direction of handleConnect's
+// io.Copy pump.
+type listenerCaptureTap struct {
+	cap              *packetCapture
+	listenerID       string
+	stream           *syntheticTCPStream
+	clientToUpstream bool
+}
+
+func (t *listenerCaptureTap) Write(p []byte) (int, error) {
+	t.cap.observeListenerConn(t.listenerID, t.stream, p, t.clientToUpstream)
+	return len(p), nil
 }
 
 // ---------------------------------------------------------------------------

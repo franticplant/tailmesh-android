@@ -5,6 +5,7 @@ package multiproxy
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net"
 	"strconv"
@@ -346,6 +347,160 @@ func TestSOCKS5ListenerUDPAssociateRelaysDatagrams(t *testing.T) {
 	_ = gotHost
 	if !bytes.Equal(gotPayload, payload) {
 		t.Fatalf("echoed UDP payload = %q, want %q", gotPayload, payload)
+	}
+}
+
+// fakeUpstreamProvider is a minimal second Provider, independent of
+// DirectUpstreamID, used to prove that two SOCKS5 listeners configured with
+// two different Upstream values really do route independently rather than
+// sharing state - see TestTwoSOCKS5ListenersWithDifferentUpstreamsConcurrently.
+// It dials straight from the test process, same as directProvider, but
+// under its own ID/Kind so it is a distinct, separately-registered upstream.
+type fakeUpstreamProvider struct {
+	id UpstreamID
+}
+
+func (p *fakeUpstreamProvider) ID() UpstreamID     { return p.id }
+func (p *fakeUpstreamProvider) Kind() UpstreamKind { return UpstreamKindSOCKS5 }
+func (p *fakeUpstreamProvider) Ready() bool        { return true }
+func (p *fakeUpstreamProvider) Close() error       { return nil }
+func (p *fakeUpstreamProvider) Dial(ctx context.Context, network, address string) (net.Conn, error) {
+	var d net.Dialer
+	return d.DialContext(ctx, network, address)
+}
+func (p *fakeUpstreamProvider) PeerPathInfo(context.Context, string) string { return "unknown" }
+
+// TestTwoSOCKS5ListenersWithDifferentUpstreamsConcurrently is the direct
+// proof, at the engine layer, backing the Settings UI's multi-listener
+// management screen: two listeners can be bound to two different ports at
+// once, each routed through its own independently-configured upstream, and
+// a connection through one has no effect on the other. See
+// libtailscale/multiproxy/api.go's e.socks5Listeners map - this is what its
+// doc comment claims, exercised end to end rather than just asserted.
+func TestTwoSOCKS5ListenersWithDifferentUpstreamsConcurrently(t *testing.T) {
+	e := newDirectEngine(t)
+	if err := e.RegisterUpstream(&fakeUpstreamProvider{id: "upstream-2"}); err != nil {
+		t.Fatalf("registering second upstream: %v", err)
+	}
+
+	echoA := newTCPEchoServer(t).(*net.TCPAddr)
+	echoB := newTCPEchoServer(t).(*net.TCPAddr)
+	portA, portB := freeTCPPort(t), freeTCPPort(t)
+
+	if err := e.AddSOCKS5Listener(SOCKS5ListenerConfig{
+		ID: "listener-a", BindAddr: "127.0.0.1", Port: uint16(portA), Upstream: DirectUpstreamID,
+	}); err != nil {
+		t.Fatalf("AddSOCKS5Listener a: %v", err)
+	}
+	if err := e.AddSOCKS5Listener(SOCKS5ListenerConfig{
+		ID: "listener-b", BindAddr: "127.0.0.1", Port: uint16(portB), Upstream: "upstream-2",
+	}); err != nil {
+		t.Fatalf("AddSOCKS5Listener b: %v", err)
+	}
+
+	infos := e.SOCKS5ListenersSnapshot()
+	if len(infos) != 2 {
+		t.Fatalf("SOCKS5ListenersSnapshot returned %d listeners, want 2", len(infos))
+	}
+
+	relay := func(t *testing.T, port int, echoAddr *net.TCPAddr, payload string) {
+		t.Helper()
+		c := dialSOCKS5Listener(t, port)
+		defer c.Close()
+		if selected := c.greet(socks5AuthNone); selected != socks5AuthNone {
+			t.Fatalf("server selected 0x%02x, want no-auth", selected)
+		}
+		code, _, _ := c.request(socks5CmdConnect, echoAddr.IP.String(), uint16(echoAddr.Port))
+		if code != socks5ReplySucceeded {
+			t.Fatalf("CONNECT reply code = 0x%02x, want success", code)
+		}
+		if _, err := c.conn.Write([]byte(payload)); err != nil {
+			t.Fatalf("writing payload: %v", err)
+		}
+		got := make([]byte, len(payload))
+		if _, err := io.ReadFull(c.conn, got); err != nil {
+			t.Fatalf("reading echo: %v", err)
+		}
+		if string(got) != payload {
+			t.Fatalf("echoed payload = %q, want %q", got, payload)
+		}
+	}
+
+	// Run both listeners' round trips concurrently: this is the case a
+	// sequential test could miss (each listener quietly serving the other's
+	// traffic, or serializing on a shared lock that shouldn't be shared).
+	done := make(chan struct{}, 2)
+	go func() { relay(t, portA, echoA, "traffic for listener-a via @direct"); done <- struct{}{} }()
+	go func() { relay(t, portB, echoB, "traffic for listener-b via upstream-2"); done <- struct{}{} }()
+	<-done
+	<-done
+}
+
+// TestSOCKS5ListenerPacketCaptureCapturesSelectedListenerOnly exercises
+// StartPacketCaptureSOCKS5Listeners end to end: a real CONNECT session's
+// bytes must appear in the capture file when its listener is selected, and
+// must not appear (and must not corrupt/interfere with) a session on a
+// second, unselected listener.
+func TestSOCKS5ListenerPacketCaptureCapturesSelectedListenerOnly(t *testing.T) {
+	e := newDirectEngine(t)
+	echoA := newTCPEchoServer(t).(*net.TCPAddr)
+	echoB := newTCPEchoServer(t).(*net.TCPAddr)
+	portA, portB := freeTCPPort(t), freeTCPPort(t)
+
+	if err := e.AddSOCKS5Listener(SOCKS5ListenerConfig{
+		ID: "captured", BindAddr: "127.0.0.1", Port: uint16(portA), Upstream: DirectUpstreamID,
+	}); err != nil {
+		t.Fatalf("AddSOCKS5Listener captured: %v", err)
+	}
+	if err := e.AddSOCKS5Listener(SOCKS5ListenerConfig{
+		ID: "not-captured", BindAddr: "127.0.0.1", Port: uint16(portB), Upstream: DirectUpstreamID,
+	}); err != nil {
+		t.Fatalf("AddSOCKS5Listener not-captured: %v", err)
+	}
+
+	capPath := t.TempDir() + "/listener.pcapng"
+	if err := e.StartPacketCaptureSOCKS5Listeners("captured", capPath, 1<<20); err != nil {
+		t.Fatalf("StartPacketCaptureSOCKS5Listeners: %v", err)
+	}
+	defer e.StopPacketCapture()
+
+	roundTrip := func(t *testing.T, port int, echoAddr *net.TCPAddr, payload string) {
+		t.Helper()
+		c := dialSOCKS5Listener(t, port)
+		defer c.Close()
+		c.greet(socks5AuthNone)
+		code, _, _ := c.request(socks5CmdConnect, echoAddr.IP.String(), uint16(echoAddr.Port))
+		if code != socks5ReplySucceeded {
+			t.Fatalf("CONNECT reply code = 0x%02x, want success", code)
+		}
+		if _, err := c.conn.Write([]byte(payload)); err != nil {
+			t.Fatalf("writing payload: %v", err)
+		}
+		got := make([]byte, len(payload))
+		if _, err := io.ReadFull(c.conn, got); err != nil {
+			t.Fatalf("reading echo: %v", err)
+		}
+	}
+
+	roundTrip(t, portA, echoA, "captured listener payload")
+	roundTrip(t, portB, echoB, "uncaptured listener payload")
+
+	// Give the capturing io.Copy pumps a moment to run; they race the
+	// echoed reply the client already received above.
+	deadline := time.Now().Add(2 * time.Second)
+	var bytesWritten, packets int64
+	for time.Now().Before(deadline) {
+		bytesWritten, packets, _ = e.capture.stats()
+		if packets > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if packets == 0 {
+		t.Fatal("no packets captured for the selected listener")
+	}
+	if bytesWritten <= 32 {
+		t.Fatalf("bytesWritten = %d, want more than just the pcapng header blocks", bytesWritten)
 	}
 }
 

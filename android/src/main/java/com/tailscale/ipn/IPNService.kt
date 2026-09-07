@@ -17,6 +17,7 @@ import com.tailscale.ipn.multiproxy.UpstreamPolicyApplier
 import com.tailscale.ipn.multiproxy.UpstreamSecretStore
 import com.tailscale.ipn.multiproxy.db.AppBindingRepository
 import com.tailscale.ipn.multiproxy.db.ProfileRepository
+import com.tailscale.ipn.multiproxy.db.SOCKS5ListenerRepository
 import com.tailscale.ipn.multiproxy.db.UpstreamOwner
 import com.tailscale.ipn.multiproxy.db.UpstreamRepository
 import com.tailscale.ipn.ui.notifier.Notifier
@@ -52,11 +53,19 @@ class MultiProxySession(val app: App) {
   // upstreamPolicyApplier is what reconciles a fresh engine with them.
   val upstreamRepository = UpstreamRepository(app)
   val appBindingRepository = AppBindingRepository(app)
+  val socks5ListenerRepository = SOCKS5ListenerRepository(app)
   val upstreamSecretStore = UpstreamSecretStore(app.getEncryptedPrefs())
   val routingSettings = RoutingSettings(app)
   val upstreamPolicyApplier =
       UpstreamPolicyApplier(
-          app, upstreamRepository, appBindingRepository, upstreamSecretStore, routingSettings)
+          app,
+          upstreamRepository,
+          appBindingRepository,
+          socks5ListenerRepository,
+          upstreamSecretStore,
+          routingSettings,
+          profileRepository,
+      )
 
   // The network's own DNS server, refreshed whenever the underlying
   // network changes. Used as the non-tailnet DNS fallback only when the

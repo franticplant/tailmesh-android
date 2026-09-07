@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"gvisor.dev/gvisor/pkg/tcpip"
+	"gvisor.dev/gvisor/pkg/tcpip/checksum"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 )
@@ -25,6 +26,12 @@ const (
 	captureOff captureMode = iota
 	captureAll
 	captureApps
+	// captureListeners captures traffic through one or more SOCKS5
+	// listeners (see socks5_listener.go), selected by listener ID rather
+	// than app UID - a listener-originated connection has no owning
+	// Android app to attribute. See observeListenerConn's doc comment for
+	// how this differs from captureAll/captureApps under the hood.
+	captureListeners
 )
 
 // defaultCaptureMaxBytes bounds a single capture file. 32MB is generous for
@@ -57,10 +64,11 @@ type flowKey struct {
 type packetCapture struct {
 	mode int32 // captureMode, accessed via sync/atomic
 
-	mu       sync.RWMutex
-	appUIDs  map[int32]bool
-	appNames map[int32]string // UID -> human-readable app name/label, for per-packet comments
-	file     *pcapFile
+	mu          sync.RWMutex
+	appUIDs     map[int32]bool
+	appNames    map[int32]string // UID -> human-readable app name/label, for per-packet comments
+	listenerIDs map[string]bool  // selected SOCKS5 listener IDs, captureListeners mode only
+	file        *pcapFile
 
 	flowsMu sync.RWMutex
 	flows   map[flowKey]int32 // -> AppUID
@@ -68,9 +76,10 @@ type packetCapture struct {
 
 func newPacketCapture() *packetCapture {
 	return &packetCapture{
-		appUIDs:  make(map[int32]bool),
-		appNames: make(map[int32]string),
-		flows:    make(map[flowKey]int32),
+		appUIDs:     make(map[int32]bool),
+		appNames:    make(map[int32]string),
+		listenerIDs: make(map[string]bool),
+		flows:       make(map[flowKey]int32),
 	}
 }
 
@@ -85,7 +94,7 @@ func newPacketCapture() *packetCapture {
 // per-packet comment regardless of mode, so "All traffic" captures are just
 // as attributable as "Selected apps" ones once opened in a pcapng-aware
 // tool. A UID with no entry falls back to "uid:N" in the comment.
-func (c *packetCapture) start(mode captureMode, appUIDsCSV, appNamesLines, path string, maxBytes int64) error {
+func (c *packetCapture) start(mode captureMode, appUIDsCSV, listenerIDsCSV, appNamesLines, path string, maxBytes int64) error {
 	if maxBytes <= 0 {
 		maxBytes = defaultCaptureMaxBytes
 	}
@@ -103,6 +112,15 @@ func (c *packetCapture) start(mode captureMode, appUIDsCSV, appNamesLines, path 
 		if v, err := strconv.ParseInt(tok, 10, 32); err == nil {
 			uids[int32(v)] = true
 		}
+	}
+
+	listenerIDs := make(map[string]bool)
+	for _, tok := range strings.Split(listenerIDsCSV, ",") {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			continue
+		}
+		listenerIDs[tok] = true
 	}
 
 	names := make(map[int32]string)
@@ -125,6 +143,7 @@ func (c *packetCapture) start(mode captureMode, appUIDsCSV, appNamesLines, path 
 	c.file = f
 	c.appUIDs = uids
 	c.appNames = names
+	c.listenerIDs = listenerIDs
 	c.mu.Unlock()
 
 	storeCaptureMode(&c.mode, mode)
@@ -314,6 +333,124 @@ func parseFiveTuple(data []byte) (proto string, src, dst netip.AddrPort, ok bool
 	}
 }
 
+// syntheticTCPStream tracks per-direction TCP sequence/ack state for one
+// SOCKS5-listener connection's synthesized capture, and the connection's two
+// real endpoint addresses. See observeListenerConn for why this exists.
+type syntheticTCPStream struct {
+	clientAddr   netip.AddrPort
+	upstreamAddr netip.AddrPort
+	clientSeq    atomic.Uint32 // bytes sent client -> upstream so far
+	upstreamSeq  atomic.Uint32 // bytes sent upstream -> client so far
+	ipID         atomic.Uint32
+}
+
+// newSyntheticTCPStream starts a synthesized capture stream for one SOCKS5
+// listener connection. clientAddr and upstreamAddr are the real observed
+// endpoints (the accepted client conn's RemoteAddr, and the dialed upstream
+// conn's own address pair) - only the IP/TCP framing around them is
+// synthesized, not the addresses or payload bytes.
+func newSyntheticTCPStream(clientAddr, upstreamAddr netip.AddrPort) *syntheticTCPStream {
+	return &syntheticTCPStream{clientAddr: clientAddr, upstreamAddr: upstreamAddr}
+}
+
+// observeListenerConn feeds one direction's copied bytes from a SOCKS5
+// listener connection into the active capture session, if it is in
+// captureListeners mode and this listener is selected.
+//
+// Unlike observe() (the TUN dataplane hot path used by captureAll/
+// captureApps), a SOCKS5 listener's traffic never crosses this engine's own
+// VPN TUN/captureLinkEndpoint at all: each listener dials its configured
+// upstream directly - a tailnet's own tsnet.Server netstack, or the
+// protected dialer for @direct/WireGuard - which is a separate network
+// stack from the one captureLinkEndpoint wraps. There is no real wire
+// packet available to tap for this traffic.
+//
+// So each call here synthesizes one IPv4/TCP segment carrying the copied
+// bytes, addressed with the real observed endpoints (the SOCKS5 client's
+// address and the upstream dial's own address) and a monotonically
+// increasing per-direction sequence number, so the result is still a
+// normal, Wireshark-openable pcapng capture with an accurate byte-for-byte
+// payload - it is a synthesized reconstruction of the byte stream, not a
+// passive tap of packets that existed on some wire. See
+// validation_and_gaps.md for the explicit call-out. IPv6 endpoints are
+// skipped (not supported yet) rather than mis-encoded.
+func (c *packetCapture) observeListenerConn(listenerID string, stream *syntheticTCPStream, payload []byte, clientToUpstream bool) {
+	if loadCaptureMode(&c.mode) != captureListeners || len(payload) == 0 {
+		return
+	}
+	if !stream.clientAddr.Addr().Is4() || !stream.upstreamAddr.Addr().Is4() {
+		return
+	}
+
+	c.mu.RLock()
+	selected := c.listenerIDs[listenerID]
+	f := c.file
+	c.mu.RUnlock()
+	if !selected || f == nil {
+		return
+	}
+
+	pkt := buildSyntheticTCPSegment(stream, payload, clientToUpstream)
+	if pkt == nil {
+		return
+	}
+	f.write(pkt, time.Now(), "listener:"+listenerID)
+}
+
+// buildSyntheticTCPSegment builds one IPv4/TCP segment (valid header
+// checksums included) carrying payload in the given direction of stream,
+// advancing that direction's sequence number by len(payload). See
+// observeListenerConn's doc comment for why this is synthesized rather than
+// captured from a real wire.
+func buildSyntheticTCPSegment(stream *syntheticTCPStream, payload []byte, clientToUpstream bool) []byte {
+	var srcAddr, dstAddr netip.AddrPort
+	var seq, ack *atomic.Uint32
+	if clientToUpstream {
+		srcAddr, dstAddr = stream.clientAddr, stream.upstreamAddr
+		seq, ack = &stream.clientSeq, &stream.upstreamSeq
+	} else {
+		srcAddr, dstAddr = stream.upstreamAddr, stream.clientAddr
+		seq, ack = &stream.upstreamSeq, &stream.clientSeq
+	}
+
+	totalLen := header.IPv4MinimumSize + header.TCPMinimumSize + len(payload)
+	buf := make([]byte, totalLen)
+	srcTCPIP := tcpip.AddrFrom4(srcAddr.Addr().As4())
+	dstTCPIP := tcpip.AddrFrom4(dstAddr.Addr().As4())
+
+	ip := header.IPv4(buf)
+	ip.Encode(&header.IPv4Fields{
+		TotalLength: uint16(totalLen),
+		ID:          uint16(stream.ipID.Add(1)),
+		TTL:         64,
+		Protocol:    uint8(header.TCPProtocolNumber),
+		SrcAddr:     srcTCPIP,
+		DstAddr:     dstTCPIP,
+	})
+	ip.SetChecksum(0)
+	ip.SetChecksum(^checksum.Checksum(ip[:header.IPv4MinimumSize], 0))
+
+	seqNum := seq.Add(uint32(len(payload))) - uint32(len(payload))
+	tcpHdr := header.TCP(buf[header.IPv4MinimumSize:])
+	tcpHdr.Encode(&header.TCPFields{
+		SrcPort:    srcAddr.Port(),
+		DstPort:    dstAddr.Port(),
+		SeqNum:     seqNum,
+		AckNum:     ack.Load(),
+		DataOffset: header.TCPMinimumSize,
+		Flags:      header.TCPFlagAck | header.TCPFlagPsh,
+		WindowSize: 65535,
+	})
+	copy(buf[header.IPv4MinimumSize+header.TCPMinimumSize:], payload)
+
+	tcpHdr.SetChecksum(0)
+	pseudo := header.PseudoHeaderChecksum(header.TCPProtocolNumber, srcTCPIP, dstTCPIP, uint16(header.TCPMinimumSize+len(payload)))
+	xsum := checksum.Checksum(buf[header.IPv4MinimumSize:], pseudo)
+	tcpHdr.SetChecksum(^xsum)
+
+	return buf
+}
+
 // captureLinkEndpoint decorates a stack.LinkEndpoint exactly the way
 // countingLinkEndpoint does (see tun_interceptor.go, which this is
 // deliberately kept parallel to), feeding every packet crossing the TUN in
@@ -370,7 +507,7 @@ func (c *captureLinkEndpoint) Attach(dispatcher stack.NetworkDispatcher) {
 // here falls back to "uid:N" in the comment. Any previous capture is
 // stopped first.
 func (e *Engine) StartPacketCaptureAll(path string, maxBytes int64, appNamesLines string) error {
-	return e.capture.start(captureAll, "", appNamesLines, path, maxBytes)
+	return e.capture.start(captureAll, "", "", appNamesLines, path, maxBytes)
 }
 
 // StartPacketCaptureApps begins capturing only packets attributed to one of
@@ -382,7 +519,18 @@ func (e *Engine) StartPacketCaptureAll(path string, maxBytes int64, appNamesLine
 // appNamesLines is the same "uid:name" per-line mapping StartPacketCaptureAll
 // takes, used for per-packet comments.
 func (e *Engine) StartPacketCaptureApps(appUIDsCSV, path string, maxBytes int64, appNamesLines string) error {
-	return e.capture.start(captureApps, appUIDsCSV, appNamesLines, path, maxBytes)
+	return e.capture.start(captureApps, appUIDsCSV, "", appNamesLines, path, maxBytes)
+}
+
+// StartPacketCaptureSOCKS5Listeners begins capturing only traffic through
+// one of listenerIDsCSV (comma-separated SOCKS5ListenerConfig.IDs, the same
+// CSV convention StartPacketCaptureApps uses for UIDs). See
+// observeListenerConn for why this capture is synthesized from each
+// listener connection's copied bytes rather than tapped from the TUN the
+// way captureAll/captureApps are, and why it currently only supports IPv4
+// listener/upstream endpoints.
+func (e *Engine) StartPacketCaptureSOCKS5Listeners(listenerIDsCSV, path string, maxBytes int64) error {
+	return e.capture.start(captureListeners, "", listenerIDsCSV, "", path, maxBytes)
 }
 
 // StopPacketCapture ends the active capture session, if any, and closes its

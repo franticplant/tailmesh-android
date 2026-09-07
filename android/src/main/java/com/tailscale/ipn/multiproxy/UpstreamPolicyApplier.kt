@@ -6,6 +6,9 @@ package com.tailscale.ipn.multiproxy
 import android.content.Context
 import android.content.pm.PackageManager
 import com.tailscale.ipn.multiproxy.db.AppBindingRepository
+import com.tailscale.ipn.multiproxy.db.ProfileRepository
+import com.tailscale.ipn.multiproxy.db.ProvisioningState
+import com.tailscale.ipn.multiproxy.db.SOCKS5ListenerRepository
 import com.tailscale.ipn.multiproxy.db.Upstream
 import com.tailscale.ipn.multiproxy.db.UpstreamKind
 import com.tailscale.ipn.multiproxy.db.UpstreamRepository
@@ -30,8 +33,10 @@ class UpstreamPolicyApplier(
     context: Context,
     private val upstreams: UpstreamRepository,
     private val bindings: AppBindingRepository,
+    private val listeners: SOCKS5ListenerRepository,
     private val secrets: UpstreamSecretStore,
     private val settings: RoutingSettings,
+    private val profiles: ProfileRepository,
 ) {
   private val packageManager: PackageManager = context.applicationContext.packageManager
 
@@ -40,6 +45,7 @@ class UpstreamPolicyApplier(
     removeStale(engine, desired)
     register(engine, desired)
     applyPolicy(engine)
+    applySOCKS5Listeners(engine)
   }
 
   /**
@@ -221,6 +227,69 @@ class UpstreamPolicyApplier(
       engine.setPolicyJSON(policy)
     } catch (e: Exception) {
       TSLog.e(TAG, "could not apply routing policy: $e")
+    }
+  }
+
+  /**
+   * Reconciles configured SOCKS5 listeners (multiproxy_policy_facade.go's
+   * AddSOCKS5Listener/RemoveSOCKS5Listener) into the running engine - the listener counterpart of
+   * [register]/[removeStale] for upstreams.
+   *
+   * A listener is only registered while the user has it switched on *and* its upstream is currently
+   * one this session considers enabled - a tailnet or non-tailnet upstream the user has toggled
+   * off, or `@direct`, which is always available. This is the "treat a listener as a workload
+   * identity like an app" behaviour: disabling the tailnet a listener hands out stops that listener
+   * rather than leaving it accepting connections that can only fail per-connection (see
+   * SOCKS5ListenerConfig.Upstream's own doc comment on that low-level fallback). Because this runs
+   * from every [apply] call - which MultiProxySessionCoordinator's tailnet enable/disable path also
+   * triggers - a listener whose upstream comes back stops being filtered out on the very next
+   * reconciliation and gets re-added automatically, with no separate "resume" step needed.
+   */
+  private fun applySOCKS5Listeners(engine: MultiProxyEngine) {
+    val availableUpstreamIds = buildSet {
+      add(Libtailscale.multiProxyDirectUpstreamID())
+      profiles.profiles.value
+          .filter { it.enabled && it.provisioningState == ProvisioningState.READY }
+          .forEach { add(it.id) }
+      upstreams.getAllImmediate().filter { it.enabled }.forEach { add(it.id) }
+    }
+    val desired =
+        listeners.getAllImmediate().filter { it.enabled && it.upstream in availableUpstreamIds }
+    val desiredIds = desired.map { it.id }.toSet()
+
+    val registered =
+        try {
+          JSONArray(engine.getSOCKS5ListenersJSON())
+        } catch (e: Exception) {
+          TSLog.e(TAG, "could not read registered SOCKS5 listeners: $e")
+          return
+        }
+    for (i in 0 until registered.length()) {
+      val id = registered.optJSONObject(i)?.optString("id") ?: continue
+      if (id.isEmpty() || id in desiredIds) continue
+      try {
+        engine.removeSOCKS5Listener(id)
+      } catch (e: Exception) {
+        TSLog.e(TAG, "could not remove SOCKS5 listener $id: $e")
+      }
+    }
+
+    for (listener in desired) {
+      val auth =
+          if (listener.hasAuth) secrets.getListenerAuth(listener.id)?.let { JSONObject(it) }
+          else null
+      try {
+        engine.addSOCKS5Listener(
+            listener.id,
+            listener.bindAddr,
+            listener.port,
+            listener.upstream,
+            auth?.optString("username") ?: "",
+            auth?.optString("password") ?: "",
+        )
+      } catch (e: Exception) {
+        TSLog.e(TAG, "could not register SOCKS5 listener ${listener.id}: $e")
+      }
     }
   }
 

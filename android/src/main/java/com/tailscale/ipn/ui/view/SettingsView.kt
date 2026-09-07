@@ -137,6 +137,12 @@ fun SettingsView(
               onClick = settingsNav.onNavigateToPacketCapture)
 
           Lists.ItemDivider()
+          Setting.Text(
+              title = stringResource(R.string.socks5_listeners),
+              subtitle = stringResource(R.string.socks5_listeners_subtitle),
+              onClick = settingsNav.onNavigateToSOCKS5Listeners)
+
+          Lists.ItemDivider()
           Setting.Switch(
               title = "Proxy-Only Mode (No VPN)",
               subtitle = "Connect to Tailnet without intercepting device traffic",
@@ -446,5 +452,6 @@ fun SettingsPreview() {
   vm.tailNetLockEnabled.set(true)
   vm.isAdmin.set(true)
   vm.managedByOrganization.set("Tails and Scales Inc.")
-  SettingsView(SettingsNav({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}), vm)
+  SettingsView(
+      SettingsNav({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}), vm)
 }

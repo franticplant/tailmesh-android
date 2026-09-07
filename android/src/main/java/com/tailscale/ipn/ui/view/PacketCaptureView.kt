@@ -26,6 +26,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -57,6 +58,7 @@ private enum class CaptureMode {
   OFF,
   ALL,
   APPS,
+  LISTENERS,
 }
 
 private fun capturesDir(context: android.content.Context): File {
@@ -94,6 +96,8 @@ fun PacketCaptureView(backToSettings: BackNavigation) {
 
   var searchQuery by rememberSaveable { mutableStateOf("") }
   var selectedPackages by rememberSaveable { mutableStateOf(setOf<String>()) }
+  var selectedListenerIds by rememberSaveable { mutableStateOf(setOf<String>()) }
+  val listeners by App.get().multiProxySession.socks5ListenerRepository.listeners.collectAsState()
 
   val installedAppsManager = remember { InstalledAppsManager(App.get().packageManager) }
   val installedApps = remember { installedAppsManager.fetchInstalledApps() }
@@ -169,6 +173,9 @@ fun PacketCaptureView(backToSettings: BackNavigation) {
           e.startPacketCaptureApps(
               uids.joinToString(","), file.absolutePath, captureMaxBytes, names)
         }
+        CaptureMode.LISTENERS ->
+            e.startPacketCaptureSOCKS5Listeners(
+                selectedListenerIds.joinToString(","), file.absolutePath, captureMaxBytes)
         CaptureMode.OFF -> return
       }
       capturePath = file.absolutePath
@@ -248,6 +255,12 @@ fun PacketCaptureView(backToSettings: BackNavigation) {
               onClick = { mode = CaptureMode.APPS },
               label = { Text(stringResource(R.string.packet_capture_mode_apps)) },
           )
+          FilterChip(
+              selected = mode == CaptureMode.LISTENERS,
+              enabled = !isCapturing,
+              onClick = { mode = CaptureMode.LISTENERS },
+              label = { Text(stringResource(R.string.packet_capture_mode_listeners)) },
+          )
         }
       }
 
@@ -278,16 +291,50 @@ fun PacketCaptureView(backToSettings: BackNavigation) {
         }
       }
 
+      if (mode == CaptureMode.LISTENERS && !isCapturing) {
+        if (listeners.isEmpty()) {
+          item("listenersEmpty") {
+            ListItem(
+                headlineContent = { Text(stringResource(R.string.packet_capture_listeners_empty)) })
+          }
+        } else {
+          items(listeners, key = { it.id }) { listener ->
+            ListItem(
+                headlineContent = { Text("${listener.bindAddr}:${listener.port}") },
+                supportingContent = { Text(listener.upstream) },
+                leadingContent = {
+                  Checkbox(
+                      checked = selectedListenerIds.contains(listener.id),
+                      onCheckedChange = { checked ->
+                        selectedListenerIds =
+                            if (checked) selectedListenerIds + listener.id
+                            else selectedListenerIds - listener.id
+                      })
+                },
+            )
+          }
+        }
+      }
+
       item("startStop") {
         Row(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
           if (!isCapturing) {
-            val disabled = mode == CaptureMode.APPS && selectedPackages.isEmpty()
+            val noAppsSelected = mode == CaptureMode.APPS && selectedPackages.isEmpty()
+            val noListenersSelected = mode == CaptureMode.LISTENERS && selectedListenerIds.isEmpty()
+            val disabled = noAppsSelected || noListenersSelected
             Button(onClick = { startCapture() }, enabled = !disabled) {
               Text(stringResource(R.string.packet_capture_start))
             }
-            if (disabled) {
+            if (noAppsSelected) {
               Text(
                   stringResource(R.string.packet_capture_no_apps_selected),
+                  style = MaterialTheme.typography.bodySmall,
+                  modifier = Modifier.padding(start = 12.dp),
+                  color = MaterialTheme.colorScheme.error)
+            }
+            if (noListenersSelected) {
+              Text(
+                  stringResource(R.string.packet_capture_no_listeners_selected),
                   style = MaterialTheme.typography.bodySmall,
                   modifier = Modifier.padding(start = 12.dp),
                   color = MaterialTheme.colorScheme.error)
