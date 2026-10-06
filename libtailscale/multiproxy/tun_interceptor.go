@@ -170,6 +170,40 @@ func (c *countingLinkEndpoint) Attach(dispatcher stack.NetworkDispatcher) {
 	c.LinkEndpoint.Attach(&countingDispatcher{NetworkDispatcher: dispatcher, dp: c.dp})
 }
 
+// attributionLinkEndpoint decorates a stack.LinkEndpoint exactly the way
+// countingLinkEndpoint does, feeding every inbound (TUN RX) packet to
+// Engine.beginEarlyAttribution before the stack demuxes it toward a
+// TCP/UDP forwarder - see uid_early.go's doc comment for why running this
+// as early as possible, ahead of forwarder queueing, matters.
+type attributionLinkEndpoint struct {
+	stack.LinkEndpoint
+	e *Engine
+}
+
+func wrapAttributionEndpoint(real stack.LinkEndpoint, e *Engine) stack.LinkEndpoint {
+	return &attributionLinkEndpoint{LinkEndpoint: real, e: e}
+}
+
+type attributionDispatcher struct {
+	stack.NetworkDispatcher
+	e *Engine
+}
+
+func (a *attributionDispatcher) DeliverNetworkPacket(protocol tcpip.NetworkProtocolNumber, pkt *stack.PacketBuffer) {
+	v := pkt.ToView()
+	a.e.beginEarlyAttribution(v.AsSlice())
+	v.Release()
+	a.NetworkDispatcher.DeliverNetworkPacket(protocol, pkt)
+}
+
+func (a *attributionLinkEndpoint) Attach(dispatcher stack.NetworkDispatcher) {
+	if dispatcher == nil {
+		a.LinkEndpoint.Attach(nil)
+		return
+	}
+	a.LinkEndpoint.Attach(&attributionDispatcher{NetworkDispatcher: dispatcher, e: a.e})
+}
+
 // bindVPNStackLocked constructs the gVisor stack, attaches linkEP as its
 // sole NIC, and wires the TCP/UDP forwarders into this Engine. Callers must
 // hold e.vpnMu and must have already verified no VPN stack is running.
@@ -246,7 +280,8 @@ func (e *Engine) StartVPN(fd int32, mtu int32) error {
 
 	countedLink := wrapCountingEndpoint(linkID, &e.obs.dp)
 	capturedLink := wrapCaptureEndpoint(countedLink, e.capture)
-	if err := e.bindVPNStackLocked(capturedLink); err != nil {
+	attributedLink := wrapAttributionEndpoint(capturedLink, e)
+	if err := e.bindVPNStackLocked(attributedLink); err != nil {
 		closeFD()
 		return err
 	}

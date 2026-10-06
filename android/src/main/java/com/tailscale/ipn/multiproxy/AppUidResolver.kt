@@ -5,10 +5,10 @@ package com.tailscale.ipn.multiproxy
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.InetAddresses
 import android.os.Process
 import android.system.OsConstants
 import com.tailscale.ipn.util.TSLog
-import java.net.InetAddress
 import java.net.InetSocketAddress
 import libtailscale.MultiProxyUIDResolver
 
@@ -63,8 +63,16 @@ class AppUidResolver(context: Context) : MultiProxyUIDResolver {
     return try {
       // getConnectionOwnerUid names the ends from the querying app's point of view: "local" is the
       // socket's own address, which for the flow we intercepted is the originating app's source.
-      val local = InetSocketAddress(InetAddress.getByName(srcIP), srcPort)
-      val remote = InetSocketAddress(InetAddress.getByName(dstIP), dstPort)
+      //
+      // srcIP/dstIP are always already-literal IP strings (the Go side never passes a hostname
+      // here) - InetAddresses.parseNumericAddress parses one directly, with no DNS-capable
+      // fallback path, unlike InetAddress.getByName, which runs every call through
+      // hostname-or-literal detection and validation built for the general case even though a
+      // literal is guaranteed here. This lookup is racing against a socket's port being reused by
+      // a different app (see resolveAppUID's doc comment on the Go side), so shaving real, if
+      // modest, time off every call here narrows that race a little further, for free.
+      val local = InetSocketAddress(InetAddresses.parseNumericAddress(srcIP), srcPort)
+      val remote = InetSocketAddress(InetAddresses.parseNumericAddress(dstIP), dstPort)
 
       when (val uid = cm.getConnectionOwnerUid(ipProtocol, local, remote)) {
         Process.INVALID_UID -> UNKNOWN_UID

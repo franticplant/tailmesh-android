@@ -18,6 +18,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
@@ -237,6 +238,28 @@ type Engine struct {
 	// runs once StartPacketCaptureAll/Apps is called.
 	capture *packetCapture
 
+	// earlyUID lets app-UID attribution for a flow start the moment its
+	// first packet is read off the TUN, before gVisor queues it for
+	// TCP/UDP forwarder dispatch - see uid_early.go's doc comment for why
+	// that timing matters. Always non-nil once NewEngineWithStateStore
+	// returns; attribution itself only runs when policyUsesAppUID is true.
+	earlyUID *earlyUIDCache
+
+	// directIPv6Usable, when set, answers the same question Android's
+	// NetworkChangeCallback.pickNetworkForDial(isIPv6=true) already answers
+	// on the dial path (see SetDirectDialer/directProvider.Dial and
+	// ErrNoUsableNetworkForFamily): whether the device's current network can
+	// actually carry a direct IPv6 dial right now. handleTCPConnection
+	// consults it *before* accepting a virtual IPv6 flow bound for @direct,
+	// so a doomed dial is rejected at the SYN instead of being accepted,
+	// ACKed, and only reset once the dial - which happens after the fact -
+	// fails; see validation_and_gaps.md §93 for why checking this only at
+	// dial time still leaves a client-visible accept-then-reset window even
+	// once the dial itself fails fast. nil (the default, e.g. non-Android
+	// builds and tests) means "unknown", so nothing is rejected on this
+	// account - the existing dial-time check remains the fallback.
+	directIPv6Usable atomic.Pointer[func() bool]
+
 	upstreamDNS string
 
 	// Target Directory & DNS State
@@ -299,6 +322,7 @@ func NewEngineWithStateStore(dataDir string, cb EngineCallback, stateStoreFor fu
 		uids:      newUIDRegistry(),
 		policy:    &policyStore{},
 		capture:   newPacketCapture(),
+		earlyUID:  newEarlyUIDCache(),
 	}
 	e.obs = newObservability(e)
 

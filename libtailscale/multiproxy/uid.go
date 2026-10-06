@@ -25,14 +25,19 @@ type UIDResolver interface {
 	ResolveUID(protocol, srcIP string, srcPort int32, dstIP string, dstPort int32) int32
 }
 
-// uidResolveAttemptTimeout bounds a single attribution attempt, and
-// uidResolveMaxAttempts is how many attempts resolveAppUID makes before
-// giving up. A UDP DNS query's own socket in particular can already be gone
-// by the time a first getConnectionOwnerUid call lands (send-and-close is
-// common), so one retry meaningfully cuts the false-negative rate without
-// materially changing new-flow latency - worst case is
-// uidResolveMaxAttempts*uidResolveAttemptTimeout, a modest increase over the
-// old single 150ms budget, paid once per new flow, never per packet.
+// uidResolveAttemptTimeout bounds a single raw ResolveUID call, and
+// uidResolveMaxAttempts is how many attribution attempts resolveAppUID
+// makes before giving up. A UDP DNS query's own socket in particular can
+// already be gone by the time a first getConnectionOwnerUid call lands
+// (send-and-close is common), so one retry meaningfully cuts the
+// false-negative rate without materially changing new-flow latency in the
+// common (successful, first-try) case. Worst case, reached only when every
+// attempt genuinely finds nothing, is up to
+// uidResolveMaxAttempts*3*uidResolveAttemptTimeout for UDP (see
+// resolveAppUIDOnce's destination-variant retries) or
+// uidResolveMaxAttempts*uidResolveAttemptTimeout for TCP - paid once per new
+// flow, never per packet, and only on the path that was already going to
+// resolve to UnknownAppUID regardless.
 const (
 	uidResolveAttemptTimeout = 90 * time.Millisecond
 	uidResolveMaxAttempts    = 2
@@ -97,9 +102,51 @@ func (e *Engine) resolveAppUID(protocol string, src, dst netip.AddrPort) int32 {
 	return UnknownAppUID
 }
 
-// resolveAppUIDOnce makes one attribution attempt, bounded by
-// uidResolveAttemptTimeout.
+// resolveAppUIDOnce makes one attribution attempt. For UDP, a plain miss is
+// retried against two alternate destinations before giving up - see their
+// doc comment below - so this can cost up to 3 calls, each bounded by
+// uidResolveAttemptTimeout; for TCP (and any miss that succeeds on the
+// first try) it is exactly the one call the name suggests.
 func (e *Engine) resolveAppUIDOnce(r UIDResolver, protocol string, src, dst netip.AddrPort) int32 {
+	if uid := e.resolveAppUIDOnceExact(r, protocol, src, dst); uid != UnknownAppUID {
+		return uid
+	}
+	if protocol != "udp" {
+		return UnknownAppUID
+	}
+
+	// An *unconnected* UDP socket - exactly what a send-and-close DNS query
+	// uses - can be recorded in the kernel's owner table with its
+	// destination fields not yet populated by the time this runs, so a
+	// lookup keyed on the exact destination this engine observed sometimes
+	// matches nothing even though the socket is right there - a distinct
+	// failure mode from the live-table race resolveAppUID's own doc comment
+	// describes (that one returns a *wrong* answer; this one returns no
+	// answer for a socket that is still genuinely there). Retrying with the
+	// destination port zeroed, then with the destination address replaced
+	// by the unspecified address (0.0.0.0/::) too, mirrors the exact
+	// fallback ladder RethinkDNS's Firestack engine uses for the same
+	// Android API (ConnectionTracer.kt's getUidQ/retryRequired) - confirmed
+	// against their source rather than assumed, since it is the only other
+	// production Android VPN engine attributing flows the same way.
+	if uid := e.resolveAppUIDOnceExact(r, protocol, src, netip.AddrPortFrom(dst.Addr(), 0)); uid != UnknownAppUID {
+		return uid
+	}
+	return e.resolveAppUIDOnceExact(r, protocol, src, netip.AddrPortFrom(unspecifiedLike(dst.Addr()), 0))
+}
+
+// unspecifiedLike returns the unspecified address (0.0.0.0 or ::) in the
+// same family as a.
+func unspecifiedLike(a netip.Addr) netip.Addr {
+	if a.Is4() {
+		return netip.IPv4Unspecified()
+	}
+	return netip.IPv6Unspecified()
+}
+
+// resolveAppUIDOnceExact makes one attribution attempt against exactly the
+// 5-tuple given, bounded by uidResolveAttemptTimeout.
+func (e *Engine) resolveAppUIDOnceExact(r UIDResolver, protocol string, src, dst netip.AddrPort) int32 {
 	// Buffered so the goroutine can always finish and be collected even if we
 	// stopped waiting for it.
 	result := make(chan int32, 1)

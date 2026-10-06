@@ -35,7 +35,18 @@ func (e *Engine) flowFromEndpointID(protocol string, id stack.TransportEndpointI
 	// JNI, so not paying for it when the policy has no UID-scoped rule keeps the
 	// common case free.
 	if e.policyUsesAppUID() {
-		f.AppUID = e.resolveAppUID(protocol, src, dst)
+		// beginEarlyAttribution (uid_early.go) may already have started - or
+		// finished - this exact lookup when the flow's first packet was
+		// dispatched off the TUN, before gVisor ever queued it for the
+		// forwarder callback that reaches here. Reusing that answer instead
+		// of starting a fresh one now avoids adding this call chain's own
+		// queueing/scheduling delay on top of the OS lookup's race window -
+		// see uid_early.go's doc comment.
+		if uid, ok := e.earlyUID.take(flowKey{protocol, src, dst}); ok {
+			f.AppUID = uid
+		} else {
+			f.AppUID = e.resolveAppUID(protocol, src, dst)
+		}
 		if f.AppUID == UnknownAppUID {
 			// A UID-scoped rule exists, but this specific flow couldn't be
 			// attributed to an app - it can now only match a broader rule
