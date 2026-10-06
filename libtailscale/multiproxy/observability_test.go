@@ -15,17 +15,17 @@ func TestDataplaneCountersAddRxTx(t *testing.T) {
 	dp.addRx(50)
 	dp.addTx(30)
 
-	if dp.tunRxBytes != 150 {
-		t.Fatalf("tunRxBytes = %d, want 150", dp.tunRxBytes)
+	if dp.tunRxBytes.Load() != 150 {
+		t.Fatalf("tunRxBytes = %d, want 150", dp.tunRxBytes.Load())
 	}
-	if dp.tunRxPackets != 2 {
-		t.Fatalf("tunRxPackets = %d, want 2", dp.tunRxPackets)
+	if dp.tunRxPackets.Load() != 2 {
+		t.Fatalf("tunRxPackets = %d, want 2", dp.tunRxPackets.Load())
 	}
-	if dp.tunTxBytes != 30 {
-		t.Fatalf("tunTxBytes = %d, want 30", dp.tunTxBytes)
+	if dp.tunTxBytes.Load() != 30 {
+		t.Fatalf("tunTxBytes = %d, want 30", dp.tunTxBytes.Load())
 	}
-	if dp.tunTxPackets != 1 {
-		t.Fatalf("tunTxPackets = %d, want 1", dp.tunTxPackets)
+	if dp.tunTxPackets.Load() != 1 {
+		t.Fatalf("tunTxPackets = %d, want 1", dp.tunTxPackets.Load())
 	}
 }
 
@@ -42,11 +42,11 @@ func TestUIDRegistryIsolation(t *testing.T) {
 	a.addBytesOut(10)
 	b.addBytesIn(5)
 
-	if a.bytesIn != 100 || a.bytesOut != 10 {
-		t.Fatalf("uid 1001 counters wrong: in=%d out=%d", a.bytesIn, a.bytesOut)
+	if a.bytesIn.Load() != 100 || a.bytesOut.Load() != 10 {
+		t.Fatalf("uid 1001 counters wrong: in=%d out=%d", a.bytesIn.Load(), a.bytesOut.Load())
 	}
-	if b.bytesIn != 5 || b.bytesOut != 0 {
-		t.Fatalf("uid 1002 counters wrong (bled from uid 1001?): in=%d out=%d", b.bytesIn, b.bytesOut)
+	if b.bytesIn.Load() != 5 || b.bytesOut.Load() != 0 {
+		t.Fatalf("uid 1002 counters wrong (bled from uid 1001?): in=%d out=%d", b.bytesIn.Load(), b.bytesOut.Load())
 	}
 
 	// Re-fetching the same UID must return the same object, not a new one.
@@ -66,26 +66,26 @@ func TestUpstreamStatsFlowCounters(t *testing.T) {
 
 	s.beginTCPFlow()
 	s.beginTCPFlow()
-	if s.activeTCP != 2 || s.tcpFlowsTotal != 2 {
-		t.Fatalf("after 2 begins: activeTCP=%d tcpFlowsTotal=%d, want 2,2", s.activeTCP, s.tcpFlowsTotal)
+	if s.activeTCP.Load() != 2 || s.tcpFlowsTotal.Load() != 2 {
+		t.Fatalf("after 2 begins: activeTCP=%d tcpFlowsTotal=%d, want 2,2", s.activeTCP.Load(), s.tcpFlowsTotal.Load())
 	}
 	s.endTCPFlow()
-	if s.activeTCP != 1 || s.tcpFlowsTotal != 2 {
-		t.Fatalf("after 1 end: activeTCP=%d tcpFlowsTotal=%d, want 1,2", s.activeTCP, s.tcpFlowsTotal)
+	if s.activeTCP.Load() != 1 || s.tcpFlowsTotal.Load() != 2 {
+		t.Fatalf("after 1 end: activeTCP=%d tcpFlowsTotal=%d, want 1,2", s.activeTCP.Load(), s.tcpFlowsTotal.Load())
 	}
 
 	s.beginUDPFlow()
-	if s.activeUDP != 1 || s.udpFlowsTotal != 1 {
-		t.Fatalf("after 1 UDP begin: activeUDP=%d udpFlowsTotal=%d, want 1,1", s.activeUDP, s.udpFlowsTotal)
+	if s.activeUDP.Load() != 1 || s.udpFlowsTotal.Load() != 1 {
+		t.Fatalf("after 1 UDP begin: activeUDP=%d udpFlowsTotal=%d, want 1,1", s.activeUDP.Load(), s.udpFlowsTotal.Load())
 	}
 	s.endUDPFlow()
-	if s.activeUDP != 0 || s.udpFlowsTotal != 1 {
-		t.Fatalf("after 1 UDP end: activeUDP=%d udpFlowsTotal=%d, want 0,1", s.activeUDP, s.udpFlowsTotal)
+	if s.activeUDP.Load() != 0 || s.udpFlowsTotal.Load() != 1 {
+		t.Fatalf("after 1 UDP end: activeUDP=%d udpFlowsTotal=%d, want 0,1", s.activeUDP.Load(), s.udpFlowsTotal.Load())
 	}
 
 	// TCP and UDP counters must not interfere with each other.
-	if s.activeTCP != 1 {
-		t.Fatalf("UDP begin/end affected activeTCP: got %d, want 1", s.activeTCP)
+	if s.activeTCP.Load() != 1 {
+		t.Fatalf("UDP begin/end affected activeTCP: got %d, want 1", s.activeTCP.Load())
 	}
 }
 
@@ -166,7 +166,7 @@ func TestObservabilitySnapshotJSONIsValid(t *testing.T) {
 	uid := e.uidStatsFor(4242)
 	uid.addBytesIn(1000)
 	uid.addBytesOut(500)
-	uid.tcpFlows = 1
+	uid.tcpFlows.Store(1)
 
 	js := e.GetObservabilitySnapshotJSON()
 	if js == "" || js == "{}" {

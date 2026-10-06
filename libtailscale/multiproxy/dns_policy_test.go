@@ -385,7 +385,7 @@ func TestUnattributedQueryFailsClosedWhenPolicyUsesAppUID(t *testing.T) {
 		t.Fatalf("unattributed query reached an upstream instead of failing closed: %q", got)
 	default:
 	}
-	if got := e.obs.dp.dnsAttributionFailClosed; got != 1 {
+	if got := e.obs.dp.dnsAttributionFailClosed.Load(); got != 1 {
 		t.Fatalf("dnsAttributionFailClosed = %d, want 1", got)
 	}
 }
@@ -408,7 +408,7 @@ func TestUnattributedQueryStillWorksWithNoUIDScopedRules(t *testing.T) {
 	req := new(dns.Msg)
 	req.SetQuestion("example.com.", dns.TypeA)
 	e.handleDNSMsg(req, "udp", FlowInfo{Protocol: "udp", AppUID: UnknownAppUID})
-	if got := e.obs.dp.dnsAttributionFailClosed; got != 0 {
+	if got := e.obs.dp.dnsAttributionFailClosed.Load(); got != 0 {
 		t.Fatalf("dnsAttributionFailClosed = %d, want 0 (no rule is UID-scoped)", got)
 	}
 }

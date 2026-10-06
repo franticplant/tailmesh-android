@@ -13,7 +13,6 @@ import (
 	"net"
 	"net/netip"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"tailscale.com/tsnet"
@@ -453,7 +452,7 @@ func routeDecisionMetaJSON(flow FlowInfo, targetIP netip.Addr, realDest, dialAdd
 
 func (e *Engine) handleTCPConnection(r *tcp.ForwarderRequest) {
 	defer recoverAndLog("handleTCPConnection")
-	flowID := atomic.AddUint64(&e.flowCounter, 1)
+	flowID := e.flowCounter.Add(1)
 
 	// r.ID() dereferences gVisor's internal segment, which r.Complete() nils
 	// out with no nil check on the read side (see forwarder.go's
@@ -586,8 +585,8 @@ func (e *Engine) handleTCPConnection(r *tcp.ForwarderRequest) {
 
 		uid := e.uidStatsFor(flow.AppUID)
 		uu := uid.noteUpstream(decision.UpstreamID)
-		atomic.AddUint64(&uid.tcpFlows, 1)
-		atomic.AddUint64(&uu.tcpFlows, 1)
+		uid.tcpFlows.Add(1)
+		uu.tcpFlows.Add(1)
 
 		var wg sync.WaitGroup
 		wg.Add(2)
@@ -737,7 +736,7 @@ func (e *Engine) handleUDPConnection(r *udp.ForwarderRequest) bool {
 	}
 
 	gvisorConn := gonet.NewUDPConn(&wq, ep)
-	flowID := atomic.AddUint64(&e.flowCounter, 1)
+	flowID := e.flowCounter.Add(1)
 
 	e.capture.registerFlow("udp", flow.Src, flow.Dst, flow.AppUID, flowID)
 
@@ -770,8 +769,8 @@ func (e *Engine) handleUDPConnection(r *udp.ForwarderRequest) bool {
 		defer stats.endUDPFlow()
 		uid := e.uidStatsFor(flow.AppUID)
 		uu := uid.noteUpstream(decision.UpstreamID)
-		atomic.AddUint64(&uid.udpFlows, 1)
-		atomic.AddUint64(&uu.udpFlows, 1)
+		uid.udpFlows.Add(1)
+		uu.udpFlows.Add(1)
 
 		err = runUDPAssociation(gvisorConn, tsnetConn, udpAssociationIdleTimeout, stats, uid, uu)
 		log.Printf("[flow-%d] UDP closed: %v", flowID, err)

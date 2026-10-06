@@ -39,17 +39,20 @@ import (
 // ---------------------------------------------------------------------------
 
 // dataplaneCounters holds process-lifetime, atomic-only counters. Every
-// field is written with exactly one atomic op and never allocates.
+// field is written with exactly one atomic op and never allocates. Typed
+// atomics guarantee eight-byte alignment even when embedded on 32-bit ARM
+// (a raw uint64 field could otherwise land 4 mod 8 and panic on an
+// unaligned 64-bit atomic op - see atomic_alignment_test.go).
 type dataplaneCounters struct {
-	tunRxBytes   uint64
-	tunTxBytes   uint64
-	tunRxPackets uint64
-	tunTxPackets uint64
+	tunRxBytes   atomic.Uint64
+	tunTxBytes   atomic.Uint64
+	tunRxPackets atomic.Uint64
+	tunTxPackets atomic.Uint64
 
-	dnsQueries  uint64
-	dnsFailures uint64
+	dnsQueries  atomic.Uint64
+	dnsFailures atomic.Uint64
 
-	vpnRestarts uint64
+	vpnRestarts atomic.Uint64
 
 	// attributionFailures counts new flows where a UID-scoped policy rule
 	// exists (policyUsesAppUID() was true) but resolveAppUID could not
@@ -61,13 +64,13 @@ type dataplaneCounters struct {
 	// section: it does not by itself change any routing decision, it only
 	// counts how often the ambiguity happens so that can be judged from
 	// real numbers rather than guessed at.
-	attributionFailures uint64
+	attributionFailures atomic.Uint64
 
 	// dnsAttributionFailClosed counts DNS queries refused (ServFail)
 	// specifically because attribution failed while a UID-scoped rule
 	// existed - the subset of attributionFailures where DNS chose to fail
 	// closed rather than silently use the default route. See dns.go.
-	dnsAttributionFailClosed uint64
+	dnsAttributionFailClosed atomic.Uint64
 
 	// dnsForwardFailures counts DNS queries that were correctly routed to a
 	// specific upstream (route.provider != nil in dns.go's handleDNSMsg) but
@@ -80,7 +83,7 @@ type dataplaneCounters struct {
 	// restricting port 53 to their own resolver is a common real case) -
 	// this makes that failure mode visible on-device instead of only in
 	// logcat, without having to guess from the generic counter.
-	dnsForwardFailures uint64
+	dnsForwardFailures atomic.Uint64
 }
 
 // reset zeroes every dataplane counter, for the diagnostics "reset stats"
@@ -89,54 +92,54 @@ type dataplaneCounters struct {
 // the Kotlin-side history tables (samples/events/app_samples) support
 // resetting just a recent time window.
 func (d *dataplaneCounters) reset() {
-	atomic.StoreUint64(&d.tunRxBytes, 0)
-	atomic.StoreUint64(&d.tunTxBytes, 0)
-	atomic.StoreUint64(&d.tunRxPackets, 0)
-	atomic.StoreUint64(&d.tunTxPackets, 0)
-	atomic.StoreUint64(&d.dnsQueries, 0)
-	atomic.StoreUint64(&d.dnsFailures, 0)
-	atomic.StoreUint64(&d.vpnRestarts, 0)
-	atomic.StoreUint64(&d.attributionFailures, 0)
-	atomic.StoreUint64(&d.dnsAttributionFailClosed, 0)
-	atomic.StoreUint64(&d.dnsForwardFailures, 0)
+	d.tunRxBytes.Store(0)
+	d.tunTxBytes.Store(0)
+	d.tunRxPackets.Store(0)
+	d.tunTxPackets.Store(0)
+	d.dnsQueries.Store(0)
+	d.dnsFailures.Store(0)
+	d.vpnRestarts.Store(0)
+	d.attributionFailures.Store(0)
+	d.dnsAttributionFailClosed.Store(0)
+	d.dnsForwardFailures.Store(0)
 }
 
 func (d *dataplaneCounters) addAttributionFailure() {
-	atomic.AddUint64(&d.attributionFailures, 1)
+	d.attributionFailures.Add(1)
 }
 
 func (d *dataplaneCounters) addDNSAttributionFailClosed() {
-	atomic.AddUint64(&d.dnsAttributionFailClosed, 1)
+	d.dnsAttributionFailClosed.Add(1)
 }
 
 func (d *dataplaneCounters) addDNSForwardFailure() {
-	atomic.AddUint64(&d.dnsForwardFailures, 1)
+	d.dnsForwardFailures.Add(1)
 }
 
 func (d *dataplaneCounters) addRx(nbytes uint64) {
-	atomic.AddUint64(&d.tunRxBytes, nbytes)
-	atomic.AddUint64(&d.tunRxPackets, 1)
+	d.tunRxBytes.Add(nbytes)
+	d.tunRxPackets.Add(1)
 }
 
 func (d *dataplaneCounters) addTx(nbytes uint64) {
-	atomic.AddUint64(&d.tunTxBytes, nbytes)
-	atomic.AddUint64(&d.tunTxPackets, 1)
+	d.tunTxBytes.Add(nbytes)
+	d.tunTxPackets.Add(1)
 }
 
 // AddDNSQuery records one DNS query outcome. Called once per query from
 // dns.go/dns_policy.go's existing completion points - not per packet, since
 // a DNS exchange is already a single logical operation there.
 func (e *Engine) AddDNSQuery(failed bool) {
-	atomic.AddUint64(&e.obs.dp.dnsQueries, 1)
+	e.obs.dp.dnsQueries.Add(1)
 	if failed {
-		atomic.AddUint64(&e.obs.dp.dnsFailures, 1)
+		e.obs.dp.dnsFailures.Add(1)
 	}
 }
 
 // AddVPNRestart records that the VPN/TUN was rebuilt (StartVPN called again
 // after a prior StopVPN), for the "reconnect/restart events" counter.
 func (e *Engine) AddVPNRestart() {
-	atomic.AddUint64(&e.obs.dp.vpnRestarts, 1)
+	e.obs.dp.vpnRestarts.Add(1)
 }
 
 // ---------------------------------------------------------------------------
@@ -148,10 +151,10 @@ func (e *Engine) AddVPNRestart() {
 // once per new flow (not per packet) and read only by the low-frequency
 // snapshot path, so a mutex here costs nothing that matters.
 type uidStats struct {
-	bytesIn  uint64
-	bytesOut uint64
-	tcpFlows uint64
-	udpFlows uint64
+	bytesIn  atomic.Uint64
+	bytesOut atomic.Uint64
+	tcpFlows atomic.Uint64
+	udpFlows atomic.Uint64
 
 	mu           sync.Mutex
 	lastUpstream string
@@ -165,33 +168,33 @@ type uidStats struct {
 // direct) - kind-specific detail (direct/DERP path, region) is layered on
 // separately in runtime_state.go/pathState, keyed by the same UpstreamID.
 type upstreamUsage struct {
-	bytesIn  uint64
-	bytesOut uint64
-	tcpFlows uint64
-	udpFlows uint64
+	bytesIn  atomic.Uint64
+	bytesOut atomic.Uint64
+	tcpFlows atomic.Uint64
+	udpFlows atomic.Uint64
 }
 
 func (s *uidStats) addBytesIn(n int64) {
 	if n > 0 {
-		atomic.AddUint64(&s.bytesIn, uint64(n))
+		s.bytesIn.Add(uint64(n))
 	}
 }
 
 func (s *uidStats) addBytesOut(n int64) {
 	if n > 0 {
-		atomic.AddUint64(&s.bytesOut, uint64(n))
+		s.bytesOut.Add(uint64(n))
 	}
 }
 
 func (u *upstreamUsage) addBytesIn(n int64) {
 	if n > 0 {
-		atomic.AddUint64(&u.bytesIn, uint64(n))
+		u.bytesIn.Add(uint64(n))
 	}
 }
 
 func (u *upstreamUsage) addBytesOut(n int64) {
 	if n > 0 {
-		atomic.AddUint64(&u.bytesOut, uint64(n))
+		u.bytesOut.Add(uint64(n))
 	}
 }
 
@@ -496,9 +499,9 @@ type observability struct {
 
 	// Sampler state. intervalNs is read by the sampler goroutine every tick
 	// (so a change takes effect within one tick) and written by
-	// SetObservabilitySampleIntervalSeconds - plain atomic, no lock needed
-	// for a single int64.
-	intervalNs int64
+	// SetObservabilitySampleIntervalSeconds - a typed atomic, no lock needed
+	// and correctly aligned even when embedded on 32-bit ARM.
+	intervalNs atomic.Int64
 	stopCh     chan struct{}
 	stopOnce   sync.Once
 	wg         sync.WaitGroup
@@ -555,12 +558,12 @@ const defaultSampleIntervalSeconds = 60
 
 func newObservability(e *Engine) *observability {
 	o := &observability{
-		engine:     e,
-		startTime:  time.Now(),
-		paths:      make(map[string]*pathState),
-		intervalNs: int64(defaultSampleIntervalSeconds * time.Second),
-		stopCh:     make(chan struct{}),
+		engine:    e,
+		startTime: time.Now(),
+		paths:     make(map[string]*pathState),
+		stopCh:    make(chan struct{}),
 	}
+	o.intervalNs.Store(int64(defaultSampleIntervalSeconds * time.Second))
 	o.wg.Add(1)
 	go o.samplerLoop()
 	return o
@@ -627,7 +630,7 @@ func (e *Engine) SetObservabilitySampleIntervalSeconds(secs int32) {
 	if secs <= 0 {
 		secs = defaultSampleIntervalSeconds
 	}
-	atomic.StoreInt64(&e.obs.intervalNs, int64(secs)*int64(time.Second))
+	e.obs.intervalNs.Store(int64(secs) * int64(time.Second))
 }
 
 func (o *observability) samplerLoop() {
@@ -637,7 +640,7 @@ func (o *observability) samplerLoop() {
 	// re-reading it every cycle so a UI-driven change takes effect promptly.
 	o.sampleOnce()
 	for {
-		interval := time.Duration(atomic.LoadInt64(&o.intervalNs))
+		interval := time.Duration(o.intervalNs.Load())
 		if interval <= 0 {
 			interval = defaultSampleIntervalSeconds * time.Second
 		}
@@ -677,7 +680,7 @@ func (o *observability) sampleOnce() {
 	o.haveLast = true
 
 	cpuPerGiB := -1.0
-	totalBytes := atomic.LoadUint64(&o.dp.tunRxBytes) + atomic.LoadUint64(&o.dp.tunTxBytes)
+	totalBytes := o.dp.tunRxBytes.Load() + o.dp.tunTxBytes.Load()
 	const gib = 1 << 30
 	if cpuSecs >= 0 && totalBytes >= gib {
 		cpuPerGiB = cpuSecs / (float64(totalBytes) / gib)
@@ -844,17 +847,17 @@ func (e *Engine) GetObservabilitySnapshotJSON() string {
 	o.lastMu.Unlock()
 
 	dp := DataplaneSnapshot{
-		TunRxBytes:   atomic.LoadUint64(&o.dp.tunRxBytes),
-		TunTxBytes:   atomic.LoadUint64(&o.dp.tunTxBytes),
-		TunRxPackets: atomic.LoadUint64(&o.dp.tunRxPackets),
-		TunTxPackets: atomic.LoadUint64(&o.dp.tunTxPackets),
-		DNSQueries:   atomic.LoadUint64(&o.dp.dnsQueries),
-		DNSFailures:  atomic.LoadUint64(&o.dp.dnsFailures),
-		VPNRestarts:  atomic.LoadUint64(&o.dp.vpnRestarts),
+		TunRxBytes:   o.dp.tunRxBytes.Load(),
+		TunTxBytes:   o.dp.tunTxBytes.Load(),
+		TunRxPackets: o.dp.tunRxPackets.Load(),
+		TunTxPackets: o.dp.tunTxPackets.Load(),
+		DNSQueries:   o.dp.dnsQueries.Load(),
+		DNSFailures:  o.dp.dnsFailures.Load(),
+		VPNRestarts:  o.dp.vpnRestarts.Load(),
 
-		AttributionFailures:      atomic.LoadUint64(&o.dp.attributionFailures),
-		DNSAttributionFailClosed: atomic.LoadUint64(&o.dp.dnsAttributionFailClosed),
-		DNSForwardFailures:       atomic.LoadUint64(&o.dp.dnsForwardFailures),
+		AttributionFailures:      o.dp.attributionFailures.Load(),
+		DNSAttributionFailClosed: o.dp.dnsAttributionFailClosed.Load(),
+		DNSForwardFailures:       o.dp.dnsForwardFailures.Load(),
 	}
 
 	uidSnap := e.uids.snapshot()
@@ -866,19 +869,19 @@ func (e *Engine) GetObservabilitySnapshotJSON() string {
 		for id, u := range s.byUpstream {
 			byUpstream = append(byUpstream, UpstreamUsageInfo{
 				UpstreamID: string(id),
-				BytesIn:    atomic.LoadUint64(&u.bytesIn),
-				BytesOut:   atomic.LoadUint64(&u.bytesOut),
-				TCPFlows:   atomic.LoadUint64(&u.tcpFlows),
-				UDPFlows:   atomic.LoadUint64(&u.udpFlows),
+				BytesIn:    u.bytesIn.Load(),
+				BytesOut:   u.bytesOut.Load(),
+				TCPFlows:   u.tcpFlows.Load(),
+				UDPFlows:   u.udpFlows.Load(),
 			})
 		}
 		s.mu.Unlock()
 		apps = append(apps, UIDStatsInfo{
 			UID:          uid,
-			BytesIn:      atomic.LoadUint64(&s.bytesIn),
-			BytesOut:     atomic.LoadUint64(&s.bytesOut),
-			TCPFlows:     atomic.LoadUint64(&s.tcpFlows),
-			UDPFlows:     atomic.LoadUint64(&s.udpFlows),
+			BytesIn:      s.bytesIn.Load(),
+			BytesOut:     s.bytesOut.Load(),
+			TCPFlows:     s.tcpFlows.Load(),
+			UDPFlows:     s.udpFlows.Load(),
 			LastUpstream: lastUpstream,
 			ByUpstream:   byUpstream,
 		})

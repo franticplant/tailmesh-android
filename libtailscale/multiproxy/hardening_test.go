@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"io"
 	"net"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -162,10 +161,10 @@ func TestRunUDPAssociationRecordsByteCounts(t *testing.T) {
 	_ = bPeer.Close()
 	<-done
 
-	if got := atomic.LoadUint64(&stats.bytesOut); got != uint64(len(outPayload)) {
+	if got := stats.bytesOut.Load(); got != uint64(len(outPayload)) {
 		t.Fatalf("bytesOut = %d, want %d (app-to-upstream traffic)", got, len(outPayload))
 	}
-	if got := atomic.LoadUint64(&stats.bytesIn); got != uint64(len(inPayload)) {
+	if got := stats.bytesIn.Load(); got != uint64(len(inPayload)) {
 		t.Fatalf("bytesIn = %d, want %d (upstream-to-app traffic)", got, len(inPayload))
 	}
 }

@@ -167,7 +167,7 @@ type TailnetConfig struct {
 
 type Engine struct {
 	mu                 sync.RWMutex
-	flowCounter        uint64
+	flowCounter        atomic.Uint64
 	tailnetLifecycleMu sync.Mutex
 	state              EngineState
 
