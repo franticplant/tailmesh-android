@@ -418,7 +418,8 @@ The detailed ledger is in `validation_and_gaps.md`, but the main remaining areas
 - profile-scoped surfacing of reconstruction failures;
 - Android tests for profile/credential/coordinator/reconstruction behavior;
 - non-destructive future SQLite migrations;
-- strict Private DNS behavior;
+- strict Private DNS behavior - Android's strict/manual Private DNS mode dials a user-pinned DoT provider directly, bypassing whatever DNS this app advertises; the app detects and warns about this (§98), but cannot route around it - no VpnService API can intercept a connection the OS chose not to route through the tunnel;
+- per-app UID attribution is a best-effort platform lookup, not a guarantee - `getConnectionOwnerUid` answers from Android's live connection table, which can already have moved on (a short-lived UDP socket closed, its port reused by a different app) by the time this app asks; this is mitigated (§96, §99) but not eliminated, and a misattributed flow is routed under the wrong app's rule, including a Direct/bypass rule if that's what the wrongly-matched app happens to have configured. Deliberately left as-is for now rather than disallowing per-app Direct rules or failing flows closed, since this app's priority is connectivity/availability over closing a low-frequency, platform-imposed edge case - see `validation_and_gaps.md` §99 for the full tradeoff;
 - Always-On and lockdown behavior;
 - scoped/link-local IPv6 DNS observation;
 - real Wi-Fi/cellular recovery;

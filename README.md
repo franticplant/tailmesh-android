@@ -132,6 +132,8 @@ Tailmesh can also capture ordinary IPv4/IPv6 traffic for full-device policy rout
 
 Carrier sockets used by direct and tunnel upstreams are protected from Android's VPN so they do not recursively re-enter the same TUN.
 
+**Per-app attribution is a best-effort platform lookup, not a guarantee.** Android exposes no way to tag a packet with its owning app at send time; Tailmesh asks `ConnectivityManager.getConnectionOwnerUid` after the fact, against a live connection table that can already have moved on - most commonly a short-lived UDP socket (a DNS query) closing and its port being reused by a different app before the lookup runs, more likely the more concurrent traffic (DNS querying in particular) is in flight. Tailmesh mitigates this (starting attribution as early as the datapath allows, and a fallback lookup ladder for unconnected UDP sockets) but cannot eliminate it - this is a platform limitation, not a Tailmesh bug. A misattributed flow is routed under the wrong app's rule, which is left as-is rather than disallowing per-app Direct/bypass rules or failing such flows closed, since Tailmesh's priority is connectivity/availability over closing a low-frequency, platform-imposed edge case. See `validation_and_gaps.md` §99 for the full investigation and the tradeoff this decision made explicitly.
+
 ## Upstreams are separate from Tailnet reachability
 
 Tailmesh presents different transports through one upstream model instead of baking transport-specific routing logic into the flow router.
