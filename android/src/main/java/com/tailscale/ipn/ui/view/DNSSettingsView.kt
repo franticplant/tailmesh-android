@@ -109,6 +109,31 @@ fun DNSSettingsView(
           }
         }
 
+        // Strict-mode Android Private DNS (Settings > Network & internet > Private DNS >
+        // hostname) connects directly to that provider's own DoT server, bypassing whatever DNS
+        // server this app advertises via VpnService.Builder.addDnsServer - a structural leak no
+        // setting on this screen can close. See NetworkChangeCallback.hasStrictPrivateDnsActive's
+        // doc comment. Checked once per composition rather than kept live: this screen is already
+        // reopened whenever the user comes back to check their DNS setup, which is exactly when a
+        // stale read would be caught.
+        if (com.tailscale.ipn.NetworkChangeCallback.hasStrictPrivateDnsActive()) {
+          item("strictPrivateDnsWarning") {
+            ListItem(
+                headlineContent = { Text(stringResource(R.string.private_dns_leak_warning_title)) },
+                supportingContent = {
+                  Text(stringResource(R.string.private_dns_leak_warning_body))
+                },
+                leadingContent = {
+                  Icon(
+                      painter = painterResource(R.drawable.warning),
+                      contentDescription = null,
+                      tint = MaterialTheme.colorScheme.error,
+                  )
+                },
+            )
+          }
+        }
+
         item("publicDoHHeader") { Lists.SectionDivider(stringResource(R.string.public_doh)) }
 
         item("publicDoHResolver") {

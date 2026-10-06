@@ -204,6 +204,31 @@ object NetworkChangeCallback {
   private fun hasUsableIPv6(linkProps: LinkProperties): Boolean =
       linkProps.routes.any { it.isDefaultRoute && it.destination.address is java.net.Inet6Address }
 
+  /**
+   * Reports whether the device's current default network has Android's system-wide "Private DNS"
+   * set to a specific hostname (Settings > Network & internet > Private DNS > "Private DNS provider
+   * hostname", sometimes called "strict mode").
+   *
+   * This matters because it is a structural DNS leak Tailmesh cannot close from inside a
+   * VpnService: in strict mode, Android resolves and connects directly to that provider's own
+   * DNS-over-TLS server on port 853, using whatever route table entry matches that real IP - not
+   * the synthetic DNS address this app advertises via VpnService.Builder.addDnsServer. Unless that
+   * specific address happens to be covered by an active VPN route (broad capture on, or the
+   * provider's IP happens to fall in a route already added for another reason), the query leaves
+   * over the underlying network completely untouched by Tailmesh, and a DNS-leak-test site will
+   * correctly report the ISP's (or provider's) resolver instead of the tailnet's - not because
+   * Tailmesh mis-routed anything, but because the OS never handed it the packets in the first
+   * place. "Automatic" mode (opportunistic DoT, falling back to the network's own advertised
+   * servers on failure) is not this problem: LinkProperties.isPrivateDnsActive is only true for
+   * strict mode.
+   *
+   * Callers should surface this as a warning telling the user to set Private DNS to "Automatic" or
+   * "Off" for full protection, rather than attempt to route around it - there is no VpnService API
+   * to override or intercept the OS's own strict-mode DoT connection.
+   */
+  fun hasStrictPrivateDnsActive(): Boolean =
+      lock.withLock { cachedDefaultNetworkInfo?.linkProps?.isPrivateDnsActive == true }
+
   // pickNetworkForDial returns the network to bind an outbound socket of the
   // given IP family to. IPv4 dials use the same single "default network" as
   // before; IPv6 dials are family-aware, because the chosen default network

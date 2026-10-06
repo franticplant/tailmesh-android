@@ -199,6 +199,8 @@
 
     <!-- Strings for DNS settings -->
     <string name="dns_settings">DNS settings</string>
+    <string name="private_dns_leak_warning_title">Your DNS may be leaking</string>
+    <string name="private_dns_leak_warning_body">Android\'s Private DNS is set to a specific provider. Those DNS queries bypass this app entirely and are not protected. Set Private DNS to "Automatic" or "Off" in Android\'s network settings for full protection.</string>
     <string name="using_tailscale_dns">Using Tailscale DNS</string>
     <string name="this_device_is_using_tailscale_to_resolve_dns_names">This device is using Tailscale to resolve DNS names.</string>
     <string name="resolvers">Resolvers</string>
