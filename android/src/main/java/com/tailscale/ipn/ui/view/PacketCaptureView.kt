@@ -40,11 +40,13 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.tailscale.ipn.App
 import com.tailscale.ipn.R
+import com.tailscale.ipn.multiproxy.CaptureSettings
 import com.tailscale.ipn.ui.util.InstalledAppsManager
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -65,6 +67,27 @@ private fun capturesDir(context: android.content.Context): File {
   val dir = File(context.filesDir, "captures")
   dir.mkdirs()
   return dir
+}
+
+/**
+ * Deletes every capture file older than [maxAgeDays], then returns whatever remains, newest first.
+ *
+ * This is the whole retention mechanism: no scheduled job, no background timer, nothing running
+ * while the app isn't in the foreground. It costs one [File.listFiles] plus one [File.lastModified]
+ * check per existing capture file - a handful of files in the overwhelmingly common case, since
+ * captures are a manually-started debug feature, not a steady-state one - so calling it every time
+ * this screen opens (see the `LaunchedEffect(Unit)` below) is negligible, and no capture ever lives
+ * unnoticed longer than the user's next visit to this screen after it expires.
+ */
+private fun purgeExpiredAndListCaptures(
+    context: android.content.Context,
+    maxAgeDays: Int
+): List<File> {
+  val cutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(maxAgeDays.toLong())
+  val files = capturesDir(context).listFiles() ?: emptyArray()
+  val (expired, kept) = files.partition { it.lastModified() < cutoff }
+  expired.forEach { it.delete() }
+  return kept.sortedByDescending { it.lastModified() }
 }
 
 /**
@@ -93,6 +116,19 @@ fun PacketCaptureView(backToSettings: BackNavigation) {
   var packetCount by remember { mutableStateOf(0L) }
   var capacityReached by remember { mutableStateOf(false) }
   var capturePath by remember { mutableStateOf<String?>(null) }
+
+  val captureSettings = remember { CaptureSettings(context) }
+  var maxAgeDays by remember { mutableStateOf(captureSettings.maxAgeDays) }
+  var pastCaptures by remember { mutableStateOf<List<File>>(emptyList()) }
+
+  fun refreshPastCaptures() {
+    pastCaptures = purgeExpiredAndListCaptures(context, maxAgeDays)
+  }
+
+  // Runs once per visit to this screen - see purgeExpiredAndListCaptures's doc
+  // comment for why "on screen open" is the whole cleanup schedule, not just
+  // the initial listing.
+  LaunchedEffect(Unit) { refreshPastCaptures() }
 
   var searchQuery by rememberSaveable { mutableStateOf("") }
   var selectedPackages by rememberSaveable { mutableStateOf(setOf<String>()) }
@@ -183,6 +219,7 @@ fun PacketCaptureView(backToSettings: BackNavigation) {
       packetCount = 0L
       capacityReached = false
       isCapturing = true
+      refreshPastCaptures()
     } catch (ex: Exception) {
       errorMessage = ex.message ?: "Failed to start capture"
     }
@@ -196,12 +233,19 @@ fun PacketCaptureView(backToSettings: BackNavigation) {
       bytesWritten = e?.packetCaptureBytesWritten() ?: bytesWritten
       packetCount = e?.packetCapturePacketCount() ?: packetCount
       capacityReached = e?.packetCaptureCapacityReached() ?: capacityReached
+      // The file itself was already complete and on disk the moment
+      // startCapture wrote it - stopping only closes the Go side's writer.
+      // Refreshing here is what makes it show up in "Past captures" (see
+      // pastCaptures below) instead of only being reachable through
+      // capturePath's own in-memory, this-composition-only state, which
+      // used to make a just-stopped capture look like it "disappeared" the
+      // moment this screen recomposed or was reopened.
+      refreshPastCaptures()
     }
   }
 
-  fun exportCapture() {
-    val path = capturePath ?: return
-    val file = File(path)
+  fun exportCapture(target: File? = null) {
+    val file = target ?: capturePath?.let { File(it) } ?: return
     if (!file.exists()) {
       errorMessage = "Capture file no longer exists"
       return
@@ -222,13 +266,18 @@ fun PacketCaptureView(backToSettings: BackNavigation) {
     context.startActivity(Intent.createChooser(intent, file.name))
   }
 
-  fun clearCapture() {
-    if (isCapturing) stopCapture()
-    capturePath?.let { File(it).delete() }
-    capturePath = null
-    bytesWritten = 0L
-    packetCount = 0L
-    capacityReached = false
+  fun clearCapture(target: File? = null) {
+    val deletingCurrent = target == null || target.absolutePath == capturePath
+    if (deletingCurrent && isCapturing) stopCapture()
+    val file = target ?: capturePath?.let { File(it) }
+    file?.delete()
+    if (deletingCurrent) {
+      capturePath = null
+      bytesWritten = 0L
+      packetCount = 0L
+      capacityReached = false
+    }
+    refreshPastCaptures()
   }
 
   Scaffold(topBar = { Header(titleRes = R.string.packet_capture, onBack = backToSettings) }) {
@@ -388,6 +437,75 @@ fun PacketCaptureView(backToSettings: BackNavigation) {
           OutlinedButton(onClick = { clearCapture() }, enabled = hasFile) {
             Text(stringResource(R.string.packet_capture_clear))
           }
+        }
+      }
+
+      item("retentionDivider") { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
+
+      item("retention") {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          Text(
+              stringResource(R.string.packet_capture_retention_label),
+              style = MaterialTheme.typography.bodyMedium,
+              modifier = Modifier.padding(top = 12.dp))
+          OutlinedButton(
+              onClick = {
+                maxAgeDays = (maxAgeDays - 1).coerceAtLeast(1)
+                captureSettings.maxAgeDays = maxAgeDays
+                refreshPastCaptures()
+              }) {
+                Text("-")
+              }
+          Text(
+              stringResource(R.string.packet_capture_retention_days, maxAgeDays),
+              style = MaterialTheme.typography.bodyMedium,
+              modifier = Modifier.padding(top = 12.dp))
+          OutlinedButton(
+              onClick = {
+                maxAgeDays += 1
+                captureSettings.maxAgeDays = maxAgeDays
+                refreshPastCaptures()
+              }) {
+                Text("+")
+              }
+        }
+      }
+
+      item("pastCapturesHeader") {
+        ListItem(
+            headlineContent = { Text(stringResource(R.string.packet_capture_past_header)) },
+        )
+      }
+
+      // Excludes the file the status section above already shows, so a
+      // capture in progress (or just stopped) isn't listed twice.
+      val otherCaptures = pastCaptures.filter { it.absolutePath != capturePath }
+      if (otherCaptures.isEmpty()) {
+        item("pastCapturesEmpty") {
+          ListItem(headlineContent = { Text(stringResource(R.string.packet_capture_past_empty)) })
+        }
+      } else {
+        items(otherCaptures, key = { it.absolutePath }) { file ->
+          val sizeLabel =
+              if (file.length() < 1024 * 1024) "${file.length() / 1024} KB"
+              else "%.1f MB".format(file.length() / (1024.0 * 1024.0))
+          ListItem(
+              headlineContent = { Text(file.name) },
+              supportingContent = { Text(sizeLabel) },
+              trailingContent = {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                  OutlinedButton(onClick = { exportCapture(file) }) {
+                    Text(stringResource(R.string.packet_capture_export))
+                  }
+                  OutlinedButton(onClick = { clearCapture(file) }) {
+                    Text(stringResource(R.string.packet_capture_delete))
+                  }
+                }
+              },
+          )
         }
       }
     }

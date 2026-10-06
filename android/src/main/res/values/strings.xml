@@ -480,6 +480,11 @@
     <string name="packet_capture_mode_listeners">Selected SOCKS5 listeners</string>
     <string name="packet_capture_no_listeners_selected">Select at least one listener to start a per-listener capture</string>
     <string name="packet_capture_listeners_empty">No SOCKS5 listeners configured</string>
+    <string name="packet_capture_retention_label">Keep captures for</string>
+    <string name="packet_capture_retention_days">%1$d days</string>
+    <string name="packet_capture_past_header">Past captures</string>
+    <string name="packet_capture_past_empty">No saved captures</string>
+    <string name="packet_capture_delete">Delete</string>
 
     <string name="socks5_listeners">SOCKS5 listeners</string>
     <string name="socks5_listeners_subtitle">Hand a Tailnet or other upstream to another app by port</string>
