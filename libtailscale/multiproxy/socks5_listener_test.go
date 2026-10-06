@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -289,6 +290,107 @@ func TestSOCKS5ListenerReplacesExistingID(t *testing.T) {
 	infos := e.SOCKS5ListenersSnapshot()
 	if len(infos) != 1 || infos[0].Port != port2 {
 		t.Fatalf("SOCKS5ListenersSnapshot = %+v, want exactly one listener on port %d", infos, port2)
+	}
+}
+
+// newTCPHangServer accepts connections and then never reads, writes, or
+// closes them - modeling a keep-alive upstream (e.g. an HTTP/2 edge) that
+// holds a TCP session idle-open indefinitely rather than politely closing
+// it. It returns the listener's address plus a function reporting how many
+// accepted connections are still open, so a test can assert they eventually
+// get force-closed.
+func newTCPHangServer(t *testing.T) (net.Addr, func() int) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("hang server: %v", err)
+	}
+	t.Cleanup(func() { ln.Close() })
+
+	var mu sync.Mutex
+	open := 0
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			open++
+			mu.Unlock()
+			go func() {
+				var discard [1]byte
+				conn.Read(discard[:]) // blocks until the peer closes
+				mu.Lock()
+				open--
+				mu.Unlock()
+			}()
+		}
+	}()
+	return ln.Addr(), func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return open
+	}
+}
+
+// TestSOCKS5ListenerCloseForceClosesInFlightConnections guards against the
+// leak fixed alongside this test: closing (or replacing) a listener used to
+// only stop l.ln from accepting new connections - any handleConnect already
+// blocked relaying a connection whose peers both keep the TCP session
+// idle-open (routine for HTTP/2 keep-alive, and exactly what a SOCKS5
+// CONNECT upstream can do) ran forever, leaking its goroutines and upstream
+// socket. Reported against v0.3.2/v0.3.3 as intermittent misbehavior "after
+// long runtimes" of a listener whose upstream tailnet got toggled off and
+// on repeatedly by UpstreamPolicyApplier - each cycle leaked the previous
+// cycle's still-open connections.
+func TestSOCKS5ListenerCloseForceClosesInFlightConnections(t *testing.T) {
+	e := newDirectEngine(t)
+	hangAddr, openCount := newTCPHangServer(t)
+	tcpHangAddr := hangAddr.(*net.TCPAddr)
+	port := freeTCPPort(t)
+
+	if err := e.AddSOCKS5Listener(SOCKS5ListenerConfig{
+		ID: "l1", BindAddr: "127.0.0.1", Port: uint16(port), Upstream: DirectUpstreamID,
+	}); err != nil {
+		t.Fatalf("AddSOCKS5Listener: %v", err)
+	}
+
+	c := dialSOCKS5Listener(t, port)
+	defer c.Close()
+	c.greet(socks5AuthNone)
+	code, _, _ := c.request(socks5CmdConnect, tcpHangAddr.IP.String(), uint16(tcpHangAddr.Port))
+	if code != socks5ReplySucceeded {
+		t.Fatalf("CONNECT reply code = 0x%02x, want success", code)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for openCount() != 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("hang server never observed the upstream connection open")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := e.RemoveSOCKS5Listener("l1"); err != nil {
+		t.Fatalf("RemoveSOCKS5Listener: %v", err)
+	}
+
+	// The client's own conn should have been force-closed by the listener,
+	// not left hanging on the never-responding upstream.
+	c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := c.conn.Read(make([]byte, 1)); err == nil {
+		t.Fatal("client connection still open after listener close")
+	}
+
+	// And the leaked-connection symptom itself: the upstream side should
+	// have been closed too, not left open forever.
+	deadline = time.Now().Add(2 * time.Second)
+	for openCount() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("upstream connection still open %v after listener close, want it force-closed", time.Second)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

@@ -66,6 +66,18 @@ type socks5Listener struct {
 
 	closeOnce sync.Once
 	doneCh    chan struct{}
+
+	// connsMu/conns track every accepted connection still being served, so
+	// close() can force them shut. Without this, a connection whose peers
+	// both keep the TCP session idle-open (routine for HTTP/2 keep-alive)
+	// outlives the listener indefinitely: closing l.ln only stops new
+	// Accepts, it does nothing to a handleConn goroutine already blocked in
+	// an io.Copy. Over a long-running listener - especially one that gets
+	// closed and replaced repeatedly, e.g. by the tailnet-toggle-follows-
+	// listener policy in UpstreamPolicyApplier - those goroutines, and the
+	// upstream sockets/tsnet resources they hold, accumulate without bound.
+	connsMu sync.Mutex
+	conns   map[net.Conn]struct{}
 }
 
 // AddSOCKS5Listener starts (or, if id is already in use, replaces) an inbound
@@ -92,7 +104,7 @@ func (e *Engine) AddSOCKS5Listener(cfg SOCKS5ListenerConfig) error {
 		return fmt.Errorf("socks5-listener: %w", err)
 	}
 
-	l := &socks5Listener{cfg: cfg, e: e, ln: ln, doneCh: make(chan struct{})}
+	l := &socks5Listener{cfg: cfg, e: e, ln: ln, doneCh: make(chan struct{}), conns: make(map[net.Conn]struct{})}
 
 	e.mu.Lock()
 	if e.socks5Listeners == nil {
@@ -174,6 +186,11 @@ func (e *Engine) closeAllSOCKS5Listeners() {
 func (l *socks5Listener) close() {
 	l.closeOnce.Do(func() {
 		l.ln.Close()
+		l.connsMu.Lock()
+		for c := range l.conns {
+			c.Close()
+		}
+		l.connsMu.Unlock()
 		<-l.doneCh
 	})
 }
@@ -189,7 +206,19 @@ func (l *socks5Listener) serve() {
 	}
 }
 
+func (l *socks5Listener) trackConn(conn net.Conn, add bool) {
+	l.connsMu.Lock()
+	defer l.connsMu.Unlock()
+	if add {
+		l.conns[conn] = struct{}{}
+	} else {
+		delete(l.conns, conn)
+	}
+}
+
 func (l *socks5Listener) handleConn(conn net.Conn) {
+	l.trackConn(conn, true)
+	defer l.trackConn(conn, false)
 	defer conn.Close()
 
 	if err := conn.SetDeadline(time.Now().Add(socks5HandshakeTimeout)); err != nil {
