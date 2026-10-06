@@ -322,7 +322,7 @@ func TestPacketCaptureAppsModeFiltersByUID(t *testing.T) {
 
 	src := netip.MustParseAddrPort("10.0.0.1:5000")
 	dst := netip.MustParseAddrPort("10.0.0.2:53")
-	c.registerFlow("udp", src, dst, 1001)
+	c.registerFlow("udp", src, dst, 1001, 1)
 
 	matching := buildIPv4UDPPacket(t, "10.0.0.1", 5000, "10.0.0.2", 53, []byte("a"))
 	c.observe(matching)
@@ -336,7 +336,7 @@ func TestPacketCaptureAppsModeFiltersByUID(t *testing.T) {
 	// captured.
 	otherSrc := netip.MustParseAddrPort("10.0.0.9:6000")
 	otherDst := netip.MustParseAddrPort("10.0.0.2:53")
-	c.registerFlow("udp", otherSrc, otherDst, 9999)
+	c.registerFlow("udp", otherSrc, otherDst, 9999, 2)
 	notSelected := buildIPv4UDPPacket(t, "10.0.0.9", 6000, "10.0.0.2", 53, []byte("c"))
 	c.observe(notSelected)
 
@@ -366,12 +366,12 @@ func TestPacketCaptureAttributesEveryPacketWithAppName(t *testing.T) {
 
 	namedSrc := netip.MustParseAddrPort("10.0.0.1:5000")
 	namedDst := netip.MustParseAddrPort("10.0.0.2:53")
-	c.registerFlow("udp", namedSrc, namedDst, 1001)
+	c.registerFlow("udp", namedSrc, namedDst, 1001, 3)
 	c.observe(buildIPv4UDPPacket(t, "10.0.0.1", 5000, "10.0.0.2", 53, []byte("named")))
 
 	unnamedSrc := netip.MustParseAddrPort("10.0.0.3:5001")
 	unnamedDst := netip.MustParseAddrPort("10.0.0.2:53")
-	c.registerFlow("udp", unnamedSrc, unnamedDst, 4242)
+	c.registerFlow("udp", unnamedSrc, unnamedDst, 4242, 4)
 	c.observe(buildIPv4UDPPacket(t, "10.0.0.3", 5001, "10.0.0.2", 53, []byte("unnamed")))
 
 	c.observe(buildIPv4UDPPacket(t, "192.168.1.1", 7000, "10.0.0.2", 53, []byte("unattributed")))
@@ -385,11 +385,11 @@ func TestPacketCaptureAttributesEveryPacketWithAppName(t *testing.T) {
 	if len(pkts) != 3 {
 		t.Fatalf("parsed %d packets, want 3", len(pkts))
 	}
-	if pkts[0].comment != "com.example.named" {
-		t.Fatalf("packet 1 comment = %q, want %q", pkts[0].comment, "com.example.named")
+	if want := "com.example.named flow-3"; pkts[0].comment != want {
+		t.Fatalf("packet 1 comment = %q, want %q", pkts[0].comment, want)
 	}
-	if pkts[1].comment != "uid:4242" {
-		t.Fatalf("packet 2 comment = %q, want %q (no name entry, falls back to uid)", pkts[1].comment, "uid:4242")
+	if want := "uid:4242 flow-4"; pkts[1].comment != want {
+		t.Fatalf("packet 2 comment = %q, want %q (no name entry, falls back to uid, still tagged with its flow ID)", pkts[1].comment, want)
 	}
 	if pkts[2].comment != "" {
 		t.Fatalf("packet 3 comment = %q, want empty (unattributed flow)", pkts[2].comment)
@@ -502,17 +502,17 @@ func TestFlowRegistryRegisterUnregister(t *testing.T) {
 	src := netip.MustParseAddrPort("10.0.0.1:1234")
 	dst := netip.MustParseAddrPort("10.0.0.2:443")
 
-	if _, ok := c.uidForFlow("tcp", src, dst); ok {
-		t.Fatalf("uidForFlow found an entry before registerFlow")
+	if _, ok := c.flowFor("tcp", src, dst); ok {
+		t.Fatalf("flowFor found an entry before registerFlow")
 	}
-	c.registerFlow("tcp", src, dst, 42)
-	uid, ok := c.uidForFlow("tcp", src, dst)
-	if !ok || uid != 42 {
-		t.Fatalf("uidForFlow = (%d, %v), want (42, true)", uid, ok)
+	c.registerFlow("tcp", src, dst, 42, 99)
+	flow, ok := c.flowFor("tcp", src, dst)
+	if !ok || flow.uid != 42 || flow.flowID != 99 {
+		t.Fatalf("flowFor = (%+v, %v), want ({uid:42 flowID:99}, true)", flow, ok)
 	}
 	c.unregisterFlow("tcp", src, dst)
-	if _, ok := c.uidForFlow("tcp", src, dst); ok {
-		t.Fatalf("uidForFlow found an entry after unregisterFlow")
+	if _, ok := c.flowFor("tcp", src, dst); ok {
+		t.Fatalf("flowFor found an entry after unregisterFlow")
 	}
 }
 

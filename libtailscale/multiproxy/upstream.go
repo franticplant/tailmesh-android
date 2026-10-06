@@ -187,6 +187,19 @@ func (e *Engine) SetDirectDialer(dial UpstreamDialer) {
 	e.upstreams.direct.protectedDial.Store(&dial)
 }
 
+// SetDirectIPv6UsableFunc installs the query handleTCPConnection uses to
+// reject a doomed IPv6 @direct flow before accepting it - see
+// Engine.directIPv6Usable's doc comment for why this exists alongside the
+// dial-time ErrNoUsableNetworkForFamily check rather than instead of it.
+// Passing nil (the default) disables the early check.
+func (e *Engine) SetDirectIPv6UsableFunc(f func() bool) {
+	if f == nil {
+		e.directIPv6Usable.Store(nil)
+		return
+	}
+	e.directIPv6Usable.Store(&f)
+}
+
 // AddSource plugs in a provider source. Sources are consulted after the
 // registry's own providers, so a directly-registered upstream always wins a
 // name collision and no source can shadow the direct upstream.

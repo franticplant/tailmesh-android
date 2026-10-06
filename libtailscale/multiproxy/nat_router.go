@@ -5,6 +5,7 @@ package multiproxy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -130,9 +131,32 @@ func (e *Engine) resolveRoute(targetIP netip.Addr) (RouteDecision, bool) {
 //     tailnet. An empty policy therefore routes exactly as it did before the
 //     policy layer existed.
 func (e *Engine) resolveFlow(f FlowInfo) (RouteDecision, bool) {
+	d, ok, _ := e.resolveFlowTraced(f)
+	return d, ok
+}
+
+// resolveFlowTraced is resolveFlow's implementation, plus a step-by-step
+// trace of which of resolveFlow's decision stages were tried and why each
+// one did or didn't produce a route - the "what decisions were made for it
+// to have gone there" detail the routing-decision telemetry (logRouteDecision)
+// exists to surface. resolveFlow itself is the thin, trace-free wrapper every
+// existing call site keeps using unchanged; only handleTCPConnection, which
+// already pays for per-flow logRouteDecision bookkeeping, calls this
+// directly. The trace is built unconditionally rather than gated on whether
+// telemetry is currently enabled - a handful of string formats once per new
+// connection (not per packet) is not worth a second, duplicate code path to
+// avoid, and it means turning telemetry on retroactively costs nothing on
+// this function.
+func (e *Engine) resolveFlowTraced(f FlowInfo) (RouteDecision, bool, []string) {
+	var trace []string
+	step := func(format string, args ...any) {
+		trace = append(trace, fmt.Sprintf(format, args...))
+	}
+
 	targetIP := f.Dst.Addr().Unmap()
 	if !targetIP.IsValid() {
-		return RouteDecision{}, false
+		step("invalid destination address")
+		return RouteDecision{}, false, trace
 	}
 
 	e.targetMutex.RLock()
@@ -143,10 +167,12 @@ func (e *Engine) resolveFlow(f FlowInfo) (RouteDecision, bool) {
 	e.targetMutex.RUnlock()
 
 	if found {
+		step("matched known peer target -> upstream %s", rec.RequiredUpstream)
 		// A block rule still applies: refusing to send traffic is always a
 		// safe thing to honour, even for an identity-bound destination.
 		if rule, _, ok := e.matchPolicy(f); ok && rule.Action == ActionBlock {
-			return RouteDecision{}, false
+			step("policy rule blocks this flow despite the peer-target match")
+			return RouteDecision{}, false, trace
 		}
 
 		destIP := rec.CurrentIPv6
@@ -154,17 +180,20 @@ func (e *Engine) resolveFlow(f FlowInfo) (RouteDecision, bool) {
 			destIP = rec.CurrentIPv4
 		}
 		if !destIP.IsValid() {
-			return RouteDecision{}, false
+			step("peer target has no current address (offline/no handshake yet)")
+			return RouteDecision{}, false, trace
 		}
 
 		if p, ready := e.readyProvider(rec.RequiredUpstream); ready {
+			step("upstream %s ready -> dial %s", rec.RequiredUpstream, destIP)
 			return RouteDecision{
 				Upstream:    p,
 				UpstreamID:  rec.RequiredUpstream,
 				Destination: destIP.String(),
-			}, true
+			}, true, trace
 		}
-		return RouteDecision{}, false
+		step("upstream %s not ready -> fail closed", rec.RequiredUpstream)
+		return RouteDecision{}, false, trace
 	}
 
 	if SyntheticIPv6Prefix.Contains(targetIP) || SyntheticIPv4Prefix.Contains(targetIP) {
@@ -172,8 +201,10 @@ func (e *Engine) resolveFlow(f FlowInfo) (RouteDecision, bool) {
 		// A synthetic address that no longer maps to a peer is stale (the
 		// peer left, or the netmap moved on); falling through to the
 		// real-IP or subnet logic below would route it somewhere unrelated.
-		return RouteDecision{}, false
+		step("inside synthetic address space but no target registered (stale synthetic address) -> fail closed")
+		return RouteDecision{}, false, trace
 	}
+	step("not a synthetic address - treating as a real destination")
 
 	// Not a synthetic address at all: this is a peer's real Tailscale IP,
 	// handed to some app directly rather than resolved through our synthetic
@@ -193,12 +224,20 @@ func (e *Engine) resolveFlow(f FlowInfo) (RouteDecision, bool) {
 	// fall through to the legacy chain below - so a rule naming an upstream that
 	// is down fails closed rather than quietly using a different one.
 	if decision, matched, ok := e.applyPolicy(f, targetIP); matched {
-		return decision, ok
+		if ok {
+			step("policy rule matched (action=%s) -> upstream %s", policyActionName(decision.UpstreamID, ok), decision.UpstreamID)
+		} else {
+			step("policy rule matched but is not currently routable (blocked, or its upstream isn't ready) -> fail closed")
+		}
+		return decision, ok, trace
 	}
+	step("no policy rule matched")
 
 	if decision, ok := e.resolveRealIPRoute(targetIP); ok {
-		return decision, true
+		step("resolved via real-IP index -> upstream %s", decision.UpstreamID)
+		return decision, true, trace
 	}
+	step("no real-IP index match")
 
 	e.mu.RLock()
 	var longestMatch subnetRoute
@@ -218,27 +257,48 @@ func (e *Engine) resolveFlow(f FlowInfo) (RouteDecision, bool) {
 	if maxBits >= 0 {
 		uid := UpstreamID(longestMatch.TailnetID)
 		if p, ready := e.readyProvider(uid); ready {
+			step("matched advertised subnet route %s (upstream %s)", longestMatch.Prefix, uid)
 			return RouteDecision{
 				Upstream:    p,
 				UpstreamID:  uid,
 				Destination: targetIP.String(),
-			}, true
+			}, true, trace
 		}
-		return RouteDecision{}, false
+		step("matched advertised subnet route %s but upstream %s not ready -> fail closed", longestMatch.Prefix, uid)
+		return RouteDecision{}, false, trace
 	}
+	step("no subnet route match")
 
 	if exitNode != "" {
 		uid := UpstreamID(exitNode)
 		if p, ready := e.readyProvider(uid); ready {
+			step("falling back to configured exit node upstream %s", uid)
 			return RouteDecision{
 				Upstream:    p,
 				UpstreamID:  uid,
 				Destination: targetIP.String(),
-			}, true
+			}, true, trace
 		}
+		step("configured exit node upstream %s not ready", uid)
+	} else {
+		step("no exit node configured")
 	}
 
-	return RouteDecision{}, false
+	step("no route found -> reject")
+	return RouteDecision{}, false, trace
+}
+
+// policyActionName is a small logging helper: applyPolicy already collapsed
+// its rule into a RouteDecision by the time resolveFlowTraced sees it, so
+// this just names what kind of route resulted, for the trace line.
+func policyActionName(upstreamID UpstreamID, ok bool) string {
+	if !ok {
+		return "deny"
+	}
+	if upstreamID == DirectUpstreamID {
+		return "direct"
+	}
+	return "route"
 }
 
 // matchPolicy evaluates the active policy against a flow.
@@ -333,6 +393,64 @@ func (e *Engine) resolveRealIPRoute(targetIP netip.Addr) (RouteDecision, bool) {
 	}, true
 }
 
+// rejectDoomedDirectIPv6 reports whether a flow should be rejected before
+// gVisor accepts it, because it is an IPv6 destination that would resolve to
+// the @direct upstream and the device's current network cannot carry an
+// IPv6 dial right now - see Engine.directIPv6Usable's doc comment.
+//
+// Extracted as a pure function (decision + targetIP in, bool out, no gVisor
+// or gomobile involved) so the policy is unit-testable without constructing
+// a tcp.ForwarderRequest - the same reason dialWithRetry was pulled out of
+// handleTCPConnection in §93.
+func rejectDoomedDirectIPv6(decision RouteDecision, targetIP netip.Addr, ipv6Usable *func() bool) bool {
+	if ipv6Usable == nil || decision.UpstreamID != DirectUpstreamID || !targetIP.Is6() {
+		return false
+	}
+	return !(*ipv6Usable)()
+}
+
+// familyOf reports "4" or "6" for use as a route-decision event's
+// networkSource field (see logRouteDecision).
+func familyOf(ip netip.Addr) string {
+	if ip.Is6() && !ip.Is4In6() {
+		return "6"
+	}
+	return "4"
+}
+
+// routeDecisionMetaJSON builds logRouteDecision's metaJSON payload. Fields
+// are the ones the IPv6-direct-dial investigation asked to have logged per
+// flow: the virtual (app-facing) src/dst, the decoded real destination, the
+// exact dial network/address, the dial's wall-clock duration, and trace -
+// resolveFlowTraced's ordered list of which routing stages were tried and
+// why each one did or didn't produce a route, i.e. the "what decisions were
+// made for it to have gone there" detail, not just the final answer.
+// Marshaling failure (none of these types can actually fail to marshal)
+// falls back to an empty object rather than losing the event entirely.
+func routeDecisionMetaJSON(flow FlowInfo, targetIP netip.Addr, realDest, dialAddr string, dialDuration time.Duration, trace []string) string {
+	meta := map[string]any{
+		"virtualSrc": flow.Src.String(),
+		"virtualDst": flow.Dst.String(),
+		"targetIP":   targetIP.String(),
+	}
+	if realDest != "" {
+		meta["realDest"] = realDest
+	}
+	if dialAddr != "" {
+		meta["dialNetwork"] = "tcp"
+		meta["dialAddr"] = dialAddr
+		meta["dialDurationMs"] = dialDuration.Milliseconds()
+	}
+	if len(trace) > 0 {
+		meta["trace"] = trace
+	}
+	b, err := json.Marshal(meta)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
+}
+
 func (e *Engine) handleTCPConnection(r *tcp.ForwarderRequest) {
 	defer recoverAndLog("handleTCPConnection")
 	flowID := atomic.AddUint64(&e.flowCounter, 1)
@@ -355,12 +473,21 @@ func (e *Engine) handleTCPConnection(r *tcp.ForwarderRequest) {
 
 	var decision RouteDecision
 	var flow FlowInfo
+	var trace []string
 	if !isDNS {
 		var ok bool
 		flow = e.flowFromEndpointID("tcp", id)
-		decision, ok = e.resolveFlow(flow)
+		decision, ok, trace = e.resolveFlowTraced(flow)
 		if !ok {
 			log.Printf("[flow-%d] TCP %v -> %v (synthetic): reject (no route)", flowID, remoteAddr, targetIP)
+			e.logRouteDecision(flowID, flow.AppUID, "", familyOf(targetIP), "no-route", "", routeDecisionMetaJSON(flow, targetIP, "", "", 0, trace))
+			r.Complete(true)
+			return
+		}
+		if rejectDoomedDirectIPv6(decision, targetIP, e.directIPv6Usable.Load()) {
+			log.Printf("[flow-%d] TCP %v -> %v (synthetic): reject (no active network can carry IPv6 for %s right now)", flowID, remoteAddr, targetIP, decision.UpstreamID)
+			trace = append(trace, fmt.Sprintf("rejected before accept: no active network can carry IPv6 for %s right now", decision.UpstreamID))
+			e.logRouteDecision(flowID, flow.AppUID, decision.UpstreamID, familyOf(targetIP), "no-usable-network-for-family", "", routeDecisionMetaJSON(flow, targetIP, decision.Destination, "", 0, trace))
 			r.Complete(true)
 			return
 		}
@@ -401,11 +528,12 @@ func (e *Engine) handleTCPConnection(r *tcp.ForwarderRequest) {
 		dialAddr = fmt.Sprintf("[%s]:%d", decision.Destination, targetPort)
 	}
 
-	e.capture.registerFlow("tcp", flow.Src, flow.Dst, flow.AppUID)
+	e.capture.registerFlow("tcp", flow.Src, flow.Dst, flow.AppUID, flowID)
 
 	go func() {
 		defer recoverAndLog("handleTCPConnection.pump")
 		defer e.capture.unregisterFlow("tcp", flow.Src, flow.Dst)
+		defer e.earlyUID.forget(flowKey{"tcp", flow.Src, flow.Dst})
 		defer e.releaseDynamicAddr(targetIP)
 		defer ep.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -419,17 +547,23 @@ func (e *Engine) handleTCPConnection(r *tcp.ForwarderRequest) {
 		// for why this is bounded to dial-time only, and §93 for why a dial
 		// that fails with ErrNoUsableNetworkForFamily doesn't get retried at
 		// all despite that.
+		dialStart := time.Now()
 		conn, dialErr := dialWithRetry(ctx, decision.Upstream, "tcp", dialAddr, func(attempt int, err error) {
 			log.Printf("[flow-%d] TCP upstream dial %s %s attempt %d/%d failed: %v, retrying", flowID, decision.UpstreamID, dialAddr, attempt, tcpDialMaxAttempts, err)
 		})
+		dialDuration := time.Since(dialStart)
 		if dialErr != nil {
+			outcome, errStr := "dial-error", dialErr.Error()
 			if errors.Is(dialErr, ErrNoUsableNetworkForFamily) {
+				outcome = "no-usable-network-for-family"
 				log.Printf("[flow-%d] TCP upstream dial %s %s failed: %v (not retrying - no active network can carry this address family right now)", flowID, decision.UpstreamID, dialAddr, dialErr)
 			} else {
 				log.Printf("[flow-%d] TCP upstream dial %s %s failed after %d attempts: %v", flowID, decision.UpstreamID, dialAddr, tcpDialMaxAttempts, dialErr)
 			}
+			e.logRouteDecision(flowID, flow.AppUID, decision.UpstreamID, familyOf(targetIP), outcome, errStr, routeDecisionMetaJSON(flow, targetIP, decision.Destination, dialAddr, dialDuration, trace))
 			return
 		}
+		e.logRouteDecision(flowID, flow.AppUID, decision.UpstreamID, familyOf(targetIP), "success", "", routeDecisionMetaJSON(flow, targetIP, decision.Destination, dialAddr, dialDuration, trace))
 		defer conn.Close()
 		// e.peerPathFor reads an already-cached path (or, for kinds like
 		// WireGuard, inspects local state with no I/O) instead of
@@ -605,11 +739,12 @@ func (e *Engine) handleUDPConnection(r *udp.ForwarderRequest) bool {
 	gvisorConn := gonet.NewUDPConn(&wq, ep)
 	flowID := atomic.AddUint64(&e.flowCounter, 1)
 
-	e.capture.registerFlow("udp", flow.Src, flow.Dst, flow.AppUID)
+	e.capture.registerFlow("udp", flow.Src, flow.Dst, flow.AppUID, flowID)
 
 	go func() {
 		defer recoverAndLog("handleUDPConnection.pump")
 		defer e.capture.unregisterFlow("udp", flow.Src, flow.Dst)
+		defer e.earlyUID.forget(flowKey{"udp", flow.Src, flow.Dst})
 		defer e.releaseDynamicAddr(targetIP)
 		defer gvisorConn.Close()
 

@@ -275,6 +275,7 @@ const (
 	ObsEventVPNRestarted       = "VPN_RESTARTED"
 	ObsEventBackendError       = "BACKEND_ERROR"
 	ObsEventDNSQuery           = "DNS_QUERY"
+	ObsEventRouteDecision      = "ROUTE_DECISION"
 )
 
 // SetDNSQueryLogEnabled turns per-query DNS event logging on or off - the
@@ -303,6 +304,61 @@ func (e *Engine) logDNSQuery(qname, qtype string, appUID int32, upstreamID, outc
 		return
 	}
 	e.enqueueObservabilityEvent(ObsEventDNSQuery, upstreamID, appUID, qtype, qname, outcome, "")
+}
+
+// SetRouteDecisionLogEnabled turns per-flow routing-decision event logging on
+// or off, optionally scoped to specific Android app UIDs (comma-separated,
+// same convention as StartPacketCaptureApps's appUIDsCSV; empty means every
+// app). Off by default - see observability.routeDecisionLogEnabled's doc
+// comment for why this exists and why it's scoped by app rather than a
+// single global switch.
+func (e *Engine) SetRouteDecisionLogEnabled(enabled bool, appUIDsCSV string) {
+	uids := make(map[int32]bool)
+	for _, tok := range strings.Split(appUIDsCSV, ",") {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			continue
+		}
+		if v, err := strconv.ParseInt(tok, 10, 32); err == nil {
+			uids[int32(v)] = true
+		}
+	}
+	e.obs.routeDecisionMu.Lock()
+	e.obs.routeDecisionAppUIDs = uids
+	e.obs.routeDecisionMu.Unlock()
+	e.obs.routeDecisionLogEnabled.Store(enabled)
+}
+
+func (e *Engine) RouteDecisionLogEnabled() bool {
+	return e.obs.routeDecisionLogEnabled.Load()
+}
+
+// routeDecisionWanted reports whether appUID passes the current app-UID
+// filter - true if the filter set is empty (every app) or appUID is in it.
+func (e *Engine) routeDecisionWanted(appUID int32) bool {
+	e.obs.routeDecisionMu.RLock()
+	defer e.obs.routeDecisionMu.RUnlock()
+	if len(e.obs.routeDecisionAppUIDs) == 0 {
+		return true
+	}
+	return e.obs.routeDecisionAppUIDs[appUID]
+}
+
+// logRouteDecision records one TCP flow's routing outcome, if and only if
+// SetRouteDecisionLogEnabled(true, ...) is in effect for appUID - a single
+// atomic load plus (only when enabled) one RLock when it is not, so
+// handleTCPConnection can call this unconditionally on every flow without
+// worrying about the cost. family is "4" or "6"; outcome is "success",
+// "no-route", "no-usable-network-for-family", or "dial-error"; dialErr is
+// empty on success. metaJSON carries the full per-flow detail requested for
+// the IPv6-direct-dial investigation (virtual src/dst, decoded real
+// destination, dial network/address, dial duration) so the UI's SQLite
+// history has it without widening this function's own signature further.
+func (e *Engine) logRouteDecision(flowID uint64, appUID int32, upstreamID UpstreamID, family, outcome, dialErr, metaJSON string) {
+	if !e.obs.routeDecisionLogEnabled.Load() || !e.routeDecisionWanted(appUID) {
+		return
+	}
+	e.enqueueObservabilityEvent(ObsEventRouteDecision, string(upstreamID), appUID, family, outcome, dialErr, metaJSON)
 }
 
 // enqueueObservabilityEvent is the single place any discrete observability
@@ -470,6 +526,23 @@ type observability struct {
 	// atomic.Bool so the hot path (every DNS query, on or off) only ever
 	// costs one atomic load when this is off.
 	dnsQueryLogEnabled atomic.Bool
+
+	// routeDecisionLogEnabled/routeDecisionAppUIDs gate per-flow routing
+	// telemetry (see logRouteDecision below): which upstream a TCP flow
+	// resolved to, its address family, and how the upstream dial went
+	// (success/duration, or which of the terminal failure classes -
+	// no-route, no-usable-network-for-family, or an ordinary dial error).
+	// This exists for the same reason logDNSQuery does (§93/§the IPv6
+	// direct-dial investigation both needed exactly this and had to
+	// improvise temporary log lines instead) but is scoped by app UID
+	// rather than only on/off, so a live investigation can watch one
+	// misbehaving app's flows without an unbounded, unfiltered firehose
+	// across every app's traffic. An empty routeDecisionAppUIDs set with
+	// routeDecisionLogEnabled true means "every app" - the same convention
+	// packetCapture's captureAll mode uses for its own appUIDs set.
+	routeDecisionLogEnabled atomic.Bool
+	routeDecisionMu         sync.RWMutex
+	routeDecisionAppUIDs    map[int32]bool
 }
 
 // defaultSampleIntervalSeconds is used whenever the diagnostics UI is not

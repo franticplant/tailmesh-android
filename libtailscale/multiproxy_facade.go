@@ -60,7 +60,15 @@ func NewMultiProxyEngine(dataDir string, cb MultiProxyCallback) *MultiProxyEngin
 // NewMultiProxyEngineForApp uses tsnet's established per-upstream file stores.
 // Profile data is copied into and merged out of those stores at mode boundaries.
 func NewMultiProxyEngineForApp(dataDir string, appCtx AppContext, cb MultiProxyCallback) *MultiProxyEngine {
-	return NewMultiProxyEngine(dataDir, cb)
+	e := NewMultiProxyEngine(dataDir, cb)
+	// Lets handleTCPConnection reject a doomed IPv6 @direct flow before
+	// gVisor ever accepts it, instead of only discovering the same "no
+	// active network can carry IPv6 right now" fact once the upstream dial
+	// runs - see multiproxy.Engine.directIPv6Usable's doc comment and
+	// validation_and_gaps.md §93 for why the dial-time check alone still
+	// leaves a client-visible accept-then-reset window.
+	e.inner.SetDirectIPv6UsableFunc(appCtx.IsIPv6NetworkUsable)
+	return e
 }
 
 func (e *MultiProxyEngine) StartVPN(fd int32, mtu int32) error { return e.inner.StartVPN(fd, mtu) }
@@ -174,6 +182,21 @@ func (e *MultiProxyEngine) SetDNSQueryLogEnabled(enabled bool) {
 		return
 	}
 	e.inner.SetDNSQueryLogEnabled(enabled)
+}
+
+// SetRouteDecisionLogEnabled turns per-TCP-flow routing-decision event
+// logging on/off: which upstream a flow resolved to, its address family,
+// how the upstream dial went, and the full step-by-step trace of which
+// routing stages were tried - see multiproxy.Engine.logRouteDecision and
+// resolveFlowTraced. appUIDsCSV scopes it to specific Android app UIDs
+// (comma-separated, same convention as StartPacketCaptureApps); empty means
+// every app. Off by default - call with true only while a diagnostics
+// screen's routing-trace toggle is actually on.
+func (e *MultiProxyEngine) SetRouteDecisionLogEnabled(enabled bool, appUIDsCSV string) {
+	if e == nil || e.inner == nil {
+		return
+	}
+	e.inner.SetRouteDecisionLogEnabled(enabled, appUIDsCSV)
 }
 
 // StartPacketCaptureAll begins a global PCAP capture of every packet

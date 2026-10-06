@@ -83,6 +83,14 @@ type AppContext interface {
 
 	BindSocketToNetwork(fd int32) bool
 
+	// IsIPv6NetworkUsable reports whether the device's current network can
+	// carry an IPv6 dial right now - the same question BindSocketToNetwork
+	// answers for an IPv6 fd via NetworkChangeCallback.pickNetworkForDial,
+	// exposed standalone so multiproxy can ask it *before* accepting a
+	// virtual IPv6 flow bound for @direct, not just at dial time. See
+	// multiproxy.Engine.directIPv6Usable's doc comment.
+	IsIPv6NetworkUsable() bool
+
 	// GetUserCACertsPEM returns PEM-encoded user-installed CA certificates
 	// from the Android KeyStore, or empty bytes if none are installed.
 	GetUserCACertsPEM() ([]byte, error)

@@ -71,7 +71,17 @@ type packetCapture struct {
 	file        *pcapFile
 
 	flowsMu sync.RWMutex
-	flows   map[flowKey]int32 // -> AppUID
+	flows   map[flowKey]capturedFlow
+}
+
+// capturedFlow is what registerFlow records per flow: the owning app UID
+// (as before) plus the same flow ID handleTCPConnection/handleUDPConnection
+// already log under (e.g. "[flow-1234] TCP ..."), so a packet's comment and
+// the routing-decision telemetry for the same flow can be cross-referenced
+// by that one shared number without changing the pcapng format at all.
+type capturedFlow struct {
+	uid    int32
+	flowID uint64
 }
 
 func newPacketCapture() *packetCapture {
@@ -79,7 +89,7 @@ func newPacketCapture() *packetCapture {
 		appUIDs:     make(map[int32]bool),
 		appNames:    make(map[int32]string),
 		listenerIDs: make(map[string]bool),
-		flows:       make(map[flowKey]int32),
+		flows:       make(map[flowKey]capturedFlow),
 	}
 }
 
@@ -195,9 +205,9 @@ func storeCaptureMode(mode *int32, v captureMode) {
 // however many concurrent flows the engine allows) and gating it would
 // mean a capture started mid-flow could never attribute that flow's
 // packets correctly.
-func (c *packetCapture) registerFlow(proto string, src, dst netip.AddrPort, uid int32) {
+func (c *packetCapture) registerFlow(proto string, src, dst netip.AddrPort, uid int32, flowID uint64) {
 	c.flowsMu.Lock()
-	c.flows[flowKey{proto, src, dst}] = uid
+	c.flows[flowKey{proto, src, dst}] = capturedFlow{uid: uid, flowID: flowID}
 	c.flowsMu.Unlock()
 }
 
@@ -207,11 +217,11 @@ func (c *packetCapture) unregisterFlow(proto string, src, dst netip.AddrPort) {
 	c.flowsMu.Unlock()
 }
 
-func (c *packetCapture) uidForFlow(proto string, src, dst netip.AddrPort) (int32, bool) {
+func (c *packetCapture) flowFor(proto string, src, dst netip.AddrPort) (capturedFlow, bool) {
 	c.flowsMu.RLock()
-	uid, ok := c.flows[flowKey{proto, src, dst}]
+	f, ok := c.flows[flowKey{proto, src, dst}]
 	c.flowsMu.RUnlock()
-	return uid, ok
+	return f, ok
 }
 
 // observe is the hot-path entry point: given one raw IP packet as it
@@ -230,10 +240,10 @@ func (c *packetCapture) observe(data []byte) {
 	}
 
 	proto, src, dst, parsed := parseFiveTuple(data)
-	var uid int32
+	var flow capturedFlow
 	var attributed bool
 	if parsed {
-		uid, attributed = c.uidForFlow(proto, src, dst)
+		flow, attributed = c.flowFor(proto, src, dst)
 		if !attributed {
 			// Packets can arrive slightly before registerFlow runs (SYN
 			// racing the forwarder goroutine) or slightly after
@@ -243,9 +253,10 @@ func (c *packetCapture) observe(data []byte) {
 			// from a UID-scoped view rather than guessed at. Also tries
 			// the reverse direction, since a reply's src/dst are swapped
 			// relative to how the flow was registered.
-			uid, attributed = c.uidForFlow(proto, dst, src)
+			flow, attributed = c.flowFor(proto, dst, src)
 		}
 	}
+	uid := flow.uid
 
 	c.mu.RLock()
 	if mode == captureApps && (!attributed || !c.appUIDs[uid]) {
@@ -260,6 +271,12 @@ func (c *packetCapture) observe(data []byte) {
 		} else {
 			comment = "uid:" + strconv.Itoa(int(uid))
 		}
+		// flow-<id> matches the "[flow-<id>]" prefix handleTCPConnection/
+		// handleUDPConnection already log every routing/dial event under,
+		// so a packet in this capture and that flow's routing-decision
+		// telemetry (see observability.go's logRouteDecision) can be
+		// cross-referenced by eye without changing the pcapng format.
+		comment += " flow-" + strconv.FormatUint(flow.flowID, 10)
 	}
 	c.mu.RUnlock()
 	if f == nil {

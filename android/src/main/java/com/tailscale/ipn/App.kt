@@ -505,6 +505,10 @@ class App : UninitializedApp(), libtailscale.AppContext, ViewModelStoreOwner {
     }
   }
 
+  override fun isIPv6NetworkUsable(): Boolean {
+    return NetworkChangeCallback.pickNetworkForDial(true) != null
+  }
+
   override fun getUserCACertsPEM(): ByteArray {
     val ks = java.security.KeyStore.getInstance("AndroidCAStore")
     ks.load(null)
