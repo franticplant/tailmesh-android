@@ -6,6 +6,7 @@ package com.tailscale.ipn.multiproxy
 import android.content.Context
 import android.content.pm.PackageManager
 import com.tailscale.ipn.multiproxy.db.AppBindingRepository
+import com.tailscale.ipn.multiproxy.db.InboundListenerRepository
 import com.tailscale.ipn.multiproxy.db.ProfileRepository
 import com.tailscale.ipn.multiproxy.db.ProvisioningState
 import com.tailscale.ipn.multiproxy.db.SOCKS5ListenerRepository
@@ -34,6 +35,7 @@ class UpstreamPolicyApplier(
     private val upstreams: UpstreamRepository,
     private val bindings: AppBindingRepository,
     private val listeners: SOCKS5ListenerRepository,
+    private val inboundListeners: InboundListenerRepository,
     private val secrets: UpstreamSecretStore,
     private val settings: RoutingSettings,
     private val profiles: ProfileRepository,
@@ -46,6 +48,7 @@ class UpstreamPolicyApplier(
     register(engine, desired)
     applyPolicy(engine)
     applySOCKS5Listeners(engine)
+    applyInboundListeners(engine)
   }
 
   /**
@@ -289,6 +292,58 @@ class UpstreamPolicyApplier(
         )
       } catch (e: Exception) {
         TSLog.e(TAG, "could not register SOCKS5 listener ${listener.id}: $e")
+      }
+    }
+  }
+
+  /**
+   * Reconciles configured tailnet-facing inbound listeners (multiproxy_policy_facade.go's
+   * AddInboundListener/RemoveInboundListener) into the running engine.
+   *
+   * Unlike a SOCKS5 listener, which can be pointed at any upstream, an inbound listener needs a
+   * live node to accept on, so only an enabled, READY tailnet qualifies - the engine rejects
+   * anything else (inboundAcceptorFor). It follows the same "workload identity" behaviour as
+   * [applySOCKS5Listeners]: disabling the tailnet pauses the listener, and re-enabling it re-adds
+   * the listener on the next reconciliation with no separate resume step.
+   */
+  private fun applyInboundListeners(engine: MultiProxyEngine) {
+    val availableTailnetIds =
+        profiles.profiles.value
+            .filter { it.enabled && it.provisioningState == ProvisioningState.READY }
+            .map { it.id }
+            .toSet()
+    val desired =
+        InboundListenerRules.desired(inboundListeners.getAllImmediate(), availableTailnetIds)
+    val desiredIds = desired.map { it.id }.toSet()
+
+    val registered =
+        try {
+          JSONArray(engine.getInboundListenersJSON())
+        } catch (e: Exception) {
+          TSLog.e(TAG, "could not read registered inbound listeners: $e")
+          return
+        }
+    for (i in 0 until registered.length()) {
+      val id = registered.optJSONObject(i)?.optString("id") ?: continue
+      if (id.isEmpty() || id in desiredIds) continue
+      try {
+        engine.removeInboundListener(id)
+      } catch (e: Exception) {
+        TSLog.e(TAG, "could not remove inbound listener $id: $e")
+      }
+    }
+
+    for (listener in desired) {
+      try {
+        engine.addInboundListener(
+            listener.id,
+            listener.upstream,
+            listener.listenPort,
+            listener.localTarget,
+            listener.proxyProtocol,
+        )
+      } catch (e: Exception) {
+        TSLog.e(TAG, "could not register inbound listener ${listener.id}: $e")
       }
     }
   }

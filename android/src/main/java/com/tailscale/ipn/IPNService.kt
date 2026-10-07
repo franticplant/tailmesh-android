@@ -54,6 +54,7 @@ class MultiProxySession(val app: App) {
   val upstreamRepository = UpstreamRepository(app)
   val appBindingRepository = AppBindingRepository(app)
   val socks5ListenerRepository = SOCKS5ListenerRepository(app)
+  val inboundListenerRepository = com.tailscale.ipn.multiproxy.db.InboundListenerRepository(app)
   val upstreamSecretStore = UpstreamSecretStore(app.getEncryptedPrefs())
   val routingSettings = RoutingSettings(app)
   val upstreamPolicyApplier =
@@ -62,6 +63,7 @@ class MultiProxySession(val app: App) {
           upstreamRepository,
           appBindingRepository,
           socks5ListenerRepository,
+          inboundListenerRepository,
           upstreamSecretStore,
           routingSettings,
           profileRepository,

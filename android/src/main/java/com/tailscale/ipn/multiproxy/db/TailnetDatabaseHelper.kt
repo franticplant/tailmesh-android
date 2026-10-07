@@ -11,7 +11,7 @@ class TailnetDatabaseHelper(context: Context) :
     SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
   companion object {
     const val DATABASE_NAME = "multiproxy_profiles.db"
-    const val DATABASE_VERSION = 7
+    const val DATABASE_VERSION = 8
     const val TABLE_PROFILES = "profiles"
     const val COL_ID = "id"
     const val COL_DISPLAY_NAME = "display_name"
@@ -108,6 +108,16 @@ class TailnetDatabaseHelper(context: Context) :
     const val COL_LISTENER_UPSTREAM = "upstream"
     const val COL_LISTENER_HAS_AUTH = "has_auth"
 
+    // Tailnet-facing inbound listeners (see
+    // libtailscale/multiproxy/inbound_listener.go): a connection a tailnet peer
+    // opens to an enabled tailnet's node on listen_port is forwarded to
+    // local_target on the device. Nothing secret is stored here.
+    const val TABLE_INBOUND_LISTENERS = "inbound_listeners"
+    const val COL_IB_UPSTREAM = "upstream"
+    const val COL_IB_LISTEN_PORT = "listen_port"
+    const val COL_IB_LOCAL_TARGET = "local_target"
+    const val COL_IB_PROXY_PROTOCOL = "proxy_protocol"
+
     private const val CREATE_SOCKS5_LISTENERS =
         """
             CREATE TABLE IF NOT EXISTS $TABLE_SOCKS5_LISTENERS (
@@ -116,6 +126,20 @@ class TailnetDatabaseHelper(context: Context) :
                 $COL_LISTENER_PORT INTEGER NOT NULL,
                 $COL_LISTENER_UPSTREAM TEXT NOT NULL,
                 $COL_LISTENER_HAS_AUTH INTEGER NOT NULL DEFAULT 0,
+                $COL_ENABLED INTEGER NOT NULL DEFAULT 1,
+                $COL_CREATED_AT INTEGER NOT NULL,
+                $COL_UPDATED_AT INTEGER NOT NULL
+            )
+        """
+
+    private const val CREATE_INBOUND_LISTENERS =
+        """
+            CREATE TABLE IF NOT EXISTS $TABLE_INBOUND_LISTENERS (
+                $COL_LISTENER_ID TEXT PRIMARY KEY,
+                $COL_IB_UPSTREAM TEXT NOT NULL,
+                $COL_IB_LISTEN_PORT INTEGER NOT NULL,
+                $COL_IB_LOCAL_TARGET TEXT NOT NULL,
+                $COL_IB_PROXY_PROTOCOL INTEGER NOT NULL DEFAULT 0,
                 $COL_ENABLED INTEGER NOT NULL DEFAULT 1,
                 $COL_CREATED_AT INTEGER NOT NULL,
                 $COL_UPDATED_AT INTEGER NOT NULL
@@ -170,6 +194,7 @@ class TailnetDatabaseHelper(context: Context) :
     db.execSQL(CREATE_UPSTREAMS.trimIndent())
     db.execSQL(CREATE_APP_BINDINGS.trimIndent())
     db.execSQL(CREATE_SOCKS5_LISTENERS.trimIndent())
+    db.execSQL(CREATE_INBOUND_LISTENERS.trimIndent())
   }
 
   override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -252,6 +277,16 @@ class TailnetDatabaseHelper(context: Context) :
       db.beginTransaction()
       try {
         db.execSQL(CREATE_SOCKS5_LISTENERS.trimIndent())
+        db.setTransactionSuccessful()
+      } finally {
+        db.endTransaction()
+      }
+    }
+    if (oldVersion < 8) {
+      // New table, same shape of migration as v7 above.
+      db.beginTransaction()
+      try {
+        db.execSQL(CREATE_INBOUND_LISTENERS.trimIndent())
         db.setTransactionSuccessful()
       } finally {
         db.endTransaction()

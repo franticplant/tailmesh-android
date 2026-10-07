@@ -509,4 +509,26 @@
     <string name="socks5_listener_auth_required">Requires a username and password to connect</string>
     <string name="socks5_listener_invalid">That will not work</string>
 
+    <!-- Strings for tailnet-facing inbound listeners -->
+    <string name="inbound_listeners">Inbound listeners</string>
+    <string name="inbound_listeners_subtitle">Let a Tailnet peer reach a local service on this device</string>
+    <string name="inbound_listeners_explanation">A listener accepts connections from a Tailnet peer on one port and forwards them to a local service on this device. Unlike the rest of Multi-Tailnet mode, which is outbound-only, this gives a peer a way in. Forward to a loopback address such as 127.0.0.1:22; the local service sees the connection as coming from this app.</string>
+    <string name="inbound_listeners_empty">No inbound listeners configured yet.</string>
+    <string name="count_inbound_listeners">Configured listeners (%1$s)</string>
+    <string name="inbound_listener_add">Add listener</string>
+    <string name="inbound_listener_edit">Edit listener</string>
+    <string name="inbound_listener_upstream">Tailnet: %1$s</string>
+    <string name="inbound_listener_upstream_unset">Choose a Tailnet</string>
+    <string name="inbound_listener_listen_port">Listen port on the Tailnet node</string>
+    <string name="inbound_listener_local_target">Local target (host:port)</string>
+    <string name="inbound_listener_proxy_protocol">Send PROXY protocol v2 header (carries the real peer address)</string>
+    <string name="inbound_listener_proxy_protocol_on">PROXY protocol v2 enabled</string>
+    <string name="inbound_listener_forward_to">Forwarding to %1$s</string>
+    <string name="inbound_listener_delete_title">Delete listener on port %1$d?</string>
+    <string name="inbound_listener_delete_explanation">Anything currently connected through it will be disconnected.</string>
+    <string name="inbound_listener_status_running">Running</string>
+    <string name="inbound_listener_status_paused">Paused - its Tailnet is switched off</string>
+    <string name="inbound_listener_status_off">Off</string>
+    <string name="inbound_listener_invalid">That will not work</string>
+
 </resources>

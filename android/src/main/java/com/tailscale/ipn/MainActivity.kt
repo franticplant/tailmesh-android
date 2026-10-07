@@ -321,6 +321,9 @@ class MainActivity : ComponentActivity() {
                           onNavigateToSOCKS5Listeners = {
                             navController.navigate("socks5Listeners")
                           },
+                          onNavigateToInboundListeners = {
+                            navController.navigate("inboundListeners")
+                          },
                           onBackToSettings = backTo("settings"),
                           onNavigateBackHome = backTo("main"))
                   val exitNodePickerNav =
@@ -410,6 +413,9 @@ class MainActivity : ComponentActivity() {
                   }
                   composable("socks5Listeners") {
                     com.tailscale.ipn.ui.view.SOCKS5ListenersView(backTo("settings"))
+                  }
+                  composable("inboundListeners") {
+                    com.tailscale.ipn.ui.view.InboundListenersView(backTo("settings"))
                   }
                   composable("tailnetLock") { TailnetLockSetupView(backTo("settings")) }
                   composable("subnetRouting") { SubnetRoutingView(backTo("settings")) }
