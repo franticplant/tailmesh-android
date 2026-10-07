@@ -277,6 +277,43 @@ func (e *MultiProxyEngine) GetSOCKS5ListenersJSON() string {
 	return string(b)
 }
 
+// AddInboundListener starts (or replaces) a tailnet-facing listener: a
+// connection a tailnet peer opens to upstream's node on listenPort is
+// forwarded to localTarget on the device. upstream must name an enabled
+// tailnet (only a tailnet has a node to accept on). proxyProtocol prepends a
+// PROXY protocol v2 header carrying the real peer address so the local
+// service can recover the true source; the service must opt in to reading it.
+//
+// localTarget should normally be loopback (127.0.0.1:port): it stays on the
+// device and avoids Android's local-network access restrictions, which apply
+// to LAN targets.
+func (e *MultiProxyEngine) AddInboundListener(id, upstream string, listenPort int32, localTarget string, proxyProtocol bool) error {
+	if listenPort <= 0 || listenPort > 65535 {
+		return fmt.Errorf("inbound-listener: port %d out of range", listenPort)
+	}
+	return e.inner.AddInboundListener(multiproxy.InboundListenerConfig{
+		ID:            id,
+		Upstream:      multiproxy.UpstreamID(upstream),
+		ListenPort:    uint16(listenPort),
+		LocalTarget:   localTarget,
+		ProxyProtocol: proxyProtocol,
+		Network:       "tcp",
+	})
+}
+
+// RemoveInboundListener stops the named listener. Removing one that does not
+// exist is not an error.
+func (e *MultiProxyEngine) RemoveInboundListener(id string) error {
+	return e.inner.RemoveInboundListener(id)
+}
+
+// GetInboundListenersJSON lists every configured tailnet-facing listener,
+// ordered by id, as
+// [{"id","upstream","listenPort","localTarget","proxyProtocol","network"}...].
+func (e *MultiProxyEngine) GetInboundListenersJSON() string {
+	return e.inner.GetInboundListenersJSON()
+}
+
 // GetExitNodeCandidatesJSON lists the peers of an already-configured, running
 // tailnet (named by tailnetIdentifier) that offer to be an exit node. Add one
 // as its own upstream with AddExitNodeUpstream.

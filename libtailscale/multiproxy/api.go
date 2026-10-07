@@ -191,6 +191,14 @@ type Engine struct {
 	// directly rather than through the Provider/Ready interface.
 	socks5Listeners map[string]*socks5Listener
 
+	// inboundListeners holds every tailnet-facing listener, keyed by
+	// InboundListenerConfig.ID. See inbound_listener.go. Like socks5Listeners,
+	// a listener exists exactly when present in this map; Add/RemoveInboundListener
+	// own its lifecycle. Unlike a SOCKS5 listener, an inbound listener needs a
+	// live tailnet node to accept on, so it cannot outlive its tailnet being
+	// disabled - see inboundAcceptorFor.
+	inboundListeners map[string]*inboundListener
+
 	// stats holds live per-upstream dial/byte counters, recorded by every real
 	// dial regardless of call site. See stats.go.
 	stats *statsRegistry
@@ -962,6 +970,7 @@ func (e *Engine) Close() {
 
 	e.StopVPN()
 	e.closeAllSOCKS5Listeners()
+	e.closeAllInboundListeners()
 
 	for _, id := range ids {
 		uid := UpstreamID(id)
