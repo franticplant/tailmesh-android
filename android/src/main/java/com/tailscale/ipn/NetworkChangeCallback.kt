@@ -321,6 +321,20 @@ object NetworkChangeCallback {
     }
   }
 
+  /**
+   * One-line description of a chosen network (interface, transports, whether it is the cached
+   * default) for the bind-time log, so an OFF/ON attribution run can see which interface a direct
+   * dial actually bound to.
+   */
+  fun networkDescription(network: Network?): String {
+    if (network == null) return "none"
+    val cm = connectivityManager ?: return network.toString()
+    val iface = cm.getLinkProperties(network)?.interfaceName ?: "?"
+    val transports = cm.getNetworkCapabilities(network)?.let { transportsOf(it) } ?: emptyList()
+    val isDefault = network == cachedDefaultNetwork
+    return "iface=$iface transports=$transports default=$isDefault"
+  }
+
   // pickNetworkForDial returns the network to bind an outbound socket of the
   // given IP family to. IPv4 dials use the same single "default network" as
   // before; IPv6 dials are family-aware, because the chosen default network

@@ -494,7 +494,7 @@ class App : UninitializedApp(), libtailscale.AppContext, ViewModelStoreOwner {
 
         TSLog.d(
             TAG,
-            "bindSocketToActiveNetwork: binding fd=$fd (isIPv6=$isIPv6) to net=$net",
+            "bindSocketToActiveNetwork: binding fd=$fd (isIPv6=$isIPv6) to net=$net ${NetworkChangeCallback.networkDescription(net)}",
         )
         net.bindSocket(javaFd)
         true
