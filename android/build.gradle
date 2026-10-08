@@ -120,6 +120,16 @@ android {
     }
 
     testBuildType "applicationTest"
+
+    testOptions {
+        unitTests {
+            // Robolectric tests need real (merged) resources and a real
+            // android.jar, rather than the stubbed one the default unit-test
+            // runtime uses. See android/src/test/resources/robolectric.properties
+            // for the pinned test SDK.
+            includeAndroidResources = true
+        }
+    }
 }
 
 dependencies {
@@ -186,6 +196,10 @@ dependencies {
     testImplementation 'org.mockito:mockito-inline:5.2.0'
     testImplementation 'org.mockito.kotlin:mockito-kotlin:5.4.0'
     testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1'
+    // Host tests for Android-framework logic (SQLite repositories, LinkProperties
+    // route parsing, ViewModels) without an emulator.
+    testImplementation 'org.robolectric:robolectric:4.17'
+    testImplementation 'androidx.test:core:1.6.1'
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     implementation("androidx.compose.ui:ui-tooling-preview")
