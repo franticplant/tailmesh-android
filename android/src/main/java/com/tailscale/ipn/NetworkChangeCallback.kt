@@ -8,6 +8,9 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.util.Log
+import com.tailscale.ipn.multiproxy.NetworkInventory
+import com.tailscale.ipn.multiproxy.NetworkInventoryEntry
+import com.tailscale.ipn.multiproxy.NetworkRouteEntry
 import com.tailscale.ipn.util.TSLog
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
@@ -42,6 +45,21 @@ object NetworkChangeCallback {
   var currentDnsServerStr: String? = null
     private set
 
+  // Set by monitorDnsChanges/snapshotIfEmpty so networkInventory() can enumerate every network
+  // Android knows about, not just the INTERNET+NOT_VPN set this object tracks for DNS/default.
+  @Volatile private var connectivityManager: ConnectivityManager? = null
+
+  // Optional destination the inventory logs an on-link answer for on each recompute. Left unset by
+  // default; a debug action can point it at the address under investigation (e.g. a tether peer) so
+  // an attribution run reads "would this destination be on-link, via which interface?" from logcat.
+  @Volatile
+  var diagnosticDestination: String? = null
+    private set
+
+  fun setDiagnosticDestination(dst: String?) {
+    diagnosticDestination = dst
+  }
+
   fun currentUnderlyingDnsServer(): String? = currentDnsServerStr
 
   // snapshotIfEmpty synchronously reads the connectivity state Android
@@ -59,6 +77,7 @@ object NetworkChangeCallback {
   // only fills the gap before its first delivery - so it's a no-op once
   // currentDnsServerStr is already set.
   fun snapshotIfEmpty(connectivityManager: ConnectivityManager) {
+    this.connectivityManager = connectivityManager
     if (currentDnsServerStr != null) return
     lock.withLock {
       if (currentDnsServerStr != null) return@withLock
@@ -78,6 +97,7 @@ object NetworkChangeCallback {
   // system's network state and update the DNS configuration when interfaces
   // become available or properties of those interfaces change.
   fun monitorDnsChanges(connectivityManager: ConnectivityManager, dns: DnsConfig) {
+    this.connectivityManager = connectivityManager
     val networkConnectivityRequest =
         NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
@@ -229,6 +249,78 @@ object NetworkChangeCallback {
   fun hasStrictPrivateDnsActive(): Boolean =
       lock.withLock { cachedDefaultNetworkInfo?.linkProps?.isPrivateDnsActive == true }
 
+  /**
+   * Every network Android knows about, with its transports and full route table - the diagnostics
+   * inventory for the destination-aware direct-routing investigation.
+   *
+   * A directly-connected interface Android does not expose as a managed network (typically a
+   * USB-tether downstream) is simply absent: there is no `Network` object to bind a socket to,
+   * which is itself the answer to "is the tether subnet selectable?".
+   * [NetworkInventoryEntry.bindable] marks the ones the existing default-selection filter accepts.
+   */
+  fun networkInventory(): List<NetworkInventoryEntry> {
+    val cm = connectivityManager ?: return emptyList()
+    return lock.withLock {
+      cm.allNetworks.mapNotNull { network ->
+        val caps = cm.getNetworkCapabilities(network) ?: return@mapNotNull null
+        val linkProps = cm.getLinkProperties(network) ?: return@mapNotNull null
+        NetworkInventoryEntry(
+            networkKey = network.toString(),
+            interfaceName = linkProps.interfaceName,
+            transports = transportsOf(caps),
+            bindable =
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                    !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN),
+            isDefault = network == cachedDefaultNetwork,
+            hasInternetCapability = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET),
+            isVpn = caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN),
+            routes =
+                linkProps.routes.mapNotNull { route ->
+                  val address = route.destination?.address ?: return@mapNotNull null
+                  NetworkRouteEntry(
+                      cidr = "${address.hostAddress}/${route.destination.prefixLength}",
+                      gateway = route.gateway?.hostAddress,
+                      onLink = route.gateway == null,
+                      isDefault = route.isDefaultRoute,
+                  )
+                },
+        )
+      }
+    }
+  }
+
+  /**
+   * Logs the network inventory and, when [destination] is given, which network/interface a direct
+   * dial to it would pick and whether that is on-link. Emitted on every default-network recompute
+   * and on the startup snapshot, so an OFF/ON attribution run captures it from logcat with no
+   * debugger. See the destination-routing attribution checklist.
+   */
+  fun logNetworkInventory(why: String, destination: String? = null) {
+    val entries = networkInventory()
+    TSLog.d(TAG, "network inventory ($why): ${NetworkInventory.toJson(entries)}")
+    if (!destination.isNullOrBlank()) {
+      val picked = NetworkInventory.pickFor(destination, entries)
+      TSLog.d(
+          TAG,
+          "destination $destination -> " +
+              (picked?.let {
+                "network=${it.networkKey} iface=${it.interfaceName} /${it.prefixLength} onLink=${it.onLink}"
+              } ?: "no route (falls back to cached default)"))
+    }
+  }
+
+  private fun transportsOf(caps: NetworkCapabilities): List<String> = buildList {
+    if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) add("wifi")
+    if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) add("cellular")
+    if (caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) add("ethernet")
+    if (caps.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH)) add("bluetooth")
+    if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) add("vpn")
+    if (android.os.Build.VERSION.SDK_INT >= 31 &&
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_USB)) {
+      add("usb")
+    }
+  }
+
   // pickNetworkForDial returns the network to bind an outbound socket of the
   // given IP family to. IPv4 dials use the same single "default network" as
   // before; IPv6 dials are family-aware, because the chosen default network
@@ -297,6 +389,10 @@ object NetworkChangeCallback {
       MultiProxySessionCoordinator.recordNetworkSourceEvent(newSource, prevSource, newSource)
     }
     lastReportedNetworkSource = newSource
+
+    // Diagnostics: capture the full network/route inventory (and, when set, a destination's on-link
+    // answer) on every recompute, so an OFF/ON attribution run has it in logcat.
+    logNetworkInventory(why, diagnosticDestination)
   }
 
   // maybeUpdateDNSConfig will maybe update our DNS configuration based on the
