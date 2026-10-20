@@ -84,6 +84,14 @@ type dataplaneCounters struct {
 	// this makes that failure mode visible on-device instead of only in
 	// logcat, without having to guess from the generic counter.
 	dnsForwardFailures atomic.Uint64
+
+	// dnsAAAASuppressed counts AAAA queries answered with NODATA because the
+	// asking app's route cannot carry IPv6. See family.go.
+	dnsAAAASuppressed atomic.Uint64
+
+	// familyRejects counts flows refused before accept because their route
+	// cannot carry the destination's address family. See family.go.
+	familyRejects atomic.Uint64
 }
 
 // reset zeroes every dataplane counter, for the diagnostics "reset stats"
@@ -102,6 +110,8 @@ func (d *dataplaneCounters) reset() {
 	d.attributionFailures.Store(0)
 	d.dnsAttributionFailClosed.Store(0)
 	d.dnsForwardFailures.Store(0)
+	d.dnsAAAASuppressed.Store(0)
+	d.familyRejects.Store(0)
 }
 
 func (d *dataplaneCounters) addAttributionFailure() {
@@ -114,6 +124,14 @@ func (d *dataplaneCounters) addDNSAttributionFailClosed() {
 
 func (d *dataplaneCounters) addDNSForwardFailure() {
 	d.dnsForwardFailures.Add(1)
+}
+
+func (d *dataplaneCounters) addDNSAAAASuppressed() {
+	d.dnsAAAASuppressed.Add(1)
+}
+
+func (d *dataplaneCounters) addFamilyReject() {
+	d.familyRejects.Add(1)
 }
 
 func (d *dataplaneCounters) addRx(nbytes uint64) {
@@ -799,6 +817,11 @@ type DataplaneSnapshot struct {
 	// comment: a query was routed to a specific upstream but got no answer
 	// through it (that upstream's own network dropped/blocked DNS).
 	DNSForwardFailures uint64 `json:"dnsForwardFailures"`
+
+	// DNSAAAASuppressed / FamilyRejects - see the matching dataplaneCounters
+	// doc comments and family.go.
+	DNSAAAASuppressed uint64 `json:"dnsAAAASuppressed"`
+	FamilyRejects     uint64 `json:"familyRejects"`
 }
 
 // ObservabilitySnapshot is the single JSON payload the diagnostics UI polls
@@ -858,6 +881,8 @@ func (e *Engine) GetObservabilitySnapshotJSON() string {
 		AttributionFailures:      o.dp.attributionFailures.Load(),
 		DNSAttributionFailClosed: o.dp.dnsAttributionFailClosed.Load(),
 		DNSForwardFailures:       o.dp.dnsForwardFailures.Load(),
+		DNSAAAASuppressed:        o.dp.dnsAAAASuppressed.Load(),
+		FamilyRejects:            o.dp.familyRejects.Load(),
 	}
 
 	uidSnap := e.uids.snapshot()

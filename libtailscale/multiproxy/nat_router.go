@@ -41,9 +41,10 @@ const (
 )
 
 // ErrNoUsableNetworkForFamily is returned (wrapped) by an Upstream's Dial
-// when the Android side has already determined, before attempting to
-// connect, that no active network can carry a socket of the dialed address
-// family - see App.bindSocketToNetwork / NetworkChangeCallback.pickNetworkForDial
+// when it is already known, before attempting to connect, that the dialed
+// address family cannot be carried: a WireGuard tunnel with no address or peer
+// route in that family (see family.go), or the Android side having determined
+// that no active network can carry a socket of that family - see App.bindSocketToNetwork / NetworkChangeCallback.pickNetworkForDial
 // in the Android source, and the netns.SetAndroidBindToNetworkFunc callback
 // in libtailscale/backend.go that turns a false return from that Java method
 // into this Go error.
@@ -483,9 +484,10 @@ func (e *Engine) handleTCPConnection(r *tcp.ForwarderRequest) {
 			r.Complete(true)
 			return
 		}
-		if rejectDoomedDirectIPv6(decision, targetIP, e.directIPv6Usable.Load()) {
-			log.Printf("[flow-%d] TCP %v -> %v (synthetic): reject (no active network can carry IPv6 for %s right now)", flowID, remoteAddr, targetIP, decision.UpstreamID)
-			trace = append(trace, fmt.Sprintf("rejected before accept: no active network can carry IPv6 for %s right now", decision.UpstreamID))
+		if rejectUncarriableFamily(decision, targetIP, e.directIPv6Usable.Load()) {
+			log.Printf("[flow-%d] TCP %v -> %v (synthetic): reject (%s cannot carry IPv%s right now)", flowID, remoteAddr, targetIP, decision.UpstreamID, familyOf(targetIP))
+			trace = append(trace, fmt.Sprintf("rejected before accept: %s cannot carry IPv%s right now", decision.UpstreamID, familyOf(targetIP)))
+			e.obs.dp.addFamilyReject()
 			e.logRouteDecision(flowID, flow.AppUID, decision.UpstreamID, familyOf(targetIP), "no-usable-network-for-family", "", routeDecisionMetaJSON(flow, targetIP, decision.Destination, "", 0, trace))
 			r.Complete(true)
 			return
@@ -717,6 +719,15 @@ func (e *Engine) handleUDPConnection(r *udp.ForwarderRequest) bool {
 	flow := e.flowFromEndpointID("udp", r.ID())
 	decision, ok := e.resolveFlow(flow)
 	if !ok {
+		return false
+	}
+	// Refusing the datagram (gVisor answers with ICMP unreachable) instead of
+	// accepting it into an association whose dial is certain to fail lets a
+	// QUIC client give up on this family immediately rather than time out.
+	// See family.go.
+	if rejectUncarriableFamily(decision, targetIP, e.directIPv6Usable.Load()) {
+		log.Printf("UDP %v: reject (%s cannot carry IPv%s right now)", targetIP, decision.UpstreamID, familyOf(targetIP))
+		e.obs.dp.addFamilyReject()
 		return false
 	}
 

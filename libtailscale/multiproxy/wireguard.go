@@ -87,6 +87,15 @@ type wireguardProvider struct {
 	stack *stack.Stack
 	tun   *wgNetTun
 
+	// v4/v6 report whether the tunnel can carry each family at all: it needs
+	// a tunnel address in that family and at least one peer allowed IP in it.
+	// Fixed at construction; see family.go.
+	v4, v6 bool
+	// dns are the tunnel's own resolvers (wg-quick "DNS ="), used to resolve
+	// a hostname destination inside the tunnel. See wireguard_resolve.go.
+	dns      []netip.Addr
+	resolver *tunnelResolver
+
 	mu     sync.Mutex
 	closed bool
 }
@@ -280,8 +289,46 @@ func NewWireGuardUpstream(cfg WireGuardConfig, bind conn.Bind, logf func(string,
 		return nil, fmt.Errorf("wireguard: bringing up device: %w", err)
 	}
 
-	return &wireguardProvider{id: cfg.ID, via: cfg.Via, dev: dev, stack: tstack, tun: tunDev}, nil
+	v4, v6 := cfg.carriedFamilies()
+	p := &wireguardProvider{id: cfg.ID, via: cfg.Via, dev: dev, stack: tstack, tun: tunDev, v4: v4, v6: v6, dns: cfg.DNS}
+	p.resolver = newTunnelResolver(p)
+	return p, nil
 }
+
+// carriedFamilies reports which address families a tunnel built from cfg can
+// carry: a family needs both a local tunnel address and a peer route.
+func (cfg WireGuardConfig) carriedFamilies() (v4, v6 bool) {
+	var addr4, addr6, route4, route6 bool
+	for _, a := range cfg.Addresses {
+		if a.Unmap().Is4() {
+			addr4 = true
+		} else {
+			addr6 = true
+		}
+	}
+	for _, peer := range cfg.Peers {
+		for _, pfx := range peer.AllowedIPs {
+			if pfx.Addr().Unmap().Is4() {
+				route4 = true
+			} else {
+				route6 = true
+			}
+		}
+	}
+	return addr4 && route4, addr6 && route6
+}
+
+// CarriesFamily implements FamilyCarrier.
+func (p *wireguardProvider) CarriesFamily(ipv6 bool) bool {
+	if ipv6 {
+		return p.v6
+	}
+	return p.v4
+}
+
+// ResolvesHostnames implements HostnameResolver: a tunnel can resolve names
+// only when its configuration names resolvers to ask inside it.
+func (p *wireguardProvider) ResolvesHostnames() bool { return len(p.dns) > 0 }
 
 func (p *wireguardProvider) ID() UpstreamID     { return p.id }
 func (p *wireguardProvider) Kind() UpstreamKind { return UpstreamKindWireGuard }
@@ -338,15 +385,52 @@ func (p *wireguardProvider) Dial(ctx context.Context, network, address string) (
 	if !p.Ready() {
 		return nil, fmt.Errorf("%w: wireguard %q", ErrUpstreamNotReady, p.id)
 	}
-	// The tunnel's netstack has no resolver of its own, and needs none: the
-	// multiproxy DNS server has already resolved the name by the time the
-	// datapath dials, so destinations always arrive as literal IP:port.
+	// Datapath flows always arrive as literal IP:port: the multiproxy DNS
+	// server has already resolved the name. Hostnames come from the inbound
+	// SOCKS5 listener and the DoH client, and are resolved inside the tunnel
+	// through its own DNS servers so the lookup does not leak off-tunnel.
 	ap, err := netip.ParseAddrPort(address)
 	if err != nil {
-		return nil, fmt.Errorf("wireguard: destination %q must be a literal address:port: %w", address, err)
+		return p.dialHostname(ctx, network, address)
 	}
+	return p.dialAddrPort(ctx, network, ap)
+}
 
+func (p *wireguardProvider) dialHostname(ctx context.Context, network, address string) (net.Conn, error) {
+	host, portStr, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("wireguard: destination %q: %w", address, err)
+	}
+	port, err := net.LookupPort(network, portStr)
+	if err != nil {
+		return nil, fmt.Errorf("wireguard: destination %q: %w", address, err)
+	}
+	if !p.ResolvesHostnames() {
+		return nil, fmt.Errorf("wireguard: cannot dial hostname %q: the tunnel has no DNS server configured to resolve it with", host)
+	}
+	addrs, err := p.resolver.lookup(ctx, host)
+	if err != nil {
+		return nil, fmt.Errorf("wireguard: resolving %q inside the tunnel: %w", host, err)
+	}
+	var lastErr error
+	for _, a := range addrs {
+		conn, err := p.dialAddrPort(ctx, network, netip.AddrPortFrom(a, uint16(port)))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return nil, fmt.Errorf("wireguard: dialing %q: %w", address, lastErr)
+}
+
+func (p *wireguardProvider) dialAddrPort(ctx context.Context, network string, ap netip.AddrPort) (net.Conn, error) {
 	addr := ap.Addr().Unmap()
+	if !p.CarriesFamily(isIPv6Dest(addr)) {
+		return nil, fmt.Errorf("%w: wireguard %q has no IPv%s tunnel address or peer route", ErrNoUsableNetworkForFamily, p.id, familyOf(addr))
+	}
 	proto := ipv6.ProtocolNumber
 	if addr.Is4() {
 		proto = ipv4.ProtocolNumber

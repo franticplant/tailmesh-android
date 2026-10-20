@@ -594,6 +594,16 @@ func (e *Engine) handleDNSMsg(r *dns.Msg, netType string, flow FlowInfo) *dns.Ms
 			return m
 		}
 
+		// An app whose data route cannot carry IPv6 (a v4-only WireGuard
+		// tunnel, or @direct on a network without usable IPv6) gets NODATA for
+		// AAAA instead of addresses it would only connect to and fail on, so
+		// it uses IPv4 from the start. See family.go.
+		if len(r.Question) == 1 && r.Question[0].Qtype == dns.TypeAAAA && !e.appRouteCarriesIPv6(flow.AppUID) {
+			e.obs.dp.addDNSAAAASuppressed()
+			logDNS("", "aaaa-suppressed")
+			return m
+		}
+
 		// Where the forward leaves from follows the asking app's own route, so a
 		// proxied app does not announce its lookups to the device resolver. See
 		// dns_policy.go.

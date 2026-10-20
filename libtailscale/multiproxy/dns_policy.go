@@ -233,34 +233,53 @@ func (e *Engine) dohClientFor(id UpstreamID) *http.Client {
 				if !ok {
 					return nil, fmt.Errorf("%w: %q", ErrUpstreamNotReady, id)
 				}
-				conn, err := p.Dial(ctx, network, address)
-				if err == nil {
-					return conn, nil
-				}
-				// Some upstreams (WireGuard's own netstack, which has no
-				// resolver of its own - see wireguardProvider.Dial's doc
-				// comment) can only dial a literal address:port, unlike
-				// SOCKS5/Tailnet upstreams which resolve a hostname at the
-				// far end. If the address wasn't already literal, resolve
-				// the DoH resolver's own hostname off-tunnel (the same
-				// bootstrap path the device-direct DoH client uses for the
-				// same reason) and retry once with the literal IP. A
-				// provider that can already resolve hostnames itself
-				// succeeds on the first attempt and never reaches this
-				// fallback, so its leak properties (letting the far end
-				// resolve, not the device) are unchanged.
+				// Some upstreams (a WireGuard tunnel with no "DNS =" servers)
+				// can only dial a literal address:port, unlike SOCKS5/Tailnet
+				// upstreams which resolve a hostname at the far end, or a
+				// WireGuard tunnel that resolves it through its own DNS. For
+				// those, resolve the DoH resolver's own hostname off-tunnel
+				// (the same bootstrap path the device-direct DoH client uses
+				// for the same reason) and dial the literal IP. That is
+				// decided before dialing rather than after a failed attempt:
+				// the doomed hostname dial used to be recorded as a failure
+				// on the upstream for every DoH connection. A provider that
+				// does not say either way still gets the hostname first, with
+				// the bootstrap as a fallback.
 				host, port, splitErr := net.SplitHostPort(address)
-				if splitErr != nil {
-					return nil, err
+				_, parseErr := netip.ParseAddr(host)
+				if splitErr != nil || parseErr == nil {
+					return p.Dial(ctx, network, address)
 				}
-				if _, parseErr := netip.ParseAddr(host); parseErr == nil {
-					return nil, err
+				var firstErr error
+				if providerResolvesHostnames(p) {
+					conn, err := p.Dial(ctx, network, address)
+					if err == nil {
+						return conn, nil
+					}
+					firstErr = err
 				}
 				ips, resolveErr := bootstrapResolve(ctx, host)
-				if resolveErr != nil || len(ips) == 0 {
-					return nil, err
+				if resolveErr != nil {
+					if firstErr != nil {
+						return nil, firstErr
+					}
+					return nil, resolveErr
 				}
-				return p.Dial(ctx, network, net.JoinHostPort(ips[0].String(), port))
+				var lastErr error
+				for _, ip := range ips {
+					if !providerCarriesFamily(p, isIPv6Dest(ip)) {
+						continue
+					}
+					conn, err := p.Dial(ctx, network, net.JoinHostPort(ip.String(), port))
+					if err == nil {
+						return conn, nil
+					}
+					lastErr = err
+				}
+				if lastErr == nil {
+					lastErr = fmt.Errorf("no bootstrap address for %q that %s can carry", host, id)
+				}
+				return nil, lastErr
 			},
 			// Same reason as dohHTTPClient: setting DialContext otherwise
 			// suppresses HTTP/2, and some providers serve HTTP/2 only.

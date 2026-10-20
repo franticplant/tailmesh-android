@@ -889,6 +889,16 @@ private fun overviewSection(
         "DNS",
         "${snapshot.dataplane.dnsQueries} queries, ${snapshot.dataplane.dnsFailures} failures")
     StatRow("VPN restarts", "${snapshot.dataplane.vpnRestarts}")
+    if (snapshot.dataplane.dnsAAAASuppressed > 0 || snapshot.dataplane.familyRejects > 0) {
+      StatRow(
+          "IPv6 answers withheld (route is IPv4-only)",
+          "${snapshot.dataplane.dnsAAAASuppressed}",
+      )
+      StatRow(
+          "Flows refused for address family (app retried other family)",
+          "${snapshot.dataplane.familyRejects}",
+      )
+    }
     if (snapshot.dataplane.attributionFailures > 0 ||
         snapshot.dataplane.dnsAttributionFailClosed > 0 ||
         snapshot.dataplane.dnsForwardFailures > 0) {

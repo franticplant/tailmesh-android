@@ -110,6 +110,8 @@ data class DataplaneSnapshot(
     val attributionFailures: Long = 0,
     val dnsAttributionFailClosed: Long = 0,
     val dnsForwardFailures: Long = 0,
+    val dnsAAAASuppressed: Long = 0,
+    val familyRejects: Long = 0,
 )
 
 /**
