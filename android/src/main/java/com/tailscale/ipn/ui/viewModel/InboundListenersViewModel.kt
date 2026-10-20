@@ -6,19 +6,17 @@ package com.tailscale.ipn.ui.viewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.tailscale.ipn.App
-import com.tailscale.ipn.multiproxy.InboundListenerRules
+import com.tailscale.ipn.multiproxy.ControlException
+import com.tailscale.ipn.multiproxy.MultiProxyControls
 import com.tailscale.ipn.multiproxy.db.InboundListenerRecord
 import com.tailscale.ipn.multiproxy.db.ProvisioningState
 import com.tailscale.ipn.util.TSLog
-import java.util.UUID
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 /**
  * Backs the Inbound Listeners settings screen: tailnet peers reach a local service through an
@@ -30,6 +28,7 @@ import kotlinx.coroutines.withContext
 class InboundListenersViewModel : ViewModel() {
   private val session = App.get().multiProxySession
   private val repository = session.inboundListenerRepository
+  private val controls = MultiProxyControls(session)
 
   /** The user's configured listeners. */
   val listeners: StateFlow<List<InboundListenerRecord>> = repository.listeners
@@ -64,42 +63,14 @@ class InboundListenersViewModel : ViewModel() {
       upstream: String,
       listenPort: String,
       localTarget: String,
-      proxyProtocol: Boolean
-  ) {
-    val portNum = InboundListenerRules.parseListenPort(listenPort)
-    if (portNum == null) {
-      errorMessage.value = "Port must be a number from 1 to 65535"
-      return
-    }
-    if (upstream.isBlank()) {
-      errorMessage.value = "Choose which tailnet this listener accepts on"
-      return
-    }
-    val target = InboundListenerRules.parseLocalTarget(localTarget)
-    if (target == null) {
-      errorMessage.value = "Local target must be host:port, e.g. 127.0.0.1:22"
-      return
-    }
-    val listenerId = id ?: "inbound-${UUID.randomUUID()}"
-    viewModelScope.launch {
-      repository.saveConfig(listenerId, upstream, portNum, target, proxyProtocol)
-      applyNow()
-    }
+      proxyProtocol: Boolean,
+  ) = act { controls.saveInboundListener(id, upstream, listenPort, localTarget, proxyProtocol) }
+
+  fun setEnabled(id: String, enabled: Boolean) = act {
+    controls.setInboundListenerEnabled(id, enabled)
   }
 
-  fun setEnabled(id: String, enabled: Boolean) {
-    viewModelScope.launch {
-      repository.setEnabled(id, enabled)
-      applyNow()
-    }
-  }
-
-  fun delete(id: String) {
-    viewModelScope.launch {
-      repository.delete(id)
-      applyNow()
-    }
-  }
+  fun delete(id: String) = act { controls.deleteInboundListener(id) }
 
   /**
    * Whether a listener is currently registered with the running engine - distinct from
@@ -121,13 +92,15 @@ class InboundListenersViewModel : ViewModel() {
     }
   }
 
-  private suspend fun applyNow() {
-    val engine = session.engine ?: return
-    withContext(Dispatchers.IO) {
+  private fun act(block: suspend () -> Unit) {
+    viewModelScope.launch {
       try {
-        session.upstreamPolicyApplier.apply(engine)
+        block()
+      } catch (e: ControlException) {
+        errorMessage.value = e.message
       } catch (e: Exception) {
-        TSLog.e(TAG, "could not apply inbound listener configuration: $e")
+        TSLog.e(TAG, "action failed: $e")
+        errorMessage.value = e.message ?: "That did not work"
       }
     }
   }

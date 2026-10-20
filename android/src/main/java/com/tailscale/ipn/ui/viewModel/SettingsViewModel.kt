@@ -32,6 +32,7 @@ data class SettingsNav(
     val onNavigateToPacketCapture: () -> Unit,
     val onNavigateToSOCKS5Listeners: () -> Unit,
     val onNavigateToInboundListeners: () -> Unit,
+    val onNavigateToRemoteControl: () -> Unit,
     val onNavigateBackHome: () -> Unit,
     val onBackToSettings: () -> Unit,
 )

@@ -62,6 +62,7 @@ custom-tailscale-docs/
 - ⚙️ [**01: Custom Patches & Controls**](features/01-custom-patches-and-controls.md): Technical implementation of Manual HTTP Proxy (`tshttpproxy`), Public DoH selection (`dns.HookModifyConfig`), and route-aware DoH dialing.
 - 📖 [**02: Default vs. Custom Client**](features/02-default-vs-custom-client.md): Architectural comparison showing stock Tailscale vs. our custom client enhancements.
 - 🛡️ [**03: Android Private DNS Guide**](features/03-android-private-dns-guide.md): OS source tree analysis (AOSP/GrapheneOS `DnsManager` & `netd`), Off vs. Opportunistic vs. Strict DoT modes, and MagicDNS compatibility.
+- 🛰️ [**04: Remote Control & Debugging**](features/04-remote-control.md): The authenticated remote API and `tailmesh-ctl`: device approval and password sign-in, global auth rate limit, read-only vs. control sessions, append-only access log, captures, logs and pprof.
 
 ### 3. Building & Compatibility (`/building/`)
 - 🛠️ [**01: Build & Compatibility Manual**](building/01-build-compatibility-manual.md): Toolchain requirements (JDK 17, Go 1.26.6+, NDK 26), Android 11–17 API 36 support, and 16 KB ELF alignment.

@@ -112,6 +112,10 @@
         </receiver>
 
         <receiver
+            android:name=".remote.RemoteControlReceiver"
+            android:exported="false" />
+
+        <receiver
             android:name=".MDMSettingsChangedReceiver"
             android:exported="false">
             <intent-filter>

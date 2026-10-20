@@ -61,6 +61,8 @@ object TSLog {
     public fun sendLog(tag: String?, message: String) {
       val logTag = tag ?: ""
       Libtailscale.sendLog((logTag + ": " + message).toByteArray(Charsets.UTF_8))
+      // Shown in the remote-control log stream; a no-op while it is off.
+      Libtailscale.remoteControlLog("app", "$logTag: $message")
     }
   }
 }

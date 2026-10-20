@@ -214,6 +214,9 @@ class App : UninitializedApp(), libtailscale.AppContext, ViewModelStoreOwner {
       }
     }
     TSLog.init(this)
+    // Deferred: restore() calls App.get(), which would re-enter this
+    // still-running initialization.
+    applicationScope.launch { com.tailscale.ipn.remote.RemoteControl.restore() }
     FeatureFlags.initialize(mapOf("enable_new_search" to true))
   }
   /**
@@ -288,6 +291,7 @@ class App : UninitializedApp(), libtailscale.AppContext, ViewModelStoreOwner {
     val uriString = getEncryptedPrefs().getString(PREF_KEY_SAF_URI, null)
     return uriString?.let { Uri.parse(it) }
   }
+
   /*
    * setAbleToStartVPN remembers whether or not we're able to start the VPN
    * by storing this in a shared preference. This allows us to check this
@@ -561,6 +565,7 @@ open class UninitializedApp : Application() {
     fun get(): UninitializedApp {
       return appInstance
     }
+
     /**
      * Return the name of the active (but not the selected/prior one) exit node based on the
      * provided [Ipn.Prefs] and [Netmap.NetworkMap].
@@ -581,6 +586,7 @@ open class UninitializedApp : Application() {
   protected fun setAbleToStartVPN(rdy: Boolean) {
     getUnencryptedPrefs().edit().putBoolean(ABLE_TO_START_VPN_KEY, rdy).apply()
   }
+
   /** This function can be called without initializing the App. */
   fun isAbleToStartVPN(): Boolean {
     return getUnencryptedPrefs().getBoolean(ABLE_TO_START_VPN_KEY, false)

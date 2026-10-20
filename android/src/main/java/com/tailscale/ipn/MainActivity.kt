@@ -85,6 +85,7 @@ import com.tailscale.ipn.ui.view.NotificationsView
 import com.tailscale.ipn.ui.view.PeerDetails
 import com.tailscale.ipn.ui.view.PermissionsView
 import com.tailscale.ipn.ui.view.PrimaryActionButton
+import com.tailscale.ipn.ui.view.RemoteControlView
 import com.tailscale.ipn.ui.view.RunExitNodeView
 import com.tailscale.ipn.ui.view.SearchView
 import com.tailscale.ipn.ui.view.SettingsView
@@ -122,12 +123,16 @@ class MainActivity : ComponentActivity() {
   companion object {
     private const val TAG = "Main Activity"
     private const val START_AT_ROOT = "startAtRoot"
+
+    /** Opens the Remote control screen; sent by its notifications. */
+    const val ACTION_OPEN_REMOTE_CONTROL = "com.tailscale.ipn.OPEN_REMOTE_CONTROL"
   }
 
   private fun Context.isLandscapeCapable(): Boolean {
     return (resources.configuration.screenLayout and SCREENLAYOUT_SIZE_MASK) >=
         SCREENLAYOUT_SIZE_LARGE
   }
+
   // The loginQRCode is used to track whether or not we should be rendering a QR code
   // to the user.  This is used only on TV platforms with no browser in lieu of
   // simply opening the URL.  This should be consumed once it has been handled.
@@ -254,6 +259,9 @@ class MainActivity : ComponentActivity() {
       }
 
       navController = rememberNavController()
+      LaunchedEffect(Unit) {
+        if (intent?.action == ACTION_OPEN_REMOTE_CONTROL) navController.navigate("remoteControl")
+      }
 
       AppTheme {
         Surface(color = MaterialTheme.colorScheme.inverseSurface) { // Background for the letterbox
@@ -282,171 +290,185 @@ class MainActivity : ComponentActivity() {
                 popExitTransition = {
                   slideOutHorizontally(
                       animationSpec = tween(250, easing = LinearOutSlowInEasing),
-                      targetOffsetX = { it }) +
-                      fadeOut(animationSpec = tween(500, easing = LinearOutSlowInEasing))
-                }) {
-                  fun backTo(route: String): () -> Unit = {
-                    navController.popBackStack(route = route, inclusive = false)
-                  }
-                  val mainViewNav =
-                      MainViewNavigation(
-                          onNavigateToSettings = { navController.navigate("settings") },
-                          onNavigateToPeerDetails = {
-                            navController.navigate("peerDetails/${it.StableID}")
-                          },
-                          onNavigateToExitNodes = { navController.navigate("exitNodes") },
-                          onNavigateToHealth = { navController.navigate("health") },
-                          onNavigateToSearch = {
-                            viewModel.enableSearchAutoFocus()
-                            navController.navigate("search")
-                          },
-                          onNavigateToMultiProxy = { navController.navigate("multiProxy") })
-                  val settingsNav =
-                      SettingsNav(
-                          onNavigateToBugReport = { navController.navigate("bugReport") },
-                          onNavigateToAbout = { navController.navigate("about") },
-                          onNavigateToDNSSettings = { navController.navigate("dnsSettings") },
-                          onNavigateToSplitTunneling = { navController.navigate("splitTunneling") },
-                          onNavigateToTailnetLock = { navController.navigate("tailnetLock") },
-                          onNavigateToSubnetRouting = { navController.navigate("subnetRouting") },
-                          onNavigateToMDMSettings = { navController.navigate("mdmSettings") },
-                          onNavigateToManagedBy = { navController.navigate("managedBy") },
-                          onNavigateToUserSwitcher = { navController.navigate("userSwitcher") },
-                          onNavigateToPermissions = { navController.navigate("permissions") },
-                          onNavigateToNetcheck = { navController.navigate("netcheck") },
-                          onNavigateToMultiProxy = { navController.navigate("multiProxy") },
-                          onNavigateToProxyUpstreams = { navController.navigate("proxyUpstreams") },
-                          onNavigateToAppRouting = { navController.navigate("appRouting") },
-                          onNavigateToPacketCapture = { navController.navigate("packetCapture") },
-                          onNavigateToSOCKS5Listeners = {
-                            navController.navigate("socks5Listeners")
-                          },
-                          onNavigateToInboundListeners = {
-                            navController.navigate("inboundListeners")
-                          },
-                          onBackToSettings = backTo("settings"),
-                          onNavigateBackHome = backTo("main"))
-                  val exitNodePickerNav =
-                      ExitNodePickerNav(
-                          onNavigateBackHome = {
-                            navController.popBackStack(route = "main", inclusive = false)
-                          },
-                          onNavigateBackToExitNodes = backTo("exitNodes"),
-                          onNavigateToMullvad = { navController.navigate("mullvad") },
-                          onNavigateToMullvadInfo = { navController.navigate("mullvad_info") },
-                          onNavigateBackToMullvad = backTo("mullvad"),
-                          onNavigateToMullvadCountry = { navController.navigate("mullvad/$it") },
-                          onNavigateToRunAsExitNode = { navController.navigate("runExitNode") })
-                  val userSwitcherNav =
-                      UserSwitcherNav(
-                          backToSettings = backTo("settings"),
-                          onNavigateHome = backTo("main"),
-                          onNavigateCustomControl = {
-                            navController.navigate("loginWithCustomControl")
-                          },
-                          onNavigateToAuthKey = { navController.navigate("loginWithAuthKey") })
+                      targetOffsetX = { it },
+                  ) + fadeOut(animationSpec = tween(500, easing = LinearOutSlowInEasing))
+                },
+            ) {
+              fun backTo(route: String): () -> Unit = {
+                navController.popBackStack(route = route, inclusive = false)
+              }
+              val mainViewNav =
+                  MainViewNavigation(
+                      onNavigateToSettings = { navController.navigate("settings") },
+                      onNavigateToPeerDetails = {
+                        navController.navigate("peerDetails/${it.StableID}")
+                      },
+                      onNavigateToExitNodes = { navController.navigate("exitNodes") },
+                      onNavigateToHealth = { navController.navigate("health") },
+                      onNavigateToSearch = {
+                        viewModel.enableSearchAutoFocus()
+                        navController.navigate("search")
+                      },
+                      onNavigateToMultiProxy = { navController.navigate("multiProxy") },
+                  )
+              val settingsNav =
+                  SettingsNav(
+                      onNavigateToBugReport = { navController.navigate("bugReport") },
+                      onNavigateToAbout = { navController.navigate("about") },
+                      onNavigateToDNSSettings = { navController.navigate("dnsSettings") },
+                      onNavigateToSplitTunneling = { navController.navigate("splitTunneling") },
+                      onNavigateToTailnetLock = { navController.navigate("tailnetLock") },
+                      onNavigateToSubnetRouting = { navController.navigate("subnetRouting") },
+                      onNavigateToMDMSettings = { navController.navigate("mdmSettings") },
+                      onNavigateToManagedBy = { navController.navigate("managedBy") },
+                      onNavigateToUserSwitcher = { navController.navigate("userSwitcher") },
+                      onNavigateToPermissions = { navController.navigate("permissions") },
+                      onNavigateToNetcheck = { navController.navigate("netcheck") },
+                      onNavigateToMultiProxy = { navController.navigate("multiProxy") },
+                      onNavigateToProxyUpstreams = { navController.navigate("proxyUpstreams") },
+                      onNavigateToAppRouting = { navController.navigate("appRouting") },
+                      onNavigateToPacketCapture = { navController.navigate("packetCapture") },
+                      onNavigateToSOCKS5Listeners = { navController.navigate("socks5Listeners") },
+                      onNavigateToInboundListeners = { navController.navigate("inboundListeners") },
+                      onNavigateToRemoteControl = { navController.navigate("remoteControl") },
+                      onBackToSettings = backTo("settings"),
+                      onNavigateBackHome = backTo("main"),
+                  )
+              val exitNodePickerNav =
+                  ExitNodePickerNav(
+                      onNavigateBackHome = {
+                        navController.popBackStack(route = "main", inclusive = false)
+                      },
+                      onNavigateBackToExitNodes = backTo("exitNodes"),
+                      onNavigateToMullvad = { navController.navigate("mullvad") },
+                      onNavigateToMullvadInfo = { navController.navigate("mullvad_info") },
+                      onNavigateBackToMullvad = backTo("mullvad"),
+                      onNavigateToMullvadCountry = { navController.navigate("mullvad/$it") },
+                      onNavigateToRunAsExitNode = { navController.navigate("runExitNode") },
+                  )
+              val userSwitcherNav =
+                  UserSwitcherNav(
+                      backToSettings = backTo("settings"),
+                      onNavigateHome = backTo("main"),
+                      onNavigateCustomControl = {
+                        navController.navigate("loginWithCustomControl")
+                      },
+                      onNavigateToAuthKey = { navController.navigate("loginWithAuthKey") },
+                  )
 
-                  composable("main", enterTransition = { fadeIn(animationSpec = tween(150)) }) {
-                    MainView(
-                        loginAtUrl = ::login,
-                        navigation = mainViewNav,
-                        viewModel = viewModel,
-                    )
-                  }
-                  composable("search") {
-                    val autoFocus = viewModel.autoFocusSearch
-                    SearchView(
-                        viewModel = viewModel,
-                        navController = navController,
-                        onNavigateBack = { navController.popBackStack() },
-                        autoFocus = autoFocus)
-                  }
-                  composable("settings") {
-                    SettingsView(settingsNav = settingsNav, appViewModel = appViewModel)
-                  }
-                  composable("exitNodes") { ExitNodePicker(exitNodePickerNav) }
-                  composable("health") { HealthView(backTo("main")) }
-                  composable("mullvad") { MullvadExitNodePickerList(exitNodePickerNav) }
-                  composable("mullvad_info") { MullvadInfoView(exitNodePickerNav) }
-                  composable(
-                      "mullvad/{countryCode}",
-                      arguments =
-                          listOf(navArgument("countryCode") { type = NavType.StringType })) {
-                        MullvadExitNodePicker(
-                            it.arguments!!.getString("countryCode")!!, exitNodePickerNav)
-                      }
-                  composable("runExitNode") { RunExitNodeView(exitNodePickerNav) }
-                  composable(
-                      "peerDetails/{nodeId}",
-                      arguments = listOf(navArgument("nodeId") { type = NavType.StringType })) {
-                        PeerDetails(
-                            { navController.popBackStack() },
-                            it.arguments?.getString("nodeId") ?: "",
-                            PingViewModel())
-                      }
-                  composable("bugReport") { BugReportView(backTo("settings")) }
-                  composable("dnsSettings") { DNSSettingsView(backTo("settings")) }
-                  composable("netcheck") {
-                    com.tailscale.ipn.ui.view.NetcheckView(onBack = backTo("settings"))
-                  }
-                  composable("multiProxy") {
-                    val mpViewModel =
-                        androidx.lifecycle.viewmodel.compose.viewModel<
-                            com.tailscale.ipn.ui.viewModel.MultiProxyViewModel>()
-                    mpViewModel.setSession(com.tailscale.ipn.App.get().multiProxySession)
-                    com.tailscale.ipn.ui.view.MultiProxyView(
-                        mpViewModel,
-                        onNavigateBack = backTo("settings"),
-                        onAddAccount = { navController.navigate("userSwitcher") },
-                        onAddAuthKey = { navController.navigate("loginWithAuthKey") },
-                        onOpenDiagnostics = { navController.navigate("diagnostics") },
-                    )
-                  }
-                  composable("diagnostics") {
-                    com.tailscale.ipn.ui.view.DiagnosticsView(onNavigateBack = backTo("settings"))
-                  }
-                  composable("splitTunneling") { SplitTunnelAppPickerView(backTo("settings")) }
-                  composable("proxyUpstreams") { UpstreamsView(backTo("settings")) }
-                  composable("appRouting") { AppRoutingView(backTo("settings")) }
-                  composable("packetCapture") {
-                    com.tailscale.ipn.ui.view.PacketCaptureView(backTo("settings"))
-                  }
-                  composable("socks5Listeners") {
-                    com.tailscale.ipn.ui.view.SOCKS5ListenersView(backTo("settings"))
-                  }
-                  composable("inboundListeners") {
-                    com.tailscale.ipn.ui.view.InboundListenersView(backTo("settings"))
-                  }
-                  composable("tailnetLock") { TailnetLockSetupView(backTo("settings")) }
-                  composable("subnetRouting") { SubnetRoutingView(backTo("settings")) }
-                  composable("about") { AboutView(backTo("settings")) }
-                  composable("mdmSettings") { MDMSettingsDebugView(backTo("settings")) }
-                  composable("managedBy") { ManagedByView(backTo("settings")) }
-                  composable("userSwitcher") { UserSwitcherView(userSwitcherNav) }
-                  composable("permissions") {
-                    PermissionsView(
-                        backTo("settings"),
-                        { navController.navigate("taildropDir") },
-                        { navController.navigate("notifications") })
-                  }
-                  composable("taildropDir") {
-                    TaildropDirView(
-                        backTo("permissions"), directoryPickerLauncher, permissionsViewModel)
-                  }
-                  composable("notifications") {
-                    NotificationsView(backTo("permissions"), ::openApplicationSettings)
-                  }
-                  composable("intro", exitTransition = { fadeOut(animationSpec = tween(150)) }) {
-                    IntroView(backTo("main"))
-                  }
-                  composable("loginWithAuthKey") {
-                    LoginWithAuthKeyView(onNavigateHome = backTo("main"), backTo("userSwitcher"))
-                  }
-                  composable("loginWithCustomControl") {
-                    LoginWithCustomControlURLView(
-                        onNavigateHome = backTo("main"), backTo("userSwitcher"))
-                  }
-                }
+              composable("main", enterTransition = { fadeIn(animationSpec = tween(150)) }) {
+                MainView(
+                    loginAtUrl = ::login,
+                    navigation = mainViewNav,
+                    viewModel = viewModel,
+                )
+              }
+              composable("search") {
+                val autoFocus = viewModel.autoFocusSearch
+                SearchView(
+                    viewModel = viewModel,
+                    navController = navController,
+                    onNavigateBack = { navController.popBackStack() },
+                    autoFocus = autoFocus,
+                )
+              }
+              composable("settings") {
+                SettingsView(settingsNav = settingsNav, appViewModel = appViewModel)
+              }
+              composable("exitNodes") { ExitNodePicker(exitNodePickerNav) }
+              composable("health") { HealthView(backTo("main")) }
+              composable("mullvad") { MullvadExitNodePickerList(exitNodePickerNav) }
+              composable("mullvad_info") { MullvadInfoView(exitNodePickerNav) }
+              composable(
+                  "mullvad/{countryCode}",
+                  arguments = listOf(navArgument("countryCode") { type = NavType.StringType }),
+              ) {
+                MullvadExitNodePicker(
+                    it.arguments!!.getString("countryCode")!!,
+                    exitNodePickerNav,
+                )
+              }
+              composable("runExitNode") { RunExitNodeView(exitNodePickerNav) }
+              composable(
+                  "peerDetails/{nodeId}",
+                  arguments = listOf(navArgument("nodeId") { type = NavType.StringType }),
+              ) {
+                PeerDetails(
+                    { navController.popBackStack() },
+                    it.arguments?.getString("nodeId") ?: "",
+                    PingViewModel(),
+                )
+              }
+              composable("bugReport") { BugReportView(backTo("settings")) }
+              composable("dnsSettings") { DNSSettingsView(backTo("settings")) }
+              composable("netcheck") {
+                com.tailscale.ipn.ui.view.NetcheckView(onBack = backTo("settings"))
+              }
+              composable("multiProxy") {
+                val mpViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel<
+                        com.tailscale.ipn.ui.viewModel.MultiProxyViewModel>()
+                mpViewModel.setSession(com.tailscale.ipn.App.get().multiProxySession)
+                com.tailscale.ipn.ui.view.MultiProxyView(
+                    mpViewModel,
+                    onNavigateBack = backTo("settings"),
+                    onAddAccount = { navController.navigate("userSwitcher") },
+                    onAddAuthKey = { navController.navigate("loginWithAuthKey") },
+                    onOpenDiagnostics = { navController.navigate("diagnostics") },
+                )
+              }
+              composable("diagnostics") {
+                com.tailscale.ipn.ui.view.DiagnosticsView(onNavigateBack = backTo("settings"))
+              }
+              composable("splitTunneling") { SplitTunnelAppPickerView(backTo("settings")) }
+              composable("proxyUpstreams") { UpstreamsView(backTo("settings")) }
+              composable("appRouting") { AppRoutingView(backTo("settings")) }
+              composable("packetCapture") {
+                com.tailscale.ipn.ui.view.PacketCaptureView(backTo("settings"))
+              }
+              composable("socks5Listeners") {
+                com.tailscale.ipn.ui.view.SOCKS5ListenersView(backTo("settings"))
+              }
+              composable("remoteControl") { RemoteControlView(backTo("settings")) }
+              composable("inboundListeners") {
+                com.tailscale.ipn.ui.view.InboundListenersView(backTo("settings"))
+              }
+              composable("tailnetLock") { TailnetLockSetupView(backTo("settings")) }
+              composable("subnetRouting") { SubnetRoutingView(backTo("settings")) }
+              composable("about") { AboutView(backTo("settings")) }
+              composable("mdmSettings") { MDMSettingsDebugView(backTo("settings")) }
+              composable("managedBy") { ManagedByView(backTo("settings")) }
+              composable("userSwitcher") { UserSwitcherView(userSwitcherNav) }
+              composable("permissions") {
+                PermissionsView(
+                    backTo("settings"),
+                    { navController.navigate("taildropDir") },
+                    { navController.navigate("notifications") },
+                )
+              }
+              composable("taildropDir") {
+                TaildropDirView(
+                    backTo("permissions"),
+                    directoryPickerLauncher,
+                    permissionsViewModel,
+                )
+              }
+              composable("notifications") {
+                NotificationsView(backTo("permissions"), ::openApplicationSettings)
+              }
+              composable("intro", exitTransition = { fadeOut(animationSpec = tween(150)) }) {
+                IntroView(backTo("main"))
+              }
+              composable("loginWithAuthKey") {
+                LoginWithAuthKeyView(onNavigateHome = backTo("main"), backTo("userSwitcher"))
+              }
+              composable("loginWithCustomControl") {
+                LoginWithCustomControlURLView(
+                    onNavigateHome = backTo("main"),
+                    backTo("userSwitcher"),
+                )
+              }
+            }
             if (isIntroScreenViewedSet()) {
               navController.navigate("intro")
               setIntroScreenViewed(true)
@@ -505,6 +527,7 @@ class MainActivity : ComponentActivity() {
     }
     return false
   }
+
   // Returns true if we should render a QR code instead of launching a browser
   // for login requests
   private fun useQRCodeLogin(): Boolean {
@@ -513,6 +536,10 @@ class MainActivity : ComponentActivity() {
 
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
+    if (intent.action == ACTION_OPEN_REMOTE_CONTROL && this::navController.isInitialized) {
+      navController.navigate("remoteControl")
+      return
+    }
     if (intent.getBooleanExtra(START_AT_ROOT, false)) {
       if (this::navController.isInitialized) {
         val previousEntry = navController.previousBackStackEntry

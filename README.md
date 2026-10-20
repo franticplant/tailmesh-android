@@ -250,6 +250,19 @@ Runtime visibility includes:
 
 Heavy profiling and detailed query logging are opt-in. The normal telemetry path keeps expensive work away from the packet hot path where possible.
 
+## Remote control and debugging
+
+Everything above can also be driven from another machine. An opt-in, authenticated HTTP API exposes every action the app's screens offer — tailnets, upstreams, per-app routing, listeners, DNS and diagnostics settings, packet captures and their download, live logs, Go profiles — plus the standard-mode Tailscale LocalAPI.
+
+```bash
+tailmesh-ctl -addr 10.146.109.63:7373 login          # approve on the phone, or -password
+tailmesh-ctl call diagnostics.routeDecisions outcome=dial-error
+tailmesh-ctl call capture.start mode=apps packages='["com.android.chrome"]'
+tailmesh-ctl logs -f -grep flow-
+```
+
+Clients are approved on the device (Allow / Read-only / Deny) or sign in with a password, under one global authentication rate limit. A switch on the phone makes every session read-only at once, every access is recorded in an append-only access log, and nothing reachable through the API can change remote control's own settings, sessions or log. See [`docs/features/04-remote-control.md`](docs/features/04-remote-control.md).
+
 ## Hardening work happens in the hot paths
 
 Once the core architecture worked, a large part of the engineering moved from feature construction into resource behavior and failure modes.

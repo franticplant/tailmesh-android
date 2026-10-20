@@ -6,19 +6,17 @@ package com.tailscale.ipn.ui.viewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.tailscale.ipn.App
+import com.tailscale.ipn.multiproxy.ControlException
+import com.tailscale.ipn.multiproxy.MultiProxyControls
 import com.tailscale.ipn.multiproxy.db.ProvisioningState
 import com.tailscale.ipn.multiproxy.db.SOCKS5ListenerRecord
 import com.tailscale.ipn.util.TSLog
-import java.util.UUID
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import org.json.JSONObject
 
 /**
  * Backs the SOCKS5 Listeners settings screen: the list of configured listeners, their add/edit/
@@ -35,7 +33,7 @@ import org.json.JSONObject
 class SOCKS5ListenersViewModel : ViewModel() {
   private val session = App.get().multiProxySession
   private val listenerRepository = session.socks5ListenerRepository
-  private val secrets = session.upstreamSecretStore
+  private val controls = MultiProxyControls(session)
 
   /** The user's configured listeners. */
   val listeners: StateFlow<List<SOCKS5ListenerRecord>> = listenerRepository.listeners
@@ -99,56 +97,16 @@ class SOCKS5ListenersViewModel : ViewModel() {
       upstream: String,
       username: String,
       password: String,
-  ) {
-    val trimmedBindAddr = bindAddr.trim().ifEmpty { "127.0.0.1" }
-    val portNum = port.trim().toIntOrNull()
-    if (portNum == null || portNum !in 1..65535) {
-      errorMessage.value = "Port must be a number from 1 to 65535"
-      return
-    }
-    if (upstream.isBlank()) {
-      errorMessage.value = "Choose which upstream this listener hands out"
-      return
-    }
-    val listenerId = id ?: "listener-${UUID.randomUUID()}"
-    val hasAuth = username.isNotEmpty() || password.isNotEmpty()
-    viewModelScope.launch {
-      if (hasAuth) {
-        val auth = JSONObject().put("username", username).put("password", password).toString()
-        withContext(Dispatchers.IO) { secrets.saveListenerAuth(listenerId, auth) }
-      } else {
-        withContext(Dispatchers.IO) { secrets.deleteListenerAuth(listenerId) }
-      }
-      listenerRepository.saveConfig(listenerId, trimmedBindAddr, portNum, upstream, hasAuth)
-      applyNow()
-    }
+  ) = act { controls.saveSocks5Listener(id, bindAddr, port, upstream, username, password) }
+
+  fun setEnabled(id: String, enabled: Boolean) = act {
+    controls.setSocks5ListenerEnabled(id, enabled)
   }
 
-  fun setEnabled(id: String, enabled: Boolean) {
-    viewModelScope.launch {
-      listenerRepository.setEnabled(id, enabled)
-      applyNow()
-    }
-  }
-
-  fun delete(id: String) {
-    viewModelScope.launch {
-      listenerRepository.delete(id)
-      withContext(Dispatchers.IO) { secrets.deleteListenerAuth(id) }
-      applyNow()
-    }
-  }
+  fun delete(id: String) = act { controls.deleteSocks5Listener(id) }
 
   /** Reads back the stored username/password so an edit form can be prefilled, or null if none. */
-  fun authFor(id: String): Pair<String, String>? {
-    val json = secrets.getListenerAuth(id) ?: return null
-    return try {
-      val obj = JSONObject(json)
-      Pair(obj.optString("username"), obj.optString("password"))
-    } catch (e: Exception) {
-      null
-    }
-  }
+  fun authFor(id: String): Pair<String, String>? = controls.socks5ListenerAuth(id)
 
   /**
    * Whether a listener is currently actually registered with the running engine - distinct from
@@ -171,13 +129,15 @@ class SOCKS5ListenersViewModel : ViewModel() {
     }
   }
 
-  private suspend fun applyNow() {
-    val engine = session.engine ?: return
-    withContext(Dispatchers.IO) {
+  private fun act(block: suspend () -> Unit) {
+    viewModelScope.launch {
       try {
-        session.upstreamPolicyApplier.apply(engine)
+        block()
+      } catch (e: ControlException) {
+        errorMessage.value = e.message
       } catch (e: Exception) {
-        TSLog.e(TAG, "could not apply SOCKS5 listener configuration: $e")
+        TSLog.e(TAG, "action failed: $e")
+        errorMessage.value = e.message ?: "That did not work"
       }
     }
   }

@@ -22,6 +22,8 @@ import (
 	"runtime/debug"
 	"syscall"
 	"unsafe"
+
+	"github.com/tailscale/tailscale-android/libtailscale/remotectl"
 )
 
 // 1024 is the truncation limit from android/log.h, plus a \n.
@@ -34,9 +36,9 @@ var logTag = C.CString(ID)
 func initLogging(appCtx AppContext) {
 	// Android's logcat already includes timestamps.
 	log.SetFlags(log.Flags() &^ log.LstdFlags)
-	log.SetOutput(&androidLogWriter{
+	log.SetOutput(remotectl.TeeLogs(&androidLogWriter{
 		appCtx: appCtx,
-	})
+	}))
 
 	// Redirect stdout and stderr to the Android logger.
 	logFd(os.Stdout.Fd())

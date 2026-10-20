@@ -4,7 +4,6 @@
 package com.tailscale.ipn.ui.view
 
 import android.content.Intent
-import android.content.pm.PackageManager
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -41,20 +40,11 @@ import androidx.core.content.FileProvider
 import com.tailscale.ipn.App
 import com.tailscale.ipn.R
 import com.tailscale.ipn.multiproxy.CaptureSettings
+import com.tailscale.ipn.multiproxy.PacketCaptures
 import com.tailscale.ipn.ui.util.InstalledAppsManager
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-
-// captureMaxBytes bounds one capture file - see capture.go's
-// defaultCaptureMaxBytes for the equivalent Go-side rationale. Kept in sync
-// deliberately rather than passing 0 (the Go default) so this file also
-// documents the number the "Capacity reached" message refers to.
-private const val captureMaxBytes = 32L * 1024 * 1024
 
 private enum class CaptureMode {
   OFF,
@@ -63,54 +53,22 @@ private enum class CaptureMode {
   LISTENERS,
 }
 
-private fun capturesDir(context: android.content.Context): File {
-  val dir = File(context.filesDir, "captures")
-  dir.mkdirs()
-  return dir
-}
-
-/**
- * Deletes every capture file older than [maxAgeDays], then returns whatever remains, newest first.
- *
- * This is the whole retention mechanism: no scheduled job, no background timer, nothing running
- * while the app isn't in the foreground. It costs one [File.listFiles] plus one [File.lastModified]
- * check per existing capture file - a handful of files in the overwhelmingly common case, since
- * captures are a manually-started debug feature, not a steady-state one - so calling it every time
- * this screen opens (see the `LaunchedEffect(Unit)` below) is negligible, and no capture ever lives
- * unnoticed longer than the user's next visit to this screen after it expires.
- */
-private fun purgeExpiredAndListCaptures(
-    context: android.content.Context,
-    maxAgeDays: Int
-): List<File> {
-  val cutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(maxAgeDays.toLong())
-  val files = capturesDir(context).listFiles() ?: emptyArray()
-  val (expired, kept) = files.partition { it.lastModified() < cutoff }
-  expired.forEach { it.delete() }
-  return kept.sortedByDescending { it.lastModified() }
-}
-
 /**
  * Records raw IP traffic crossing the VPN tunnel to a .pcapng file, either every packet or only
  * packets belonging to a chosen set of apps. Every packet, in either mode, carries a per-packet
- * comment naming its owning app (see appNamesLines below) - see multiproxy/capture.go for how
- * attribution and the size cap work on the Go side.
+ * comment naming its owning app (see PacketCaptures.appNamesLines) - see multiproxy/capture.go for
+ * how attribution and the size cap work on the Go side.
  */
 @Composable
 fun PacketCaptureView(backToSettings: BackNavigation) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
-  // Fetched fresh at each use (a function, not a `val`) rather than once at composition time:
-  // the engine can still be null right after this screen opens (VPN still starting up) and
-  // become available moments later - capturing it once here would keep pointing at that
-  // initial null for the rest of this screen's lifetime instead of picking up the real engine
-  // once it exists. See validation_and_gaps.md's PCAP entry for the device-testing finding that
-  // led to this - a silent no-op here left a capture attempt looking "started" in the UI with
-  // no data and no file ever written.
-  fun engine() = App.get().multiProxySession.engine
 
   var mode by rememberSaveable { mutableStateOf(CaptureMode.ALL) }
-  var isCapturing by remember { mutableStateOf(false) }
+  // Shared with the remote-control API, so a capture started from either
+  // place is visible in both. See PacketCaptures.
+  val activeCapture by PacketCaptures.active.collectAsState()
+  val isCapturing = activeCapture != null
   var errorMessage by remember { mutableStateOf<String?>(null) }
   var bytesWritten by remember { mutableStateOf(0L) }
   var packetCount by remember { mutableStateOf(0L) }
@@ -122,10 +80,10 @@ fun PacketCaptureView(backToSettings: BackNavigation) {
   var pastCaptures by remember { mutableStateOf<List<File>>(emptyList()) }
 
   fun refreshPastCaptures() {
-    pastCaptures = purgeExpiredAndListCaptures(context, maxAgeDays)
+    pastCaptures = PacketCaptures.purgeExpiredAndList(context, maxAgeDays)
   }
 
-  // Runs once per visit to this screen - see purgeExpiredAndListCaptures's doc
+  // Runs once per visit to this screen - see PacketCaptures.purgeExpiredAndList's doc
   // comment for why "on screen open" is the whole cleanup schedule, not just
   // the initial listing.
   LaunchedEffect(Unit) { refreshPastCaptures() }
@@ -153,93 +111,51 @@ fun PacketCaptureView(backToSettings: BackNavigation) {
   // than on every recomposition.
   LaunchedEffect(isCapturing) {
     while (isCapturing) {
-      bytesWritten = engine()?.packetCaptureBytesWritten() ?: 0L
-      packetCount = engine()?.packetCapturePacketCount() ?: 0L
-      capacityReached = engine()?.packetCaptureCapacityReached() ?: false
+      val stats = PacketCaptures.stats()
+      bytesWritten = stats.bytesWritten
+      packetCount = stats.packetCount
+      capacityReached = stats.capacityReached
       delay(3000)
     }
   }
 
-  fun uidFor(packageName: String): Int? =
-      try {
-        App.get().packageManager.getApplicationInfo(packageName, 0).uid
-      } catch (e: PackageManager.NameNotFoundException) {
-        null
-      }
-
-  // "uid:name" per line, one per installed app - passed to the engine so
-  // every captured packet's pcapng comment can name its owning app, not
-  // just the ones selected in "Selected apps" mode (see capture.go's
-  // packetCapture.start doc comment for why "All traffic" mode wants
-  // attribution too). Built fresh at capture start rather than cached,
-  // since installedApps was itself only fetched once at composition time
-  // and a newly installed app wouldn't otherwise get a name until this
-  // screen is reopened - not worth chasing further since that's an
-  // edge case a capture restart already covers.
-  fun appNamesLines(): String =
-      installedApps
-          .mapNotNull { app -> uidFor(app.packageName)?.let { uid -> "$uid:${app.name}" } }
-          .joinToString("\n")
-
-  fun startCapture() {
-    errorMessage = null
-    val e = engine()
-    if (e == null) {
-      // Previously this fell through silently (Kotlin's `?.` on a null receiver just
-      // evaluates to null) and still flipped isCapturing on with a filename that was never
-      // actually opened by the Go side - the UI claimed a capture was running while nothing
-      // was written and no file existed on disk. Surfacing it here instead of guessing why the
-      // engine isn't up yet (VPN still starting, no active session, etc.) - whatever the
-      // reason, "not running yet" is a real, sayable state, not silence.
-      errorMessage = "VPN engine not running yet - connect and try again"
-      return
-    }
-    val dir = capturesDir(context)
-    val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
-    // .pcapng, not .pcap: per-packet app-name comments (see appNamesLines
-    // above) require pcapng's per-block options, which the older classic
-    // pcap format has no room for.
-    val file = File(dir, "capture-$stamp.pcapng")
-    try {
-      val names = appNamesLines()
-      when (mode) {
-        CaptureMode.ALL -> e.startPacketCaptureAll(file.absolutePath, captureMaxBytes, names)
-        CaptureMode.APPS -> {
-          val uids = selectedPackages.mapNotNull { uidFor(it) }
-          e.startPacketCaptureApps(
-              uids.joinToString(","), file.absolutePath, captureMaxBytes, names)
-        }
-        CaptureMode.LISTENERS ->
-            e.startPacketCaptureSOCKS5Listeners(
-                selectedListenerIds.joinToString(","), file.absolutePath, captureMaxBytes)
-        CaptureMode.OFF -> return
-      }
-      capturePath = file.absolutePath
+  // A capture started remotely becomes this screen's current one too.
+  LaunchedEffect(activeCapture) {
+    activeCapture?.let {
+      capturePath = it
       bytesWritten = 0L
       packetCount = 0L
       capacityReached = false
-      isCapturing = true
-      refreshPastCaptures()
+    }
+    refreshPastCaptures()
+  }
+
+  fun startCapture() {
+    errorMessage = null
+    try {
+      when (mode) {
+        CaptureMode.ALL -> PacketCaptures.startAll()
+        CaptureMode.APPS -> PacketCaptures.startApps(selectedPackages)
+        CaptureMode.LISTENERS -> PacketCaptures.startListeners(selectedListenerIds)
+        CaptureMode.OFF -> return
+      }
     } catch (ex: Exception) {
       errorMessage = ex.message ?: "Failed to start capture"
     }
   }
 
   fun stopCapture() {
-    val e = engine()
-    e?.stopPacketCapture()
-    isCapturing = false
+    PacketCaptures.stop()
     scope.launch {
-      bytesWritten = e?.packetCaptureBytesWritten() ?: bytesWritten
-      packetCount = e?.packetCapturePacketCount() ?: packetCount
-      capacityReached = e?.packetCaptureCapacityReached() ?: capacityReached
-      // The file itself was already complete and on disk the moment
-      // startCapture wrote it - stopping only closes the Go side's writer.
-      // Refreshing here is what makes it show up in "Past captures" (see
-      // pastCaptures below) instead of only being reachable through
-      // capturePath's own in-memory, this-composition-only state, which
-      // used to make a just-stopped capture look like it "disappeared" the
-      // moment this screen recomposed or was reopened.
+      val stats = PacketCaptures.stats()
+      bytesWritten = stats.bytesWritten
+      packetCount = stats.packetCount
+      capacityReached = stats.capacityReached
+      // The file itself was already complete and on disk the moment the
+      // capture started - stopping only closes the Go side's writer.
+      // Refreshing here is what makes it show up in "Past captures" instead
+      // of only being reachable through capturePath's in-memory,
+      // this-composition-only state.
       refreshPastCaptures()
     }
   }

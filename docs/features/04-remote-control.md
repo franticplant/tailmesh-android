@@ -1,0 +1,177 @@
+# Remote Control and Debugging
+
+Tailmesh can expose an authenticated HTTP API that does everything its own screens can, so the phone
+can be operated and debugged from another machine: a laptop on the other end of a USB tether, a
+host reaching it over a tailnet, or an agent investigating a failure. It is off by default.
+
+Turn it on under **Settings → Remote control & debugging**.
+
+---
+
+## 1. What it can do
+
+Every button, toggle, selection and addition in the Multi-Tailnet screens, plus the standard-mode
+Tailscale client through its LocalAPI:
+
+| Area | Read | Change |
+|---|---|---|
+| Overview | `app.status` | `multitailnet.start` / `stop`, `standard.connect` / `disconnect`, `vpn.restart` |
+| Tailnets | `tailnets.list`, `peers`, `states`, `addressConflicts`, `exitNodeCandidates` | `tailnets.add`, `importRegular`, `setEnabled`, `rename`, `forget`, `setExitNode` |
+| Upstreams | `upstreams.list` (secrets redacted), `routable`, `stats`, `exitNodeStates` | `upstreams.saveSocks5`, `saveWireGuard`, `saveExitNode`, `setEnabled`, `delete` |
+| Routing | `routing.get` | `routing.setDefaultUpstream`, `setDefaultDNSUpstream`, `setBroadCapture`, `setLanExclusion` |
+| Apps | `apps.list` | `apps.bind`, `unbind`, `setDNSUpstream`, `setTunnelLAN` |
+| Listeners | `listeners.socks5.list`, `listeners.inbound.list` | `…save`, `…setEnabled`, `…delete` for both |
+| Diagnostics | `diagnostics.snapshot`, `events`, `dnsLog`, `routeDecisions`, `exports` | `diagnostics.setDNSQueryLog`, `setAdvanced`, `setSampleInterval`, `reset`, `exportBundle` |
+| Packet capture | `capture.status`, `capture.list` | `capture.start` (all / apps / listeners), `capture.stop`, `capture.delete` |
+| Settings | `settings.get` | `settings.setPublicDoH`, `settings.setDebugLogging` |
+| Standard mode | `tailscale.localapi.get` | `tailscale.localapi.call` (prefs, profiles, exit nodes, login, logout, …) |
+
+`GET /v1/methods` returns the live catalog, with each method's parameters and whether it changes
+state. Beyond the catalog:
+
+- `GET /v1/logs` — app and Go engine logs, filterable, and with `follow=1` a live stream.
+- `GET /v1/files?path=` — download a capture or a diagnostics export.
+- `/debug/pprof/*` — Go CPU, heap, goroutine, allocation, block, mutex profiles and traces, for the
+  whole process.
+- `GET /v1/access-log` — the access log (read-only).
+
+Every change goes through the same code as the matching control in the UI (`MultiProxyControls`,
+`MultiProxySessionCoordinator`, `PacketCaptures`), so it is validated, persisted and applied
+identically, and the screens show it. A capture started remotely appears on the Packet capture
+screen, and the reverse.
+
+## 2. What it cannot do
+
+Remote control cannot change itself. There is no method for its settings, the global control
+switch, sessions, approvals, or the access log. Those exist only on the phone, so a client can never
+widen its own access, extend its own lifetime, disconnect another client, or hide what it did.
+
+---
+
+## 3. Signing in
+
+Two methods, usable together. Either produces a **session token** sent as
+`Authorization: Bearer <token>` on every later request.
+
+### Approval on the phone
+
+```text
+client                               phone
+  │ POST /v1/auth/request {client}     │
+  │ ─────────────────────────────────▶ │  notification: "<client> wants to connect"
+  │ ◀── {requestId, code: "482-913"}   │  shows the same code
+  │                                    │  [Allow]  [Read-only]  [Deny]
+  │ GET /v1/auth/request/{requestId}   │
+  │ ─────────────────────────────────▶ │  (long-polls ~25 s per call)
+  │ ◀── {status: approved, token}      │
+```
+
+Check that the code on the phone matches the one the client printed before tapping Allow. A request
+expires after two minutes, the request ID is the only key to collect its token, and the token is
+handed out once.
+
+### Password
+
+`POST /v1/auth/login {"client": "...", "password": "..."}`. Whether a password session may change
+things or only read is a separate setting.
+
+### Rate limit
+
+Authentication attempts share **one global budget** (2 per second, burst 10) across every client:
+logins, approval requests, and requests with an unknown token. A per-address limit would let an
+attacker who controls many addresses guess in parallel. The cost of a global limit is that anyone
+on the network who floods the endpoint locks everyone out of signing in for as long as the flood
+lasts. Existing sessions keep working. This trades availability for brute-force resistance on
+purpose; if it matters, bind to loopback and reach the port over a tailnet.
+
+### Sessions and control
+
+- A session is **read-only** unless it was granted control (Allow rather than Read-only, or a
+  password with "sessions may make changes") **and** "Allow changes" is on.
+- Turning "Allow changes" off makes every session read-only immediately, without disconnecting
+  anyone.
+- Sessions expire after an hour unused. The phone lists them and can disconnect any one.
+- Remote control as a whole turns itself off after the chosen time (15 min to 24 h, or never).
+
+---
+
+## 4. Access log
+
+Every request is logged, reads included, along with every authentication attempt, approval
+decision, revocation and server start or stop. Each entry records the time, remote address,
+session, client name, action, argument **names** (never values, since those carry keys and
+passwords), status and error. The log is an append-only JSON-lines file in the app's private
+storage, rotated at 4 MiB to one previous generation. The API can read it but not write to it. The
+phone can clear it, but only while remote control is off.
+
+---
+
+## 5. Exposure
+
+The listen address is chosen on the phone:
+
+- **This device only (`127.0.0.1`)**, the default. Reach it with `adb forward tcp:7373 tcp:7373`, or
+  from a tailnet by adding an inbound listener (Settings → Inbound listeners) that forwards a
+  tailnet port to `127.0.0.1:7373`. Tailnet traffic is end-to-end encrypted by WireGuard.
+- **All networks (`0.0.0.0`)**, or **a specific address**, such as the USB-tether address.
+
+The API is **plain HTTP**. On anything but a private link (loopback, USB tether, a tailnet), tokens
+and data can be observed in transit.
+
+While remote control is on, an ongoing notification says so and has a Turn off button.
+
+---
+
+## 6. `tailmesh-ctl`
+
+A small CLI in `cmd/tailmesh-ctl`:
+
+```bash
+go build -o tailmesh-ctl ./cmd/tailmesh-ctl
+export TAILMESH_ADDR=10.146.109.63:7373
+
+tailmesh-ctl login                       # approve on the phone (or: login -password)
+tailmesh-ctl methods
+tailmesh-ctl call diagnostics.snapshot
+tailmesh-ctl call diagnostics.routeDecisions outcome=dial-error sinceMinutes=30
+tailmesh-ctl call diagnostics.setDNSQueryLog enabled=true
+tailmesh-ctl call diagnostics.dnsLog grep=geeksforgeeks
+tailmesh-ctl call apps.bind packageName=com.android.chrome upstreamId=upstream-...
+tailmesh-ctl call upstreams.saveWireGuard label=laptop config=@phone-tether.conf
+tailmesh-ctl call capture.start mode=apps packages='["com.android.chrome"]'
+tailmesh-ctl call capture.stop           # prints the path
+tailmesh-ctl pull <path>                 # then open it in Wireshark
+tailmesh-ctl logs -f -grep flow-
+tailmesh-ctl profile -kind heap -o heap.pprof
+tailmesh-ctl call tailscale.localapi.get path=status
+```
+
+Argument values are parsed as JSON when they can be (`true`, `3`, `["a"]`) and taken as strings
+otherwise. `@file` reads a value from a file and `@-` from stdin. The session token is cached per
+address under the user config directory.
+
+## 7. Raw HTTP
+
+```bash
+curl -s -X POST $A/v1/auth/login -d '{"client":"curl","password":"..."}'
+curl -s -H "Authorization: Bearer $T" $A/v1/status
+curl -s -H "Authorization: Bearer $T" -X POST $A/v1/call/upstreams.list -d '{}'
+curl -s -H "Authorization: Bearer $T" "$A/v1/logs?follow=1&grep=DNS"
+```
+
+Calls return `{"ok":true,"result":...}`; failures return `{"ok":false,"error":"..."}` with 401 (no
+or expired session), 403 (read-only session or control switched off), 404 (unknown method), 422 (the
+action itself failed, with the same message the UI would show), or 429 (authentication rate limit).
+
+---
+
+## 8. Limits
+
+- The server runs inside the app process. Android may stop that process when no VPN is running and
+  the app is in the background; it starts again with the app, and remote control comes back with it
+  if it is still within its time limit.
+- `multitailnet.start` launches the VPN service, which Android only permits while the app is allowed
+  to start foreground services. Starting it from the background may be refused on recent Android
+  versions; the call then fails with that error.
+- Approval needs notification permission to show its buttons. Without it, pending requests still
+  appear on the Remote control screen and can be answered there.
