@@ -35,6 +35,7 @@ $(error androidApiLevel missing from android/gradle.properties)
 endif
 
 ANDROID_BUILD_TOOLS_VERSION := $(shell grep '^androidBuildToolsVersion=' android/gradle.properties | cut -d'=' -f2)
+ANDROID_COMPILE_SDK := $(shell grep '^androidCompileSdk=' android/gradle.properties | cut -d'=' -f2)
 
 DEBUG_APK := tailscale-debug.apk
 RELEASE_AAB := tailscale-release.aab
@@ -65,7 +66,7 @@ else
     ANDROID_TOOLS_URL := "https://dl.google.com/android/repository/commandlinetools-mac-9477386_latest.zip"
     ANDROID_TOOLS_SUM := "2072ffce4f54cdc0e6d2074d2f381e7e579b7d63e915c220b96a7db95b2900ee  commandlinetools-mac-9477386_latest.zip"
 endif
-ANDROID_SDK_PACKAGES := 'platforms;android-$(ANDROID_API_LEVEL)' 'extras;android;m2repository' 'ndk;23.1.7779620' 'platform-tools' 'build-tools;$(ANDROID_BUILD_TOOLS_VERSION)'
+ANDROID_SDK_PACKAGES := 'platforms;android-$(ANDROID_API_LEVEL)' 'platforms;android-$(ANDROID_COMPILE_SDK)' 'extras;android;m2repository' 'ndk;23.1.7779620' 'platform-tools' 'build-tools;$(ANDROID_BUILD_TOOLS_VERSION)'
 
 # Attempt to find an ANDROID_SDK_ROOT / ANDROID_HOME based either from
 # preexisting environment or common locations.
@@ -164,6 +165,27 @@ release: jarsign-env $(RELEASE_AAB)
 .PHONY: release-tv
 release-tv: jarsign-env $(RELEASE_TV_AAB)
 	@jarsigner -sigalg SHA256withRSA -digestalg SHA-256 -keystore $(JKS_PATH) -storepass $(JKS_PASSWORD) $(RELEASE_TV_AAB) tailscale
+
+# Signed per-ABI and universal release APKs in dist/, named as published on
+# GitHub releases (tailmesh-<tag>-<abi>.apk). Signing comes from
+# android/build.gradle's releaseSigningProperties: TAILMESH_KEYSTORE* in the
+# environment, or ~/.config/tailmesh/signing.properties. Refuses to produce
+# unsigned APKs.
+RELEASE_TAG ?= $(shell git describe --tags --exact-match 2>/dev/null || git describe --tags --always)
+.PHONY: release-apks
+release-apks: version gradle-dependencies
+	rm -rf android/build/outputs/apk/release
+	(cd android && ./gradlew assembleRelease -PsplitAbis -PVERSION_CODE_BASE=$(VERSION_CODE_BASE))
+	@if ls android/build/outputs/apk/release/*-unsigned.apk >/dev/null 2>&1; then \
+		echo "release APKs are unsigned: configure release signing (see android/build.gradle)"; exit 1; \
+	fi
+	rm -rf dist && mkdir -p dist
+	for f in android/build/outputs/apk/release/android-*-release.apk; do \
+		abi=$$(basename $$f | sed -E 's/^android-(.*)-release\.apk$$/\1/'); \
+		install -m 0644 $$f dist/tailmesh-$(RELEASE_TAG)-$$abi.apk; \
+	done
+	(cd dist && sha256sum *.apk > SHA256SUMS)
+	@ls -l dist
 
 # gradle-dependencies groups together the android sources and libtailscale needed to assemble tests/debug/release builds.
 .PHONY: gradle-dependencies

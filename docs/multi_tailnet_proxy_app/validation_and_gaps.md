@@ -4892,3 +4892,17 @@ Confirms two things at once: the structural bound holds in every stage (wrong an
 
 **Not covered.** SOCKS5 and exit-node upstreams whose far end lacks IPv6 still accept-then-close, since only a dial can reveal that. A natural follow-up is learning family failure per upstream (consecutive IPv6 failures alongside IPv4 successes) and feeding that into the same two mechanisms.
 
+## 101. Core rebased onto upstream Tailscale 1.105; toolchain and dependency upgrade (2026-10-20, host-tested + APK-built; not yet device-verified)
+
+**Core.** `franticplant/tailscale@tailmesh-android-base` was rebased from `25877455e` (1.103) onto upstream `main` `47743a8b9` (1.105.0, 369 commits). All five fork commits applied without conflicts. Reviewed against what upstream changed underneath them:
+- **DNS hooks** (`net/dns`, `net/dns/resolver/forwarder.go`): upstream rewrote ~370 lines of the forwarder and ~250 of the manager; the hooks still sit on the live paths and the package tests pass.
+- **tsnet exit-node routing**: upstream added `TestDialThroughExitNode` and documents exit-node dials as supported, because `PeerForIP` resolves exit-route destinations to the exit peer. The fork's extra `UseNetstackForIP` branch is now only reached when an exit node is configured but unresolvable, where it fails closed into WireGuard instead of bypassing to the system dialer; kept for that.
+- `TestForwarderRaceLoserNoReadError` fails intermittently under CPU contention (alongside the tsnet tests). Reproduced identically on unpatched upstream, so it is an upstream timing flake; the core CI workflow runs those suites in separate steps.
+
+**App changes forced by the new core.** Go 1.27.3 and the matching Tailscale toolchain (`go.toolchain.rev`), `tailscale.com` pseudo-version updated so version stamps read 1.105. wireguard-go's `tun.Device`/`conn.Bind` moved to a single-slab API (`Read(slab, []tun.ReadPacket)`, `ReceiveFunc(slab, []conn.ReceivedPacket)`, `ReadPacketSpacing` reserved around each packet); `wgNetTun` and `upstreamBind` were ported, and `multitun.go` taken verbatim from upstream tailscale-android (its only difference from ours was that port). `tailcfg.DERPMap.Regions` is now keyed by `DERPRegionID`.
+
+**Toolchain.** AGP 9.4.1 (built-in Kotlin), Kotlin 2.4.21 with the Compose compiler plugin, Gradle 9.8.1, compileSdk 37 (targetSdk unchanged at 36), current AndroidX/Compose/test libraries, gomobile 2026-10. `android.nonFinalResIds=false` removed (AGP 9's R8 resource shrinking requires non-final IDs; no code switches on `R` constants). The ktfmt Gradle plugin was replaced by tasks running ktfmt 0.47 directly: the plugin release that supports built-in Kotlin bundles ktfmt 0.64, whose different style would reformat ~110 files and was not idempotent on `MainView.kt`.
+
+**Evidence.** Core: patched-package tests, race test of the forwarder, Android cross-compile. App: full Go suite incl. two-device WireGuard tunnels and the SOCKS5-chained tunnel, `-race` on multiproxy/remotectl, gomobile AAR, 60/60 JVM unit tests, debug APK, minified per-ABI release APKs, `ktfmtCheck`.
+
+**Not verified.** Nothing on a device: standard-mode VPN (`multitun.go`), Multi-Tailnet tsnet runtimes, and WireGuard upstreams on the new wireguard-go all need a phone run before release.

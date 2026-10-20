@@ -1,7 +1,5 @@
 buildscript {
-    ext.kotlin_version = "1.9.22"
-    ext.compose_version = "1.5.10"
-    ext.accompanist_version = "0.34.0"
+    ext.kotlin_version = "2.4.21"
 
     repositories {
         google()
@@ -11,10 +9,10 @@ buildscript {
         }
     }
     dependencies {
-        classpath 'com.android.tools.build:gradle:8.13.0'
+        classpath 'com.android.tools.build:gradle:9.4.1'
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
         classpath "org.jetbrains.kotlin:kotlin-serialization:$kotlin_version"
-        classpath("com.ncorti.ktfmt.gradle:plugin:0.17.0")
+        classpath "org.jetbrains.kotlin:compose-compiler-gradle-plugin:$kotlin_version"
     }
 }
 
@@ -26,20 +24,26 @@ repositories {
     }
 }
 
-apply plugin: 'kotlin-android'
+// AGP 9 compiles Kotlin itself (built-in Kotlin), so there is no separate
+// kotlin-android plugin; the Compose compiler ships with Kotlin 2.x as a plugin.
 apply plugin: 'com.android.application'
 apply plugin: 'org.jetbrains.kotlin.plugin.serialization'
-apply plugin: 'com.ncorti.ktfmt.gradle'
+apply plugin: 'org.jetbrains.kotlin.plugin.compose'
 
 android {
     def androidApiLevel = providers.gradleProperty("androidApiLevel").get().toInteger()
+    def androidCompileSdk = providers.gradleProperty("androidCompileSdk").get().tokenize('.')*.toInteger()
 
     ndkVersion "23.1.7779620"
-    compileSdkVersion androidApiLevel
+    compileSdk {
+        version = release(androidCompileSdk[0]) {
+            minorApiLevel = androidCompileSdk.size() > 1 ? androidCompileSdk[1] : 0
+        }
+    }
     defaultConfig {
         applicationId "com.tailscale.ipn.multiproxy"
-        minSdkVersion 26
-        targetSdkVersion androidApiLevel
+        minSdk 26
+        targetSdk androidApiLevel
 
         // VERSION_CODE_BASE is minutes since the Unix epoch, times 10. The
         // final digit is reserved for the platform: 0 for phone/tablet and 1
@@ -69,30 +73,32 @@ android {
         }
     }
 
+    // Per-ABI APKs plus a universal one, as published on GitHub releases.
+    // Opt-in (-PsplitAbis) so ordinary builds still produce the single
+    // android-debug.apk / android-release.apk the Makefile expects.
+    if (project.hasProperty("splitAbis")) {
+        splits {
+            abi {
+                enable true
+                reset()
+                include "arm64-v8a", "armeabi-v7a", "x86", "x86_64"
+                universalApk true
+            }
+        }
+    }
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
 
-    lintOptions {
+    lint {
         warningsAsErrors true
-    }
-
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-
-    kotlinOptions {
-        jvmTarget = "17"
     }
     buildFeatures {
         buildConfig true
         compose true
     }
-    composeOptions {
-        kotlinCompilerExtensionVersion = "$compose_version"
-    }
-    flavorDimensions "version"
     namespace 'com.tailscale.ipn'
 
     buildTypes {
@@ -119,6 +125,25 @@ android {
         }
     }
 
+    // Release signing. Credentials never live in the repo: CI passes them in
+    // the environment (see .github/workflows/release.yml) and local builds
+    // read a properties file outside the tree. When either is present every
+    // build type is signed with the release key, so a locally built debug APK
+    // installs over a released one without uninstalling (and losing app
+    // data). With neither, builds fall back to the debug key as before.
+    def signing = releaseSigningProperties()
+    if (signing != null) {
+        signingConfigs {
+            tailmeshRelease {
+                storeFile file(signing.storeFile)
+                storePassword signing.storePassword
+                keyAlias signing.keyAlias
+                keyPassword signing.keyPassword
+            }
+        }
+        buildTypes.each { it.signingConfig signingConfigs.tailmeshRelease }
+    }
+
     testBuildType "applicationTest"
 
     testOptions {
@@ -134,44 +159,46 @@ android {
 
 dependencies {
     // Android dependencies.
-    implementation "androidx.core:core:1.13.1"
-    implementation 'androidx.core:core-ktx:1.13.1'
-    implementation "androidx.browser:browser:1.8.0"
-    implementation "androidx.security:security-crypto:1.1.0-alpha06"
-    implementation "androidx.work:work-runtime:2.9.1"
-    implementation "androidx.work:work-runtime-ktx:2.9.1"
+    implementation "androidx.core:core:1.19.1"
+    implementation 'androidx.core:core-ktx:1.19.1'
+    implementation "androidx.browser:browser:1.10.0"
+    implementation "androidx.security:security-crypto:1.1.0"
+    implementation "androidx.work:work-runtime:2.12.0"
+    implementation "androidx.work:work-runtime-ktx:2.12.0"
 
     // Kotlin dependencies.
-    implementation "org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3"
-    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1"
+    implementation "org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0"
     implementation 'junit:junit:4.13.2'
-    implementation 'androidx.room:room-ktx:2.6.1'
-    runtimeOnly "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1"
+    implementation 'androidx.room:room-ktx:2.8.5'
+    runtimeOnly "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0"
     implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
     implementation "org.jetbrains.kotlin:kotlin-reflect:$kotlin_version"
 
     // Compose dependencies.
-    def composeBom = platform('androidx.compose:compose-bom:2024.09.03')
+    def composeBom = platform('androidx.compose:compose-bom:2026.09.00')
     implementation composeBom
-    implementation 'androidx.compose.material3:material3:1.3.0'
-    implementation 'androidx.compose.material:material-icons-core:1.7.3'
-    implementation "androidx.compose.ui:ui:1.7.3"
-    implementation "androidx.compose.ui:ui-tooling:1.7.3"
-    implementation 'androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.6'
-    implementation 'androidx.activity:activity-compose:1.9.2'
-    implementation "com.google.accompanist:accompanist-permissions:$accompanist_version"
-    implementation "com.google.accompanist:accompanist-systemuicontroller:$accompanist_version"
-    implementation "androidx.core:core-splashscreen:1.1.0-rc01"
-    implementation "androidx.compose.animation:animation:1.7.4"
+    implementation 'androidx.compose.material3:material3'
+    implementation 'androidx.compose.material:material-icons-core'
+    implementation "androidx.compose.ui:ui"
+    implementation "androidx.compose.ui:ui-tooling"
+    implementation 'androidx.lifecycle:lifecycle-viewmodel-ktx:2.11.0'
+    implementation 'androidx.activity:activity-compose:1.13.0'
+    implementation "com.google.accompanist:accompanist-permissions:0.37.3"
+    // Final release; the library is deprecated. Replacing it changes status-bar
+    // handling under edge-to-edge, which deserves its own change.
+    implementation "com.google.accompanist:accompanist-systemuicontroller:0.36.0"
+    implementation "androidx.core:core-splashscreen:1.2.0"
+    implementation "androidx.compose.animation:animation"
 
     // Navigation dependencies.
-    def nav_version = "2.8.5"
+    def nav_version = "2.10.2"
     implementation "androidx.navigation:navigation-compose:$nav_version"
     implementation "androidx.navigation:navigation-ui-ktx:$nav_version"
 
     // Supporting libraries.
-    implementation("io.coil-kt:coil-compose:2.6.0")
-    implementation("com.google.zxing:core:3.5.1")
+    implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation("com.google.zxing:core:3.5.4")
     implementation("com.patrykandpatrick.vico:compose:1.15.0")
     implementation("com.patrykandpatrick.vico:compose-m3:1.15.0")
 
@@ -180,11 +207,11 @@ dependencies {
 
     // Integration Tests
     androidTestImplementation composeBom
-    androidTestImplementation 'androidx.test:runner:1.6.2'
-    androidTestImplementation 'androidx.test.ext:junit-ktx:1.2.1'
-    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
-    androidTestImplementation 'androidx.test.espresso:espresso-core:3.6.1'
-    implementation 'androidx.test.uiautomator:uiautomator:2.3.0'
+    androidTestImplementation 'androidx.test:runner:1.7.0'
+    androidTestImplementation 'androidx.test.ext:junit-ktx:1.3.0'
+    androidTestImplementation 'androidx.test.ext:junit:1.3.0'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.7.0'
+    implementation 'androidx.test.uiautomator:uiautomator:2.4.0'
 
     // Authentication only for tests
     androidTestImplementation 'dev.turingcomplete:kotlin-onetimepassword:2.4.0'
@@ -192,18 +219,48 @@ dependencies {
 
     // Unit Tests
     testImplementation 'junit:junit:4.13.2'
-    testImplementation 'org.mockito:mockito-core:5.12.0'
-    testImplementation 'org.mockito:mockito-inline:5.2.0'
-    testImplementation 'org.mockito.kotlin:mockito-kotlin:5.4.0'
-    testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1'
+    testImplementation 'org.mockito:mockito-core:5.24.0'
+    testImplementation 'org.mockito.kotlin:mockito-kotlin:6.4.0'
+    testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0'
     // Host tests for Android-framework logic (SQLite repositories, LinkProperties
     // route parsing, ViewModels) without an emulator.
     testImplementation 'org.robolectric:robolectric:4.17'
-    testImplementation 'androidx.test:core:1.6.1'
+    testImplementation 'androidx.test:core:1.7.0'
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     implementation("androidx.compose.ui:ui-tooling-preview")
 }
+
+// ktfmtCheck / ktfmtFormat run ktfmt 0.47, the release this codebase is
+// formatted with, directly. The ktfmt Gradle plugin was dropped: the version
+// that supports AGP 9's built-in Kotlin bundles a newer ktfmt whose style
+// differs (trailing-comma management, trailing-lambda layout) and would
+// reformat most of the tree, and it cannot run the older formatter.
+configurations {
+    ktfmtCli
+}
+
+dependencies {
+    ktfmtCli "com.facebook:ktfmt:0.47"
+}
+
+def ktfmtTask(String name, String description, List<String> flags) {
+    tasks.register(name, JavaExec) {
+        group = "formatting"
+        setDescription(description)
+        classpath = configurations.ktfmtCli
+        mainClass = "com.facebook.ktfmt.cli.Main"
+        def sources = fileTree("src") { include "**/*.kt" }
+        inputs.files(sources)
+        doFirst {
+            args(flags + sources.files.collect { it.path }.sort())
+        }
+    }
+}
+
+ktfmtTask("ktfmtCheck", "Fails if any Kotlin source is not ktfmt-formatted.",
+        ["--dry-run", "--set-exit-if-changed"])
+ktfmtTask("ktfmtFormat", "Formats all Kotlin sources with ktfmt.", [])
 
 def getLocalProperty(key, defaultValue) {
     try {
@@ -215,6 +272,51 @@ def getLocalProperty(key, defaultValue) {
     }
 }
 
+
+// releaseSigningProperties returns the release keystore and its credentials,
+// or null when none are configured. Sources, first match wins:
+//   1. TAILMESH_KEYSTORE + TAILMESH_KEYSTORE_PASSWORD (+ optional
+//      TAILMESH_KEY_ALIAS, TAILMESH_KEY_PASSWORD) in the environment;
+//   2. a properties file at $TAILMESH_SIGNING_PROPERTIES, defaulting to
+//      ~/.config/tailmesh/signing.properties, with keys storeFile,
+//      storePassword, keyAlias, keyPassword.
+// keyAlias defaults to "tailmesh" and keyPassword to the store password.
+def releaseSigningProperties() {
+    def env = System.getenv()
+    def result = null
+    if (env.TAILMESH_KEYSTORE && env.TAILMESH_KEYSTORE_PASSWORD) {
+        result = [
+                storeFile    : env.TAILMESH_KEYSTORE,
+                storePassword: env.TAILMESH_KEYSTORE_PASSWORD,
+                keyAlias     : env.TAILMESH_KEY_ALIAS,
+                keyPassword  : env.TAILMESH_KEY_PASSWORD,
+        ]
+    } else {
+        def path = env.TAILMESH_SIGNING_PROPERTIES ?:
+                "${System.getProperty('user.home')}/.config/tailmesh/signing.properties"
+        def f = new File(path)
+        if (!f.isFile()) {
+            return null
+        }
+        def props = new Properties()
+        f.withInputStream { props.load(it) }
+        if (!props.storeFile || !props.storePassword) {
+            throw new GradleException("${path} must set storeFile and storePassword")
+        }
+        result = [
+                storeFile    : props.storeFile,
+                storePassword: props.storePassword,
+                keyAlias     : props.keyAlias,
+                keyPassword  : props.keyPassword,
+        ]
+    }
+    result.keyAlias = result.keyAlias ?: "tailmesh"
+    result.keyPassword = result.keyPassword ?: result.storePassword
+    if (!new File(result.storeFile).isFile()) {
+        throw new GradleException("Release keystore not found at ${result.storeFile}")
+    }
+    return result
+}
 
 def getVersionProperty(key) {
     // tailscale.version is created / updated by the makefile, it is in a loosely

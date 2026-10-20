@@ -108,7 +108,7 @@ func (b *upstreamBind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
 	return []conn.ReceiveFunc{b.receive}, port, nil
 }
 
-func (b *upstreamBind) receive(packets [][]byte, sizes []int, eps []conn.Endpoint) (int, error) {
+func (b *upstreamBind) receive(slab []byte, packets []conn.ReceivedPacket) (int, error) {
 	ch := b.chans.Load()
 	if ch == nil {
 		return 0, errBindClosed
@@ -121,9 +121,8 @@ func (b *upstreamBind) receive(packets [][]byte, sizes []int, eps []conn.Endpoin
 		if !ok {
 			return 0, errBindClosed
 		}
-		n := copy(packets[0], pkt.data)
-		sizes[0] = n
-		eps[0] = pkt.ep
+		n := copy(slab, pkt.data)
+		packets[0] = conn.ReceivedPacket{Offset: 0, Size: n, Endpoint: pkt.ep}
 		// pkt.data is readLoop's own read buffer, handed off wholesale rather
 		// than copied into (see readLoop) - now that its contents are copied
 		// out above, return it to the pool at full capacity for reuse.

@@ -73,11 +73,11 @@ func (b *learningBind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
 	}
 	wrapped := make([]conn.ReceiveFunc, len(fns))
 	for i, fn := range fns {
-		wrapped[i] = func(packets [][]byte, sizes []int, eps []conn.Endpoint) (int, error) {
-			n, err := fn(packets, sizes, eps)
+		wrapped[i] = func(slab []byte, packets []conn.ReceivedPacket) (int, error) {
+			n, err := fn(slab, packets)
 			for j := 0; j < n; j++ {
-				if eps[j] != nil && b.onSource != nil {
-					b.onSource(eps[j])
+				if packets[j].Endpoint != nil && b.onSource != nil {
+					b.onSource(packets[j].Endpoint)
 				}
 			}
 			return n, err
@@ -391,13 +391,12 @@ func TestUpstreamBindCarriesPacketsThroughDialer(t *testing.T) {
 		t.Fatal("bind never dialed the peer through the supplied dialer")
 	}
 
-	packets := [][]byte{make([]byte, 2048)}
-	sizes := make([]int, 1)
-	eps := make([]conn.Endpoint, 1)
+	slab := make([]byte, 2048)
+	packets := make([]conn.ReceivedPacket, 1)
 
 	recvDone := make(chan error, 1)
 	go func() {
-		_, err := fns[0](packets, sizes, eps)
+		_, err := fns[0](slab, packets)
 		recvDone <- err
 	}()
 
@@ -406,11 +405,11 @@ func TestUpstreamBindCarriesPacketsThroughDialer(t *testing.T) {
 		if err != nil {
 			t.Fatalf("receive: %v", err)
 		}
-		if got := string(packets[0][:sizes[0]]); got != "echo:handshake" {
+		if got := string(packets[0].Bytes(slab)); got != "echo:handshake" {
 			t.Fatalf("received %q, want %q", got, "echo:handshake")
 		}
-		if eps[0] == nil || eps[0].DstToString() != peer.String() {
-			t.Fatalf("receive reported endpoint %v, want %s", eps[0], peer)
+		if ep := packets[0].Endpoint; ep == nil || ep.DstToString() != peer.String() {
+			t.Fatalf("receive reported endpoint %v, want %s", packets[0].Endpoint, peer)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("no packet came back through the bind")
@@ -429,7 +428,7 @@ func TestUpstreamBindCloseUnblocksReceive(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- func() error {
-			_, err := fns[0]([][]byte{make([]byte, 64)}, make([]int, 1), make([]conn.Endpoint, 1))
+			_, err := fns[0](make([]byte, 64), make([]conn.ReceivedPacket, 1))
 			return err
 		}()
 	}()

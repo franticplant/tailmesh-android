@@ -129,7 +129,7 @@ func newWireGuardNetTun(localAddrs []netip.Addr, mtu int) (*wgNetTun, *stack.Sta
 }
 
 // Read hands wireguard-go the packets the stack wants to send out.
-func (t *wgNetTun) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
+func (t *wgNetTun) Read(slab []byte, packets []tun.ReadPacket) (int, error) {
 	select {
 	case <-t.closed:
 		return 0, os.ErrClosed
@@ -138,11 +138,17 @@ func (t *wgNetTun) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
 			return 0, os.ErrClosed
 		}
 		defer view.Release()
-		n, err := view.Read(bufs[0][offset:])
+		// The Reader contract reserves ReadPacketSpacing bytes before and
+		// after every packet in the slab, for the device's own use.
+		room := len(slab) - 2*tun.ReadPacketSpacing
+		if room < view.Size() {
+			return 0, tun.ErrTooManySegments
+		}
+		n, err := view.Read(slab[tun.ReadPacketSpacing : tun.ReadPacketSpacing+room])
 		if err != nil {
 			return 0, err
 		}
-		sizes[0] = n
+		packets[0] = tun.ReadPacket{Offset: tun.ReadPacketSpacing, Size: n}
 		return 1, nil
 	}
 }
