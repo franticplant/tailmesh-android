@@ -166,6 +166,7 @@ func summarizeRace(t *testing.T, stage string, apps []int32, results []raceResul
 //
 // Run with: go test ./libtailscale/multiproxy/ -run TestMeasureAttributionLeakageAcrossFixStages -v
 func TestMeasureAttributionLeakageAcrossFixStages(t *testing.T) {
+	requireMeasurement(t)
 	apps := make([]int32, raceNumApps)
 	for i := range apps {
 		apps[i] = int32(10001 + i)

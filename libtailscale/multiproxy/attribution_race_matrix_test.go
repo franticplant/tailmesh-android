@@ -469,7 +469,20 @@ func writeCSV(t *testing.T, name string, runs map[string][]runResult) {
 // 1. Profile matrix: 3 profiles x 3 stages x 10 seeded runs, raw + aggregate
 // ---------------------------------------------------------------------------
 
+// requireMeasurement skips a long-running measurement unless TAILMESH_MEASURE
+// is set. These are research harnesses for §96-§99, each taking up to minutes;
+// together they exceed go test's default ten-minute timeout, which is what kept
+// CI red. The quick structural proofs (the oracle sanity check, and
+// TestAttributionMatrixWrongAnswersAreRaces) still run every time.
+func requireMeasurement(t *testing.T) {
+	t.Helper()
+	if os.Getenv("TAILMESH_MEASURE") == "" {
+		t.Skip("measurement run; set TAILMESH_MEASURE=1 to include it")
+	}
+}
+
 func TestAttributionMatrixProfiles(t *testing.T) {
+	requireMeasurement(t)
 	allRuns := make(map[string][]runResult)
 	t.Log("cell                              | wrong-live% (mean/median/min/max/sd) | unresolved% (mean/median/min/max/sd)")
 	for _, p := range matrixProfiles {
@@ -497,6 +510,7 @@ func TestAttributionMatrixProfiles(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAttributionMatrixDelaySweep(t *testing.T) {
+	requireMeasurement(t)
 	delays := []time.Duration{
 		0, 50 * time.Microsecond, 100 * time.Microsecond, 250 * time.Microsecond,
 		500 * time.Microsecond, 1 * time.Millisecond, 2 * time.Millisecond,
@@ -521,6 +535,7 @@ func TestAttributionMatrixDelaySweep(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAttributionMatrixPortPoolSweep(t *testing.T) {
+	requireMeasurement(t)
 	pools := []int32{16, 32, 64, 128, 256, 512, 1024, 4096, 8192}
 	base := matrixProfiles[1] // B1_moderate, apps/flows held constant
 	base.flowsPerApp = 300
@@ -562,6 +577,7 @@ func TestAttributionMatrixPortPoolSweep(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAttributionMatrixSourceIPSweep(t *testing.T) {
+	requireMeasurement(t)
 	ipPools := []int{1, 2, 4, 8, 16, 64}
 	base := matrixProfiles[2] // C2_heavy_reuse: where port contention alone is worst, so where IP diversity should matter most if it matters at all
 	base.flowsPerApp = 300
@@ -594,6 +610,7 @@ func TestAttributionMatrixSourceIPSweep(t *testing.T) {
 // addresses rotate roughly daily with a brief overlap where at most two are
 // concurrently valid, not "many" - RFC 4941).
 func TestAttributionMatrixRealisticPortRange(t *testing.T) {
+	requireMeasurement(t)
 	const realisticPortRange = 28232
 	base := matrixProfiles[2] // C2_heavy_reuse: 8 apps, the contention side of things
 	base.portPool = realisticPortRange
@@ -619,6 +636,7 @@ func TestAttributionMatrixRealisticPortRange(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAttributionMatrixFallbackAB(t *testing.T) {
+	requireMeasurement(t)
 	allRuns := make(map[string][]runResult)
 	t.Log("profile              | mode         | wrong-live% (mean/sd) | unresolved% (mean/sd)")
 	for _, p := range []matrixProfile{matrixProfiles[1], matrixProfiles[2]} { // B1, C2
@@ -641,6 +659,7 @@ func TestAttributionMatrixFallbackAB(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAttributionMatrixLatencyPercentiles(t *testing.T) {
+	requireMeasurement(t)
 	p := matrixProfiles[1]
 	r := runProfile(p, 3, 500*time.Microsecond, true, 42)
 	sorted := append([]int64(nil), r.lookupNanos...)
@@ -659,6 +678,7 @@ func TestAttributionMatrixLatencyPercentiles(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAttributionMatrixTCPProfiles(t *testing.T) {
+	requireMeasurement(t)
 	allRuns := make(map[string][]runResult)
 	t.Log("cell                              | wrong-live% (mean/median/min/max/sd) | unresolved% (mean/median/min/max/sd)")
 	for _, p := range matrixProfilesTCP {
@@ -684,6 +704,7 @@ func TestAttributionMatrixTCPProfiles(t *testing.T) {
 // much time attribution gets to run), asked of TCP specifically instead of
 // assumed to transfer over from the UDP result.
 func TestAttributionMatrixTCPDelaySweep(t *testing.T) {
+	requireMeasurement(t)
 	delays := []time.Duration{
 		0, 50 * time.Microsecond, 100 * time.Microsecond, 250 * time.Microsecond,
 		500 * time.Microsecond, 1 * time.Millisecond, 2 * time.Millisecond,

@@ -1,0 +1,161 @@
+name: Release
+
+# Builds signed release APKs (per ABI plus universal) and the tailmesh-ctl CLI,
+# and publishes them as a GitHub release.
+#
+# Triggered by pushing a tag like v0.4.0, or manually for an existing tag.
+# Tags with a suffix (v0.4.0-rc1) and every v0.x release are marked
+# pre-release, matching earlier releases.
+#
+# Required repository secrets (Settings -> Secrets and variables -> Actions):
+#   TAILMESH_KEYSTORE_BASE64    base64 of the release .jks
+#   TAILMESH_KEYSTORE_PASSWORD  keystore password
+#   TAILMESH_KEY_PASSWORD       key password (optional; defaults to the store password)
+# Optional repository variables:
+#   TAILMESH_KEY_ALIAS          key alias (default: tailmesh)
+#   TAILMESH_CERT_SHA256        expected signing certificate SHA-256 (hex); the
+#                               build fails if the APKs are signed by anything else
+#
+# The secrets are only exposed to the "release" environment; protect it with
+# required reviewers or a tag rule to gate who can publish.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and publish (e.g. v0.4.0)
+        required: true
+      core-ref:
+        description: franticplant/tailscale ref to build against
+        default: tailmesh-android-base
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    name: Build signed APKs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    environment: release
+    outputs:
+      core-sha: ${{ steps.setup.outputs.core-sha }}
+      sha: ${{ steps.head.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-build
+        id: setup
+        with:
+          core-ref: ${{ inputs.core-ref || 'tailmesh-android-base' }}
+
+      - id: head
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Go tests
+        run: make go-test
+
+      - name: Decode keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.TAILMESH_KEYSTORE_BASE64 }}
+        run: |
+          if [[ -z "$KEYSTORE_BASE64" ]]; then
+            echo "::error::TAILMESH_KEYSTORE_BASE64 is not set; see the header of this workflow."
+            exit 1
+          fi
+          umask 077
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/tailmesh-release.jks"
+          echo "TAILMESH_KEYSTORE=$RUNNER_TEMP/tailmesh-release.jks" >> "$GITHUB_ENV"
+
+      - name: Build release APKs
+        env:
+          TAILMESH_KEYSTORE_PASSWORD: ${{ secrets.TAILMESH_KEYSTORE_PASSWORD }}
+          TAILMESH_KEY_PASSWORD: ${{ secrets.TAILMESH_KEY_PASSWORD }}
+          TAILMESH_KEY_ALIAS: ${{ vars.TAILMESH_KEY_ALIAS }}
+          RELEASE_TAG: ${{ env.TAG }}
+        run: make release-apks
+
+      - name: Verify signatures
+        env:
+          EXPECTED: ${{ vars.TAILMESH_CERT_SHA256 }}
+        run: |
+          apksigner="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/apksigner"
+          for apk in dist/*.apk; do
+            "$apksigner" verify --print-certs "$apk" > "$RUNNER_TEMP/certs.txt"
+            got=$(grep -m1 'certificate SHA-256 digest' "$RUNNER_TEMP/certs.txt" | awk '{print $NF}')
+            echo "$apk: $got"
+            if [[ -n "$EXPECTED" && "${got,,}" != "${EXPECTED,,}" ]]; then
+              echo "::error::$apk is signed by $got, expected $EXPECTED"
+              exit 1
+            fi
+          done
+
+      - name: Remove keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/tailmesh-release.jks"
+
+      - name: Build tailmesh-ctl
+        run: |
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            os=${target%/*}; arch=${target#*/}; ext=""
+            [[ $os == windows ]] && ext=.exe
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch ./tool/go build -trimpath -ldflags=-s \
+              -o "dist/tailmesh-ctl-$TAG-$os-$arch$ext" ./cmd/tailmesh-ctl
+          done
+          (cd dist && sha256sum * | grep -v SHA256SUMS > SHA256SUMS)
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ env.TAG }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-${{ env.TAG }}
+          path: dist
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CORE_SHA: ${{ needs.build.outputs.core-sha }}
+          BUILD_SHA: ${{ needs.build.outputs.sha }}
+        run: |
+          prerelease=""
+          if [[ "$TAG" == *-* || "$TAG" == v0.* ]]; then prerelease="--prerelease"; fi
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            # A release written by hand keeps its notes; only assets are replaced.
+            gh release upload "$TAG" dist/* --clobber
+            exit 0
+          fi
+          gh api "repos/$GH_REPO/releases/generate-notes" -f tag_name="$TAG" --jq .body > notes.md
+          {
+            echo
+            echo "---"
+            echo "Built by GitHub Actions from \`$BUILD_SHA\` against patched core" \
+              "\`franticplant/tailscale@$CORE_SHA\`. Verify downloads with \`SHA256SUMS\`."
+          } >> notes.md
+          gh release create "$TAG" dist/* $prerelease --verify-tag --title "$TAG" --notes-file notes.md

@@ -1,0 +1,101 @@
+# Copyright (c) Tailscale Inc & AUTHORS
+# SPDX-License-Identifier: BSD-3-Clause
+
+# Everything a Tailmesh build needs, shared by the CI and release workflows:
+# the patched Tailscale core as the ../tailscale sibling that go.mod's replace
+# directive points at, JDK 17, the Android SDK packages and pinned NDK, and
+# caches for the Tailscale Go toolchain, Go modules/build cache and Gradle.
+name: Set up Tailmesh build
+description: Patched core, JDK, Android SDK/NDK, Go toolchain and caches.
+
+inputs:
+  core-ref:
+    description: Branch, tag or commit of franticplant/tailscale to build against.
+    default: tailmesh-android-base
+  ndk-version:
+    description: NDK the Makefile's 16 KiB page-size linker flags were written for.
+    default: 23.1.7779620
+
+outputs:
+  core-sha:
+    description: The exact core commit checked out.
+    value: ${{ steps.core.outputs.sha }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check out patched Tailscale core
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: franticplant/tailscale
+        ref: ${{ inputs.core-ref }}
+        path: tailscale-core
+        persist-credentials: false
+
+    # go.mod has `replace tailscale.com => ../tailscale`, but actions/checkout
+    # only checks out inside $GITHUB_WORKSPACE, so it comes in as a
+    # subdirectory and is moved out.
+    - name: Place patched core as a workspace sibling
+      id: core
+      shell: bash
+      run: |
+        echo "sha=$(git -C tailscale-core rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        rm -rf ../tailscale
+        mv tailscale-core ../tailscale
+
+    - name: Check Go toolchain revisions match
+      shell: bash
+      run: |
+        if ! diff -q go.toolchain.rev ../tailscale/go.toolchain.rev; then
+          echo "::error::go.toolchain.rev differs from the patched core's; the APK would panic at load. Sync them."
+          exit 1
+        fi
+
+    - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      with:
+        distribution: temurin
+        java-version: "17"
+
+    - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      with:
+        cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+    # tool/go fetches the Tailscale Go toolchain pinned by go.toolchain.rev
+    # into ~/.cache/tailscale-go; it is large and immutable per revision.
+    - name: Cache Tailscale Go toolchain
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/tailscale-go
+        key: tailscale-go-${{ runner.os }}-${{ hashFiles('go.toolchain.rev') }}
+
+    - name: Cache Go modules and build cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/go/pkg/mod
+          ~/.cache/go-build
+        key: go-${{ runner.os }}-${{ hashFiles('go.toolchain.rev') }}-${{ hashFiles('go.sum') }}
+        restore-keys: go-${{ runner.os }}-${{ hashFiles('go.toolchain.rev') }}-
+
+    - name: Cache Android NDK
+      id: ndk-cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: /usr/local/lib/android/sdk/ndk/${{ inputs.ndk-version }}
+        key: android-ndk-${{ runner.os }}-${{ inputs.ndk-version }}
+
+    - name: Install Android SDK packages
+      shell: bash
+      run: |
+        api=$(grep '^androidApiLevel=' android/gradle.properties | cut -d= -f2)
+        compile=$(grep '^androidCompileSdk=' android/gradle.properties | cut -d= -f2)
+        tools=$(grep '^androidBuildToolsVersion=' android/gradle.properties | cut -d= -f2)
+        pkgs=("platforms;android-${api}" "platforms;android-${compile}" "build-tools;${tools}")
+        if [[ ! -d "$ANDROID_HOME/ndk/${{ inputs.ndk-version }}" ]]; then
+          pkgs+=("ndk;${{ inputs.ndk-version }}")
+        fi
+        yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+        "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "${pkgs[@]}" > /dev/null
+        # The Makefile and gomobile would otherwise pick the newest NDK on the image.
+        echo "NDK_ROOT=$ANDROID_HOME/ndk/${{ inputs.ndk-version }}" >> "$GITHUB_ENV"
+        echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${{ inputs.ndk-version }}" >> "$GITHUB_ENV"

@@ -1,0 +1,29 @@
+# Keeps the pinned action SHAs and the Gradle dependencies moving. Go modules
+# are left out: they follow the patched core (../tailscale), and bumping them
+# independently produces builds the core was never tested with.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directories:
+      - "/"
+      - "/.github/actions/setup-build"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: ".github:"
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: "gradle"
+    directory: "/android"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "android:"
+    open-pull-requests-limit: 10
+    groups:
+      androidx:
+        patterns: ["androidx.*"]
+      kotlin:
+        patterns: ["org.jetbrains.kotlin*", "org.jetbrains.kotlinx*"]
