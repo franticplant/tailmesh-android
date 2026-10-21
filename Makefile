@@ -279,6 +279,9 @@ $(ABS_UNSTRIPPED_AAR): tailscale.version $(GOBIN)/gomobile $(LIBTAILSCALE_GO_SRC
 	# to support 16kb page sizes.  Your mileage may vary with other NDK versions.
 	# -trimpath and -buildvcs=false keep checkout paths and working-tree state
 	# out of the binary; the commit is stamped explicitly by version-ldflags.sh.
+	# -buildid= leaves Go's build ID empty: it hashes build inputs including
+	# where the toolchain and NDK are installed, so it differs between machines
+	# even when the code is identical.
 	# gomobile still writes each local module's absolute directory into the
 	# module it generates, and Go embeds those, so it runs from fixed symlinks
 	# to this checkout and the core: every machine then embeds the same paths.
@@ -288,7 +291,7 @@ $(ABS_UNSTRIPPED_AAR): tailscale.version $(GOBIN)/gomobile $(LIBTAILSCALE_GO_SRC
 	cd $(REPRO_ROOT)/tailmesh-android && export PWD=$(REPRO_ROOT)/tailmesh-android && \
 	GOFLAGS="$$GOFLAGS -buildvcs=false" $(GOBIN)/gomobile bind -target android -androidapi 26 -trimpath \
 		-tags "$$(./build-tags.sh) $(GOMOBILE_BUILD_TAGS)" \
-		-ldflags "-linkmode=external -extldflags=-Wl,-z,max-page-size=16384 $$(./version-ldflags.sh)" \
+		-ldflags "-buildid= -linkmode=external -extldflags=-Wl,-z,max-page-size=16384 $$(./version-ldflags.sh)" \
 		-o $(ABS_UNSTRIPPED_AAR) ./libtailscale || { echo "gomobile bind failed"; exit 1; }
 	@if [ ! -f $(ABS_UNSTRIPPED_AAR) ]; then \
 	    echo "Error: $(ABS_UNSTRIPPED_AAR) was not created"; exit 1; \
