@@ -98,8 +98,13 @@ ifeq ($(ANDROID_SDK_ROOT),)
 endif
 export ANDROID_HOME ?= $(ANDROID_SDK_ROOT)
 
-# Auto-select an NDK from ANDROID_HOME (choose highest version available)
-NDK_ROOT ?= $(shell ls -1d $(ANDROID_HOME)/ndk/* 2>/dev/null | sort -V | tail -n 1)
+# The NDK is pinned: it is the one the 16 KiB page-size linker flags below were
+# written for, build.gradle's ndkVersion, and what release builds use. Another
+# NDK links a different libgojni.so, so a build with it would not reproduce a
+# release. gomobile finds it through ANDROID_NDK_HOME.
+NDK_VERSION := 23.1.7779620
+NDK_ROOT ?= $(ANDROID_HOME)/ndk/$(NDK_VERSION)
+export ANDROID_NDK_HOME := $(NDK_ROOT)
 
 HOST_OS := $(shell uname | tr A-Z a-z)
 ifeq ($(HOST_OS),linux)
@@ -265,6 +270,7 @@ $(GOBIN)/gobind: go.mod go.sum go.toolchain.rev
 LIBTAILSCALE_GO_SRCS := $(shell find libtailscale -name '*.go')
 
 $(ABS_UNSTRIPPED_AAR): tailscale.version $(GOBIN)/gomobile $(LIBTAILSCALE_GO_SRCS)
+	@test -d "$(NDK_ROOT)" || { echo "NDK $(NDK_VERSION) not found at $(NDK_ROOT); install it with: sdkmanager 'ndk;$(NDK_VERSION)'"; exit 1; }
 	@echo "Running gomobile bind to generate unstripped AAR..."
 	@echo "Output file: $(ABS_UNSTRIPPED_AAR)"
 	mkdir -p $(dir $(ABS_UNSTRIPPED_AAR))
