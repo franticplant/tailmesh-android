@@ -41,6 +41,8 @@ fi
 # Releases made before versionCode came from the commit used the build time,
 # so take it from the release itself; all of a release's APKs share it.
 build_tools=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+# apksigcopier runs apksigner, which the SDK does not put on PATH.
+export PATH="$build_tools:$PATH"
 apks=("$official"/tailmesh-"$tag"-*.apk)
 [[ -f ${apks[0]} ]] || { echo "no tailmesh-$tag-*.apk in $official" >&2; exit 1; }
 version_code=$("$build_tools/aapt2" dump badging "${apks[0]}" | sed -nE "s/.*versionCode='([0-9]+)'.*/\1/p")
@@ -68,7 +70,7 @@ for apk in "${apks[@]}"; do
 	if apksigcopier compare "$apk" --unsigned "$rebuilt"; then
 		echo "reproduced: ${apk##*/}"
 	else
-		echo "DIFFERS:    ${apk##*/} (rebuilt: $work/tailmesh-android/$rebuilt)"
+		echo "NOT REPRODUCED: ${apk##*/} (see apksigcopier's output above; rebuilt: $work/tailmesh-android/$rebuilt)"
 		failed=1
 	fi
 done
