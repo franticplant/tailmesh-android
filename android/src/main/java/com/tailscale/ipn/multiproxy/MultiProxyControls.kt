@@ -4,6 +4,7 @@
 package com.tailscale.ipn.multiproxy
 
 import android.content.Intent
+import android.os.Build
 import com.tailscale.ipn.IPNService
 import com.tailscale.ipn.MultiProxySession
 import com.tailscale.ipn.multiproxy.db.ProvisioningState
@@ -274,10 +275,21 @@ class MultiProxyControls(private val session: MultiProxySession) {
     if (session.engine != null) restartVpn()
   }
 
-  /** Turns the LAN-stays-direct default rule on or off; applied live. */
+  /**
+   * Turns the LAN-stays-direct default rule on or off. With broad capture on Android 13+ it is also
+   * a set of excluded VPN routes (IPNService.kt's rebuildMultiProxyTunLocked), so then the VPN
+   * restarts to apply it; otherwise it is a policy change applied live.
+   */
   suspend fun setLanExclusionEnabled(enabled: Boolean) {
+    val changed = settings.lanExclusionEnabled != enabled
     settings.lanExclusionEnabled = enabled
     applyNow()
+    if (changed &&
+        settings.broadCaptureEnabled &&
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+        session.engine != null) {
+      restartVpn()
+    }
   }
 
   suspend fun bindApp(packageName: String, upstreamId: String) {

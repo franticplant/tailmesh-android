@@ -5,6 +5,7 @@ package com.tailscale.ipn
 import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.IpPrefix
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -22,6 +23,7 @@ import com.tailscale.ipn.multiproxy.db.UpstreamOwner
 import com.tailscale.ipn.multiproxy.db.UpstreamRepository
 import com.tailscale.ipn.ui.notifier.Notifier
 import com.tailscale.ipn.util.TSLog
+import java.net.InetAddress
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -537,6 +539,22 @@ open class IPNService : VpnService(), libtailscale.IPNService {
     if (session.routingSettings.broadCaptureEnabled) {
       b.addRoute("0.0.0.0", 0)
       b.addRoute("::", 0)
+      // "LAN stays direct", done at the route level where Android allows it (13+): local traffic
+      // (private ranges, link-local, multicast - tether, hotspot, casting, discovery) never enters
+      // the VPN, rather than entering and being re-sent by the engine, which cannot carry multicast
+      // or broadcast. More specific routes above (real Tailscale space) still win. Older Android
+      // keeps the engine's policy rule (UpstreamPolicyApplier), which also stays in place here.
+      if (session.routingSettings.lanExclusionEnabled &&
+          Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        for (prefix in Libtailscale.multiProxyLANPrefixes().split(",").filter { it.isNotBlank() }) {
+          val (addr, len) = prefix.split("/")
+          try {
+            b.excludeRoute(IpPrefix(InetAddress.getByName(addr), len.toInt()))
+          } catch (e: Exception) {
+            TSLog.e(TAG, "MultiProxy: could not exclude LAN route $prefix: $e")
+          }
+        }
+      }
     }
 
     b.setMtu(1280)

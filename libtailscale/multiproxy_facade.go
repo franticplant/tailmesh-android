@@ -6,6 +6,7 @@ package libtailscale
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store"
@@ -125,6 +126,19 @@ func MultiProxySyntheticIPv4DNSAddress() string { return multiproxy.SyntheticIPv
 // Real Tailscale space. The TUN has to carry routes for these too, otherwise
 // an app handed a peer's literal address (SIP and TURN/STUN both do this)
 // sends to it over the underlying network, where nothing answers.
+// MultiProxyLANPrefixes is multiproxy.DefaultLANPrefixes as a comma-separated
+// list, without loopback (which a VPN route can neither include nor exclude):
+// the ranges the TUN keeps out of the VPN when LAN traffic stays direct.
+func MultiProxyLANPrefixes() string {
+	var out []string
+	for _, p := range multiproxy.DefaultLANPrefixes() {
+		if !p.Addr().IsLoopback() {
+			out = append(out, p.String())
+		}
+	}
+	return strings.Join(out, ",")
+}
+
 func MultiProxyRealTailscaleIPv4Prefix() string {
 	return multiproxy.RealTailscaleIPv4Prefix.String()
 }
