@@ -134,6 +134,16 @@ func (e *Engine) AddInboundListener(cfg InboundListenerConfig) error {
 	if err != nil {
 		return err
 	}
+	// Re-adding on the same tailnet port (every reconciliation does) must
+	// free it first, or Listen fails and the old listener silently stays.
+	e.mu.Lock()
+	if old := e.inboundListeners[cfg.ID]; old != nil && old.cfg.Upstream == cfg.Upstream && old.cfg.ListenPort == cfg.ListenPort {
+		delete(e.inboundListeners, cfg.ID)
+		e.mu.Unlock()
+		old.close()
+	} else {
+		e.mu.Unlock()
+	}
 	ln, err := acceptor.Listen(network, ":"+strconv.Itoa(int(cfg.ListenPort)))
 	if err != nil {
 		return fmt.Errorf("inbound-listener: listen on %s:%d: %w", cfg.Upstream, cfg.ListenPort, err)

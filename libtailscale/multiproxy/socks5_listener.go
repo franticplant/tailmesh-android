@@ -99,6 +99,18 @@ func (e *Engine) AddSOCKS5Listener(cfg SOCKS5ListenerConfig) error {
 		return errors.New("socks5-listener: username and password must each be at most 255 bytes")
 	}
 
+	// An edit that keeps the address (a new upstream, say) must free it first:
+	// otherwise the new Listen fails with EADDRINUSE and the old listener,
+	// with its old settings, silently stays in place.
+	e.mu.Lock()
+	if old := e.socks5Listeners[cfg.ID]; old != nil && old.cfg.BindAddr == cfg.BindAddr && old.cfg.Port == cfg.Port {
+		delete(e.socks5Listeners, cfg.ID)
+		e.mu.Unlock()
+		old.close()
+	} else {
+		e.mu.Unlock()
+	}
+
 	ln, err := net.Listen("tcp", net.JoinHostPort(cfg.BindAddr, strconv.Itoa(int(cfg.Port))))
 	if err != nil {
 		return fmt.Errorf("socks5-listener: %w", err)

@@ -195,6 +195,32 @@ func TestSOCKS5ListenerConnectRelaysTCP(t *testing.T) {
 	}
 }
 
+// Editing a listener without moving it (here: a new upstream) used to fail
+// with EADDRINUSE, leaving the old listener and its old upstream in place.
+func TestSOCKS5ListenerReplacesOnSamePort(t *testing.T) {
+	e := newDirectEngine(t)
+	if err := e.RegisterUpstream(&fakeUpstreamProvider{id: "upstream-2"}); err != nil {
+		t.Fatalf("RegisterUpstream: %v", err)
+	}
+	port := freeTCPPort(t)
+	for _, up := range []UpstreamID{DirectUpstreamID, "upstream-2"} {
+		if err := e.AddSOCKS5Listener(SOCKS5ListenerConfig{
+			ID: "l1", BindAddr: "127.0.0.1", Port: uint16(port), Upstream: up,
+		}); err != nil {
+			t.Fatalf("AddSOCKS5Listener(upstream %s): %v", up, err)
+		}
+	}
+	infos := e.SOCKS5ListenersSnapshot()
+	if len(infos) != 1 || infos[0].Upstream != "upstream-2" {
+		t.Fatalf("SOCKS5ListenersSnapshot = %+v, want one listener on upstream-2", infos)
+	}
+	c := dialSOCKS5Listener(t, port)
+	defer c.Close()
+	if selected := c.greet(socks5AuthNone); selected != socks5AuthNone {
+		t.Fatalf("replaced listener selected 0x%02x, want no-auth", selected)
+	}
+}
+
 // In Proxy-Only mode listener traffic is all the traffic there is, so it must
 // show in the upstream's stats the way a VPN flow does.
 func TestSOCKS5ListenerCountsFlowInUpstreamStats(t *testing.T) {
