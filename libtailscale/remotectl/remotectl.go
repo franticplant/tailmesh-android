@@ -110,6 +110,10 @@ type Config struct {
 	AccessLogPath string `json:"accessLogPath"`
 	// FileRoots are directories whose files may be downloaded.
 	FileRoots []string `json:"fileRoots,omitempty"`
+	// UpdateDir, if set, enables POST /v1/app/update: an uploaded APK is saved
+	// here and handed to the Handler's "app.update" method, which decides
+	// whether to install it. Empty disables the endpoint.
+	UpdateDir string `json:"updateDir,omitempty"`
 	// Version is reported by /v1/status.
 	Version string `json:"version,omitempty"`
 	// Methods is the Handler's method catalog.
@@ -165,6 +169,7 @@ type SessionInfo struct {
 
 const (
 	maxRequestBody   = 1 << 20
+	maxUpdateBody    = 512 << 20
 	handlerTimeout   = 60 * time.Second
 	approvalLifetime = 2 * time.Minute
 	approvalPollWait = 25 * time.Second
@@ -211,6 +216,8 @@ type Server struct {
 	stopped      bool
 	stopTimer    *time.Timer
 	done         chan struct{}
+
+	updateMu sync.Mutex // one upload at a time: they share UpdateDir's one slot
 }
 
 // Start validates cfg, starts listening, and serves until Stop or expiry.
@@ -503,6 +510,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /v1/logs", s.need(false, s.handleLogs))
 	mux.HandleFunc("GET /v1/access-log", s.need(false, s.handleAccessLog))
 	mux.HandleFunc("GET /v1/files", s.need(true, s.handleFile))
+	mux.HandleFunc("POST /v1/app/update", s.need(true, s.handleAppUpdate))
 
 	// Profiling costs CPU on the device and exposes memory contents, so it
 	// takes control.
@@ -992,6 +1000,78 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(resolved)))
 	http.ServeContent(w, r, filepath.Base(resolved), st.ModTime(), f)
+}
+
+// handleAppUpdate saves the request body, an APK, to UpdateDir and passes it
+// to the Handler's "app.update", which checks it and starts the install. The
+// access log records the APK's SHA-256. If the install goes ahead, the app is
+// replaced and this server stops with it, so a client should expect the
+// connection to drop after the response.
+func (s *Server) handleAppUpdate(w http.ResponseWriter, r *http.Request) {
+	ri := info(r)
+	ri.action = "app update"
+	if s.cfg.UpdateDir == "" {
+		ri.err = "updates unavailable"
+		writeError(w, http.StatusNotFound, "remote updates are not available in this build")
+		return
+	}
+	if !ri.control {
+		ri.err = "read-only session"
+		writeError(w, http.StatusForbidden, "updating the app changes state: "+readOnlyMessage(s))
+		return
+	}
+	if !s.updateMu.TryLock() {
+		ri.err = "update in progress"
+		writeError(w, http.StatusConflict, "another update upload is in progress")
+		return
+	}
+	defer s.updateMu.Unlock()
+
+	if err := os.MkdirAll(s.cfg.UpdateDir, 0o700); err != nil {
+		ri.err = err.Error()
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	tmp, err := os.CreateTemp(s.cfg.UpdateDir, "upload-*.apk")
+	if err != nil {
+		ri.err = err.Error()
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer os.Remove(tmp.Name())
+	h := sha256.New()
+	n, err := io.Copy(io.MultiWriter(tmp, h), io.LimitReader(r.Body, maxUpdateBody+1))
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		ri.err = err.Error()
+		writeError(w, http.StatusBadRequest, "reading upload: "+err.Error())
+		return
+	}
+	if n > maxUpdateBody {
+		ri.err = "body too large"
+		writeError(w, http.StatusRequestEntityTooLarge, "APK too large")
+		return
+	}
+	sum := hex.EncodeToString(h.Sum(nil))
+	ri.args = "sha256=" + sum
+	path := filepath.Join(s.cfg.UpdateDir, "update.apk")
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		ri.err = err.Error()
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	args, _ := json.Marshal(map[string]string{"path": path, "sha256": sum})
+	result, err := s.callWithTimeout("app.update", string(args))
+	if err != nil {
+		ri.err = err.Error()
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	io.WriteString(w, result)
 }
 
 func (s *Server) allowedFile(path string) (string, error) {

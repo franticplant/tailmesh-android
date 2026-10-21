@@ -522,6 +522,13 @@
     <string name="remote_control_off">Off</string>
     <string name="remote_control_allow_changes">Allow changes</string>
     <string name="remote_control_allow_changes_subtitle">Off makes every session read-only, immediately</string>
+    <string name="remote_control_allow_updates">Allow remote updates</string>
+    <string name="remote_control_allow_updates_subtitle">Lets a session with control install a newer build of Tailmesh signed with the same key. Your data is kept.</string>
+    <string name="app_update_channel">App updates</string>
+    <string name="app_update_channel_description">Updates installed through remote control</string>
+    <string name="app_update_confirm_title">Tailmesh update ready</string>
+    <string name="app_update_confirm_text">Tap to finish installing</string>
+    <string name="app_update_failed_title">Tailmesh update failed</string>
     <string name="remote_control_listen_on">Listen on</string>
     <string name="remote_control_bind_loopback">This device only (127.0.0.1)</string>
     <string name="remote_control_bind_all">All networks (0.0.0.0)</string>

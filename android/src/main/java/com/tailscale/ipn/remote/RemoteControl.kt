@@ -135,6 +135,7 @@ object RemoteControl {
                         RemoteMethods.exportsDir().absolutePath,
                     )),
             )
+            .put("updateDir", AppUpdater.updateDir().absolutePath)
             .put("version", BuildConfig.VERSION_NAME)
             .put("methods", RemoteMethods.catalogJson())
     try {

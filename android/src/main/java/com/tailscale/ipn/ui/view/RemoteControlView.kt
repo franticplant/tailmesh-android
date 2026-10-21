@@ -3,6 +3,9 @@
 
 package com.tailscale.ipn.ui.view
 
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -28,6 +31,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
@@ -68,6 +72,8 @@ fun RemoteControlView(backToSettings: BackNavigation) {
   var password by remember { mutableStateOf(settings.password) }
   var passwordControl by remember { mutableStateOf(settings.passwordGrantsControl) }
   var allowControl by remember { mutableStateOf(settings.allowControl) }
+  var allowUpdates by remember { mutableStateOf(settings.allowRemoteUpdates) }
+  val context = LocalContext.current
   var autoOff by remember { mutableStateOf(settings.autoOffMinutes) }
   var formError by remember { mutableStateOf<String?>(null) }
   var log by remember { mutableStateOf<List<RemoteControl.Access>>(emptyList()) }
@@ -152,6 +158,32 @@ fun RemoteControlView(backToSettings: BackNavigation) {
                   onCheckedChange = {
                     allowControl = it
                     RemoteControl.setAllowControl(it)
+                  },
+              )
+            },
+        )
+      }
+
+      item("allowUpdates") {
+        ListItem(
+            headlineContent = { Text(stringResource(R.string.remote_control_allow_updates)) },
+            supportingContent = {
+              Text(stringResource(R.string.remote_control_allow_updates_subtitle))
+            },
+            trailingContent = {
+              Switch(
+                  checked = allowUpdates,
+                  onCheckedChange = {
+                    allowUpdates = it
+                    settings.allowRemoteUpdates = it
+                    // Android's own gate; take the user straight to it.
+                    if (it && !context.packageManager.canRequestPackageInstalls()) {
+                      context.startActivity(
+                          Intent(
+                              Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                              Uri.parse("package:${context.packageName}"),
+                          ))
+                    }
                   },
               )
             },

@@ -485,3 +485,67 @@ func TestLogsCaptureOnlyWhileRunning(t *testing.T) {
 		t.Fatal("tee did not pass writes through")
 	}
 }
+
+func TestAppUpdateUpload(t *testing.T) {
+	upload := func(t *testing.T, base, tok string, apk []byte) int {
+		t.Helper()
+		req, _ := http.NewRequest("POST", base+"/v1/app/update", bytes.NewReader(apk))
+		req.Header.Set("Authorization", "Bearer "+tok)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("upload: %v", err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	called := func(h *fakeHandler) bool {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		for _, c := range h.calls {
+			if c == "app.update" {
+				return true
+			}
+		}
+		return false
+	}
+	apk := []byte("PK\x03\x04 pretend this is an APK")
+
+	t.Run("off without UpdateDir", func(t *testing.T) {
+		_, h, _, base := start(t, Config{Password: "correct horse", PasswordGrantsControl: true, AllowControl: true})
+		if code := upload(t, base, login(t, base, "correct horse"), apk); code != http.StatusNotFound {
+			t.Fatalf("upload with no UpdateDir = %d, want 404", code)
+		}
+		if called(h) {
+			t.Fatal("app.update reached with updates disabled")
+		}
+	})
+
+	t.Run("read-only session refused", func(t *testing.T) {
+		dir := t.TempDir()
+		_, h, _, base := start(t, Config{Password: "correct horse", AllowControl: true, UpdateDir: dir})
+		if code := upload(t, base, login(t, base, "correct horse"), apk); code != http.StatusForbidden {
+			t.Fatalf("upload from read-only session = %d, want 403", code)
+		}
+		if called(h) {
+			t.Fatal("read-only session reached app.update")
+		}
+	})
+
+	t.Run("control session hands the APK to app.update", func(t *testing.T) {
+		dir := t.TempDir()
+		_, h, _, base := start(t, Config{Password: "correct horse", PasswordGrantsControl: true, AllowControl: true, UpdateDir: dir})
+		if code := upload(t, base, login(t, base, "correct horse"), apk); code != http.StatusOK {
+			t.Fatalf("upload = %d, want 200", code)
+		}
+		if !called(h) {
+			t.Fatal("app.update not called")
+		}
+		got, err := os.ReadFile(filepath.Join(dir, "update.apk"))
+		if err != nil || !bytes.Equal(got, apk) {
+			t.Fatalf("saved APK = %q, %v; want the upload", got, err)
+		}
+		if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+			t.Fatalf("update dir holds %d files, want only update.apk", len(entries))
+		}
+	})
+}

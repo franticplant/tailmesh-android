@@ -96,6 +96,17 @@ object RemoteMethods {
               .put("captureActive", PacketCaptures.active.value)
         })
     add(
+        Method(
+            "app.update",
+            true,
+            "Install the APK uploaded with POST /v1/app/update (tailmesh-ctl update). Needs " +
+                "\"Allow remote updates\" on the phone; refuses another package, another signing " +
+                "key or an older version, since getting past those wipes the app's data.",
+            mapOf("path" to "the uploaded APK, as POST /v1/app/update passes it"),
+        ) {
+          withContext(Dispatchers.IO) { AppUpdater.install(it.str("path")) }
+        })
+    add(
         Method("multitailnet.start", true, "Start Multi-Tailnet mode (the same as its toggle).") {
           MultiProxySessionCoordinator.startMultiProxyMode(session)
           ok

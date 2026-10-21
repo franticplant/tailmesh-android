@@ -15,6 +15,7 @@
 //	tailmesh-ctl pull /data/user/0/.../captures/capture-....pcapng
 //	tailmesh-ctl logs -f -grep flow-
 //	tailmesh-ctl profile -seconds 20 -o cpu.pprof
+//	tailmesh-ctl update tailmesh-v0.4.1-arm64-v8a.apk         # needs "Allow remote updates" on
 //
 // The session token is cached per address in the user config directory, so
 // later commands need no flags beyond -addr. Set TAILMESH_ADDR to skip -addr.
@@ -71,6 +72,8 @@ func main() {
 		err = pull(args)
 	case "profile":
 		err = profile(args)
+	case "update":
+		err = update(args)
 	default:
 		usage()
 		os.Exit(2)
@@ -94,6 +97,7 @@ commands:
   access-log                         recent entries of the phone's access log
   pull <device path> [-o file]       download a capture or export
   profile [-seconds n] [-kind k] -o  Go pprof profile (profile, heap, goroutine, ...)
+  update <apk>                       install a newer build signed with the same key
 `)
 }
 
@@ -386,6 +390,34 @@ func profile(args []string) error {
 	return nil
 }
 
+// update uploads an APK for the app to install over itself. The phone checks
+// it (same package, same signing key, not older) before installing; once the
+// install starts the app restarts, so the connection drops shortly after.
+func update(args []string) error {
+	if len(args) != 1 {
+		return errors.New("update needs an APK path")
+	}
+	f, err := os.Open(args[0])
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	tok, err := token()
+	if err != nil {
+		return err
+	}
+	resp, err := doBody("POST", "/v1/app/update", tok, f, "application/vnd.android.package-archive")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	return printJSON(b)
+}
+
 // ---------------------------------------------------------------------------
 // HTTP
 // ---------------------------------------------------------------------------
@@ -399,14 +431,18 @@ func do(method, path, tok string, body any) (*http.Response, error) {
 		}
 		rd = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, base()+path, rd)
+	return doBody(method, path, tok, rd, "application/json")
+}
+
+func doBody(method, path, tok string, body io.Reader, contentType string) (*http.Response, error) {
+	req, err := http.NewRequest(method, base()+path, body)
 	if err != nil {
 		return nil, err
 	}
 	if tok != "" {
 		req.Header.Set("Authorization", "Bearer "+tok)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentType)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

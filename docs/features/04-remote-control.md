@@ -34,6 +34,25 @@ state. Beyond the catalog:
 - `/debug/pprof/*` — Go CPU, heap, goroutine, allocation, block, mutex profiles and traces, for the
   whole process.
 - `GET /v1/access-log` — the access log (read-only).
+- `POST /v1/app/update` — upload an APK (the raw request body) for the app to install over itself;
+  see [Updating the app](#updating-the-app).
+
+### Updating the app
+
+`tailmesh-ctl update tailmesh-….apk` installs a newer build without anyone touching the phone. It
+needs a session with control **and** two switches on the phone, both off until the user turns them
+on: **Allow remote updates** on the Remote control screen, and Android's **Install unknown apps**
+for Tailmesh (turning on the first opens the second).
+
+Before installing, the app refuses an APK that is another package, signed with another key, or an
+older version (a lower `versionCode`). Android would refuse the first two too; the only way past any
+of them is an uninstall, which wipes the app's data, so the update says why instead. A build signed
+with the release key and not older keeps every tailnet and setting, whichever way it is installed.
+
+On Android 12 and later the install needs no tap (the app is updating itself); otherwise a
+notification asks for one. The app restarts on install, ending every session. Afterwards remote
+control comes back by itself if its auto-off time has not passed, and so does the VPN or
+Multi-Tailnet session that was running. The access log records each upload's SHA-256.
 
 Every change goes through the same code as the matching control in the UI (`MultiProxyControls`,
 `MultiProxySessionCoordinator`, `PacketCaptures`), so it is validated, persisted and applied
@@ -45,6 +64,10 @@ screen, and the reverse.
 Remote control cannot change itself. There is no method for its settings, the global control
 switch, sessions, approvals, or the access log. Those exist only on the phone, so a client can never
 widen its own access, extend its own lifetime, disconnect another client, or hide what it did.
+
+The one exception is by design: an app update replaces the app's code, remote control's included.
+That is why it has its own switch, **Allow remote updates**, which only the phone can set, and why
+only builds signed with the same key are accepted.
 
 ---
 
