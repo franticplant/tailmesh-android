@@ -5,10 +5,11 @@ name: Release
 # publishes them as a GitHub release. Anyone can check a download with:
 #   gh attestation verify <file> -R franticplant/tailmesh-android
 #
-# Builds are reproducible. Before publishing, a second runner rebuilds the
-# APKs from source in a different directory, and the release only goes out
-# if they match the signed ones byte for byte (apart from the signature).
-# Anyone can repeat that with scripts/verify-reproducible.sh <tag>.
+# Builds are reproducible. Alongside publishing, a second runner rebuilds the
+# APKs from source in a different directory and checks they match the signed
+# ones byte for byte (apart from the signature); a mismatch fails that job but
+# does not hold the release back. Anyone can repeat the check with
+# scripts/verify-reproducible.sh <tag>.
 #
 # Triggered by pushing a tag like v0.4.0, or manually for an existing tag.
 # Tags with a suffix (v0.4.0-rc1) and every v0.x release are marked
@@ -202,7 +203,7 @@ jobs:
 
   publish:
     name: Publish GitHub release
-    needs: [build, reproduce]
+    needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -269,8 +270,7 @@ jobs:
             echo
             echo "    gh attestation verify <file> -R $GH_REPO"
             echo
-            echo "or compare it against \`SHA256SUMS\`. The build is reproducible: a second runner rebuilt"
-            echo "these APKs from source before publishing, and \`scripts/verify-reproducible.sh $TAG\`"
-            echo "repeats that check."
+            echo "or compare it against \`SHA256SUMS\`. The build is reproducible:"
+            echo "\`scripts/verify-reproducible.sh $TAG\` rebuilds these APKs from source and checks they match."
           } >> notes.md
           gh release create "$TAG" dist/* $prerelease --verify-tag --title "$TAG" --notes-file notes.md
