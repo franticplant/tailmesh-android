@@ -41,12 +41,22 @@ DEBUG_APK := tailscale-debug.apk
 RELEASE_AAB := tailscale-release.aab
 RELEASE_TV_AAB := tailscale-tv-release.aab
 
+# Builds are reproducible: everything time-derived comes from the commit being
+# built, not the clock, so the same commit gives byte-identical APKs (apart
+# from the signature). SOURCE_DATE_EPOCH is the committer time of HEAD, or
+# the current time outside a git checkout.
+ifndef SOURCE_DATE_EPOCH
+SOURCE_DATE_EPOCH := $(shell git log -1 --format=%ct 2>/dev/null || date +%s)
+endif
+export SOURCE_DATE_EPOCH
+
 # Base Android versionCode for this make invocation. The value is minutes since
-# the Unix epoch, times 10; the final digit is reserved for the platform
-# (0 = phone/tablet, 1 = Android TV). An explicitly supplied value wins so the
-# outer builder can keep phone and TV on the same base.
+# the Unix epoch of SOURCE_DATE_EPOCH, times 10; the final digit is reserved
+# for the platform (0 = phone/tablet, 1 = Android TV). An explicitly supplied
+# value wins so the outer builder can keep phone and TV on the same base, and
+# so a release built before this scheme can be rebuilt with its own versionCode.
 ifndef VERSION_CODE_BASE
-VERSION_CODE_BASE := $(shell echo $$(( $$(date +%s) / 60 * 10 )))
+VERSION_CODE_BASE := $(shell echo $$(( $(SOURCE_DATE_EPOCH) / 60 * 10 )))
 endif
 export VERSION_CODE_BASE
 
@@ -257,7 +267,9 @@ $(ABS_UNSTRIPPED_AAR): tailscale.version $(GOBIN)/gomobile $(LIBTAILSCALE_GO_SRC
 	rm -f $(ABS_UNSTRIPPED_AAR)
 	# The -linkmode=external -extldflags=-Wl,-z,max-page-size=16384 is specific to NDK 23
 	# to support 16kb page sizes.  Your mileage may vary with other NDK versions.
-	$(GOBIN)/gomobile bind -target android -androidapi 26 \
+	# -trimpath and -buildvcs=false keep checkout paths and working-tree state
+	# out of the binary; the commit is stamped explicitly by version-ldflags.sh.
+	GOFLAGS="$$GOFLAGS -buildvcs=false" $(GOBIN)/gomobile bind -target android -androidapi 26 -trimpath \
 		-tags "$$(./build-tags.sh) $(GOMOBILE_BUILD_TAGS)" \
 		-ldflags "-linkmode=external -extldflags=-Wl,-z,max-page-size=16384 $$(./version-ldflags.sh)" \
 		-o $(ABS_UNSTRIPPED_AAR) ./libtailscale || { echo "gomobile bind failed"; exit 1; }
