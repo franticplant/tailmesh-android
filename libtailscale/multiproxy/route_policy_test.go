@@ -345,12 +345,10 @@ func TestUpstreamSnapshotListsRegistryAndTailnets(t *testing.T) {
 
 type stubUIDResolver struct {
 	uid   int32
-	calls int
 	block chan struct{}
 }
 
 func (r *stubUIDResolver) ResolveUID(string, string, int32, string, int32) int32 {
-	r.calls++
 	if r.block != nil {
 		<-r.block
 	}
