@@ -305,8 +305,12 @@ class UpstreamPolicyApplier(
    * anything else (inboundAcceptorFor). It follows the same "workload identity" behaviour as
    * [applySOCKS5Listeners]: disabling the tailnet pauses the listener, and re-enabling it re-adds
    * the listener on the next reconciliation with no separate resume step.
+   *
+   * Public because a tailnet comes up seconds after [apply] runs at start-up: the listener fails
+   * then ("not an enabled tailnet") and is applied again on its own once the tailnet is running,
+   * without the rest of [apply], which would re-create every WireGuard tunnel.
    */
-  private fun applyInboundListeners(engine: MultiProxyEngine) {
+  fun applyInboundListeners(engine: MultiProxyEngine) {
     val availableTailnetIds =
         profiles.profiles.value
             .filter { it.enabled && it.provisioningState == ProvisioningState.READY }

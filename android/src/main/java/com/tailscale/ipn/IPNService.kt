@@ -116,6 +116,16 @@ class MultiProxySession(val app: App) {
     engine?.setUpstreamDNS(resolved)
   }
 
+  /** See [UpstreamPolicyApplier.applyInboundListeners]. */
+  fun applyInboundListenersSafely() {
+    val e = engine ?: return
+    try {
+      upstreamPolicyApplier.applyInboundListeners(e)
+    } catch (ex: Exception) {
+      TSLog.e("MultiProxySession", "could not apply inbound listeners: ${ex.message}")
+    }
+  }
+
   fun reconstructEngine(serviceScope: kotlinx.coroutines.CoroutineScope) {
     serviceScope.launch {
       val profiles = profileRepository.profiles.value
@@ -132,6 +142,8 @@ class MultiProxySession(val app: App) {
           TSLog.e("MultiProxySession", "Failed to reconstruct profile ${profile.id}: ${e.message}")
         }
       }
+      // Listeners were applied before the tailnets above existed; inbound ones need them.
+      applyInboundListenersSafely()
     }
   }
 }
@@ -293,6 +305,11 @@ open class IPNService : VpnService(), libtailscale.IPNService {
 
                 override fun onTailnetStateChange(tailnetID: String?, state: String?) {
                   TSLog.d(TAG, "MultiProxy tailnet $tailnetID state: $state")
+                  // Inbound listeners need a running tailnet: (re)apply them whenever one comes
+                  // up, which covers start-up as well as a tailnet recovering later.
+                  if (state.equals("Running", ignoreCase = true)) {
+                    scope.launch { session.applyInboundListenersSafely() }
+                  }
                 }
 
                 override fun onAddressCrossover(
