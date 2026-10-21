@@ -195,6 +195,48 @@ func TestSOCKS5ListenerConnectRelaysTCP(t *testing.T) {
 	}
 }
 
+// In Proxy-Only mode listener traffic is all the traffic there is, so it must
+// show in the upstream's stats the way a VPN flow does.
+func TestSOCKS5ListenerCountsFlowInUpstreamStats(t *testing.T) {
+	e := newDirectEngine(t)
+	echoAddr := newTCPEchoServer(t).(*net.TCPAddr)
+	port := freeTCPPort(t)
+	if err := e.AddSOCKS5Listener(SOCKS5ListenerConfig{
+		ID: "l1", BindAddr: "127.0.0.1", Port: uint16(port), Upstream: DirectUpstreamID,
+	}); err != nil {
+		t.Fatalf("AddSOCKS5Listener: %v", err)
+	}
+
+	c := dialSOCKS5Listener(t, port)
+	c.greet(socks5AuthNone)
+	if code, _, _ := c.request(socks5CmdConnect, echoAddr.IP.String(), uint16(echoAddr.Port)); code != socks5ReplySucceeded {
+		t.Fatalf("CONNECT reply code = 0x%02x, want success", code)
+	}
+	payload := []byte("counted")
+	c.conn.Write(payload)
+	io.ReadFull(c.conn, make([]byte, len(payload)))
+	c.Close()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var got UpstreamStatsInfo
+		for _, s := range e.UpstreamStatsSnapshot() {
+			if s.ID == string(DirectUpstreamID) {
+				got = s
+			}
+		}
+		if got.TCPFlowsTotal == 1 && got.ActiveTCP == 0 &&
+			got.BytesOut == uint64(len(payload)) && got.BytesIn == uint64(len(payload)) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("stats = flows %d active %d out %d in %d, want 1, 0, %d, %d",
+				got.TCPFlowsTotal, got.ActiveTCP, got.BytesOut, got.BytesIn, len(payload), len(payload))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func TestSOCKS5ListenerRejectsWrongCredentials(t *testing.T) {
 	e := newDirectEngine(t)
 	port := freeTCPPort(t)

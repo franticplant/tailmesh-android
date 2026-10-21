@@ -396,18 +396,26 @@ func (l *socks5Listener) handleConnect(conn net.Conn, p Provider, host string, p
 		}
 	}
 
+	// Counted against the upstream like a VPN flow (nat_router.go), so
+	// listener traffic shows in its stats - in Proxy-Only mode it is all of it.
+	stats := l.e.statsFor(l.cfg.Upstream)
+	stats.beginTCPFlow()
+	defer stats.endTCPFlow()
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		io.Copy(upstreamConn, clientToUpstreamR)
+		n, _ := io.Copy(upstreamConn, clientToUpstreamR)
+		stats.addBytesOut(n)
 		if cw, ok := upstreamConn.(interface{ CloseWrite() error }); ok {
 			cw.CloseWrite()
 		}
 	}()
 	go func() {
 		defer wg.Done()
-		io.Copy(conn, upstreamToClientR)
+		n, _ := io.Copy(conn, upstreamToClientR)
+		stats.addBytesIn(n)
 		if cw, ok := conn.(interface{ CloseWrite() error }); ok {
 			cw.CloseWrite()
 		}
