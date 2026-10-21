@@ -65,6 +65,10 @@ LIBTAILSCALE_AAR := android/libs/libtailscale.aar
 UNSTRIPPED_AAR := android/libs/libtailscale_unstripped.aar
 ARM64_SO_PATH := jni/arm64-v8a/libgojni.so
 
+# Fixed location gomobile builds from, through symlinks, so release builds
+# embed the same module paths on every machine (see the AAR rule below).
+REPRO_ROOT := /tmp/tailmesh-reproducible
+
 # Compute an absolute path for the unstripped AAR.
 ABS_UNSTRIPPED_AAR := $(shell pwd)/$(UNSTRIPPED_AAR)
 
@@ -269,6 +273,13 @@ $(ABS_UNSTRIPPED_AAR): tailscale.version $(GOBIN)/gomobile $(LIBTAILSCALE_GO_SRC
 	# to support 16kb page sizes.  Your mileage may vary with other NDK versions.
 	# -trimpath and -buildvcs=false keep checkout paths and working-tree state
 	# out of the binary; the commit is stamped explicitly by version-ldflags.sh.
+	# gomobile still writes each local module's absolute directory into the
+	# module it generates, and Go embeds those, so it runs from fixed symlinks
+	# to this checkout and the core: every machine then embeds the same paths.
+	mkdir -p $(REPRO_ROOT)
+	ln -sfn $(CURDIR) $(REPRO_ROOT)/tailmesh-android
+	ln -sfn $(realpath ../tailscale) $(REPRO_ROOT)/tailscale
+	cd $(REPRO_ROOT)/tailmesh-android && export PWD=$(REPRO_ROOT)/tailmesh-android && \
 	GOFLAGS="$$GOFLAGS -buildvcs=false" $(GOBIN)/gomobile bind -target android -androidapi 26 -trimpath \
 		-tags "$$(./build-tags.sh) $(GOMOBILE_BUILD_TAGS)" \
 		-ldflags "-linkmode=external -extldflags=-Wl,-z,max-page-size=16384 $$(./version-ldflags.sh)" \
