@@ -16,7 +16,8 @@ import (
 //
 // The process's log output is teed through TeeLogs. Lines are only buffered
 // while a server is running, so the cost when the feature is off is one atomic
-// load per write.
+// load per write - unless CaptureLogsFromStart was called, which buffers from
+// then on, so a client can see what happened before remote control started.
 
 const logRingSize = 5000
 
@@ -29,7 +30,8 @@ type LogLine struct {
 }
 
 type logRing struct {
-	on atomic.Bool
+	on     atomic.Bool
+	always atomic.Bool // set by CaptureLogsFromStart; servers stopping leave it on
 
 	mu      sync.Mutex
 	lines   []LogLine
@@ -42,6 +44,9 @@ var logs = &logRing{nextSeq: 1, wake: make(chan struct{})}
 func (r *logRing) enable() { r.on.Store(true) }
 
 func (r *logRing) disable() {
+	if r.always.Load() {
+		return
+	}
 	r.on.Store(false)
 	r.mu.Lock()
 	r.lines = nil
@@ -107,6 +112,14 @@ func (t teeWriter) Write(p []byte) (int, error) {
 // AddLog captures a log line from another source, such as the app's own
 // Kotlin logging.
 func AddLog(source, text string) { logs.add(source, text) }
+
+// CaptureLogsFromStart buffers log lines from now on, whether or not a server
+// is running, so start-up (and anything before remote control was turned on)
+// is in /v1/logs. Development builds call it at process start.
+func CaptureLogsFromStart() {
+	logs.always.Store(true)
+	logs.enable()
+}
 
 func sortedStrings(s []string) []string {
 	slices.Sort(s)

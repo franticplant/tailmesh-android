@@ -114,6 +114,9 @@ class App : UninitializedApp(), libtailscale.AppContext, ViewModelStoreOwner {
 
   override fun onCreate() {
     super.onCreate()
+    // Development builds keep logs from process start for remote control, so start-up problems
+    // (tailnets, listeners) can be diagnosed remotely; releases only capture while it runs.
+    if (BuildConfig.DEV_TOOLS) Libtailscale.captureRemoteLogsFromStart()
     appInstance = this
     setUnprotectedInstance(this)
     mdmChangeReceiver = MDMSettingsChangedReceiver()

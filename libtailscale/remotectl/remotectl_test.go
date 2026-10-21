@@ -549,3 +549,36 @@ func TestAppUpdateUpload(t *testing.T) {
 		}
 	})
 }
+
+func TestCaptureLogsFromStart(t *testing.T) {
+	t.Cleanup(func() {
+		logs.always.Store(false)
+		logs.disable()
+	})
+	w := TeeLogs(io.Discard)
+	CaptureLogsFromStart()
+	fmt.Fprintln(w, "start-up line")
+
+	s, _, _, base := start(t, Config{Password: "correct horse"})
+	tok := login(t, base, "correct horse")
+	read := func() string {
+		req, _ := http.NewRequest("GET", base+"/v1/logs", nil)
+		req.Header.Set("Authorization", "Bearer "+tok)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return string(b)
+	}
+	if !strings.Contains(read(), "start-up line") {
+		t.Fatal("a line logged before the server started is missing")
+	}
+
+	s.Stop()
+	fmt.Fprintln(w, "after a server stopped")
+	if !logs.on.Load() {
+		t.Fatal("stopping a server turned capture off")
+	}
+}

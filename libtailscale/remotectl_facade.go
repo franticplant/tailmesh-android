@@ -94,6 +94,11 @@ func StopRemoteControl() {
 	}
 }
 
+// CaptureRemoteLogsFromStart makes /v1/logs include everything from now on,
+// not just what was logged while remote control was running. Development
+// builds call it at app start, so start-up problems can be seen remotely.
+func CaptureRemoteLogsFromStart() { remotectl.CaptureLogsFromStart() }
+
 // RemoteControlRunning reports whether the endpoint is up.
 func RemoteControlRunning() bool { return remoteServer() != nil }
 
