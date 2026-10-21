@@ -25,6 +25,10 @@ var upstreamDialer atomic.Pointer[netns.Dialer]
 
 func setUpstreamProtectedDialer(d netns.Dialer) { upstreamDialer.Store(&d) }
 
+// upstreamProtect is the VpnService protect hook (backend.go), for dialing a
+// local-network upstream without the published dialer's network binding.
+var upstreamProtect atomic.Pointer[func(fd int) error]
+
 // protectedDialContext reaches a proxy without the connection re-entering the
 // TUN it is meant to carry traffic out of.
 //
@@ -38,6 +42,16 @@ func setUpstreamProtectedDialer(d netns.Dialer) { upstreamDialer.Store(&d) }
 // occur that early; a remote proxy dialed in that window would not be protected,
 // so it is logged rather than failing silently.
 func protectedDialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	// The published dialer also binds the socket to the network the device
+	// reaches the internet through (Wi-Fi or mobile data). An upstream on a
+	// private or link-local address may sit somewhere that network cannot
+	// reach - a laptop on the phone's USB tether or hotspot, which Android
+	// does not model as a network at all - and its packets would leave the
+	// wrong interface and vanish. Such an upstream is protected (kept out of
+	// the VPN) but not bound, so the kernel's routing picks the interface.
+	if pf := upstreamProtect.Load(); pf != nil && multiproxy.IsLocalNetworkAddress(address) {
+		return multiproxy.ProtectOnlyDialer(*pf).DialContext(ctx, network, address)
+	}
 	if dp := upstreamDialer.Load(); dp != nil {
 		return (*dp).DialContext(ctx, network, address)
 	}

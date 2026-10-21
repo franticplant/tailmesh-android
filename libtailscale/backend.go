@@ -456,7 +456,7 @@ func AcquireAndroidNetworkHooks(mode string, s IPNService, appCtx AppContext) bo
 	hookOwner = mode
 
 	if s != nil {
-		netns.SetAndroidProtectFunc(func(fd int) (retErr error) {
+		protect := func(fd int) (retErr error) {
 			defer func() {
 				if r := recover(); r != nil {
 					trace := debug.Stack()
@@ -471,7 +471,9 @@ func AcquireAndroidNetworkHooks(mode string, s IPNService, appCtx AppContext) bo
 				log.Printf("[unexpected] VpnService.protect(%d) returned false", fd)
 			}
 			return nil
-		})
+		}
+		netns.SetAndroidProtectFunc(protect)
+		upstreamProtect.Store(&protect)
 	}
 	if appCtx != nil {
 		netns.SetAndroidBindToNetworkFunc(func(fd int) (retErr error) {
@@ -519,6 +521,7 @@ func ReleaseAndroidNetworkHooks(mode string) {
 	if hookOwner == mode {
 		netns.SetAndroidProtectFunc(nil)
 		netns.SetAndroidBindToNetworkFunc(nil)
+		upstreamProtect.Store(nil)
 		hookOwner = ""
 	}
 }
