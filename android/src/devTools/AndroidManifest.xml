@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Development builds only (-PdevTools, set by the CI job for pushes to main):
+  remote control's app.update installs a newer build of the app over itself.
+  Never in a release or pre-release build.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
+
+    <application>
+        <receiver
+            android:name="com.tailscale.ipn.remote.AppUpdater$AppUpdateReceiver"
+            android:exported="false" />
+    </application>
+</manifest>

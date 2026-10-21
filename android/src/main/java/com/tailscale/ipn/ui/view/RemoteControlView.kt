@@ -37,6 +37,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.tailscale.ipn.BuildConfig
 import com.tailscale.ipn.R
 import com.tailscale.ipn.remote.RemoteControl
 import com.tailscale.ipn.remote.RemoteControlSettings
@@ -164,31 +165,32 @@ fun RemoteControlView(backToSettings: BackNavigation) {
         )
       }
 
-      item("allowUpdates") {
-        ListItem(
-            headlineContent = { Text(stringResource(R.string.remote_control_allow_updates)) },
-            supportingContent = {
-              Text(stringResource(R.string.remote_control_allow_updates_subtitle))
-            },
-            trailingContent = {
-              Switch(
-                  checked = allowUpdates,
-                  onCheckedChange = {
-                    allowUpdates = it
-                    settings.allowRemoteUpdates = it
-                    // Android's own gate; take the user straight to it.
-                    if (it && !context.packageManager.canRequestPackageInstalls()) {
-                      context.startActivity(
-                          Intent(
-                              Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                              Uri.parse("package:${context.packageName}"),
-                          ))
-                    }
-                  },
-              )
-            },
-        )
-      }
+      if (BuildConfig.DEV_TOOLS)
+          item("allowUpdates") {
+            ListItem(
+                headlineContent = { Text(stringResource(R.string.remote_control_allow_updates)) },
+                supportingContent = {
+                  Text(stringResource(R.string.remote_control_allow_updates_subtitle))
+                },
+                trailingContent = {
+                  Switch(
+                      checked = allowUpdates,
+                      onCheckedChange = {
+                        allowUpdates = it
+                        settings.allowRemoteUpdates = it
+                        // Android's own gate; take the user straight to it.
+                        if (it && !context.packageManager.canRequestPackageInstalls()) {
+                          context.startActivity(
+                              Intent(
+                                  Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                  Uri.parse("package:${context.packageName}"),
+                              ))
+                        }
+                      },
+                  )
+                },
+            )
+          }
 
       if (pending.isNotEmpty()) {
         item("pendingHeader") {

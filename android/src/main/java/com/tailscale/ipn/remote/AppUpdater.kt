@@ -14,6 +14,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.tailscale.ipn.App
+import com.tailscale.ipn.BuildConfig
 import com.tailscale.ipn.IPNService
 import com.tailscale.ipn.R
 import com.tailscale.ipn.multiproxy.ControlException
@@ -30,9 +31,10 @@ import org.json.JSONObject
  * two at install time; all three are checked here first, so a bad upload is refused with a reason
  * instead of failing half-way or offering a destructive way out.
  *
- * Off unless the user turns on "Allow remote updates", and Android additionally requires "Install
- * unknown apps" for this app. Where Android allows it (Android 12+, updating itself) the install
- * needs no tap; otherwise a notification asks for one.
+ * Development builds only ([BuildConfig.DEV_TOOLS]; releases have neither this path nor the install
+ * permissions). Off unless the user turns on "Allow remote updates", and Android additionally
+ * requires "Install unknown apps" for this app. Where Android allows it (Android 12+, updating
+ * itself) the install needs no tap; otherwise a notification asks for one.
  */
 object AppUpdater {
   private const val TAG = "AppUpdater"
@@ -44,6 +46,8 @@ object AppUpdater {
   /** Checks the APK at [path] and starts installing it. Returns what was started. */
   fun install(path: String): JSONObject {
     val app = App.get()
+    if (!BuildConfig.DEV_TOOLS)
+        throw ControlException("remote updates exist only in development builds")
     if (!RemoteControlSettings().allowRemoteUpdates) {
       throw ControlException(
           "remote updates are off; turn on \"Allow remote updates\" on the phone")

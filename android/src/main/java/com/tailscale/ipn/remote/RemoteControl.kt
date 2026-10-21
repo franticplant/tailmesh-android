@@ -135,7 +135,10 @@ object RemoteControl {
                         RemoteMethods.exportsDir().absolutePath,
                     )),
             )
-            .put("updateDir", AppUpdater.updateDir().absolutePath)
+            .apply {
+              // Development builds only; without it the server has no update endpoint.
+              if (BuildConfig.DEV_TOOLS) put("updateDir", AppUpdater.updateDir().absolutePath)
+            }
             .put("version", BuildConfig.VERSION_NAME)
             .put("methods", RemoteMethods.catalogJson())
     try {

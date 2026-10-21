@@ -15,12 +15,6 @@
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
-    <!-- Remote control's app.update: the app installs a newer build of itself.
-         Inert unless the user turns on "Allow remote updates" and grants
-         "Install unknown apps"; declared in every build so that switching
-         between builds never adds or removes it. -->
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
-    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
 
     <!-- Disable input emulation on ChromeOS -->
     <uses-feature
@@ -119,10 +113,6 @@
 
         <receiver
             android:name=".remote.RemoteControlReceiver"
-            android:exported="false" />
-
-        <receiver
-            android:name=".remote.AppUpdater$AppUpdateReceiver"
             android:exported="false" />
 
         <receiver

@@ -191,10 +191,12 @@ release-tv: jarsign-env $(RELEASE_TV_AAB)
 # environment, or ~/.config/tailmesh/signing.properties. Refuses to produce
 # unsigned APKs.
 RELEASE_TAG ?= $(shell git describe --tags --exact-match 2>/dev/null || git describe --tags --always)
+# DEV_TOOLS=1 builds development APKs (remote app updates, "-dev" version);
+# releases never set it.
 .PHONY: release-apks
 release-apks: version gradle-dependencies
 	rm -rf android/build/outputs/apk/release
-	(cd android && ./gradlew assembleRelease -PsplitAbis -PVERSION_CODE_BASE=$(VERSION_CODE_BASE))
+	(cd android && ./gradlew assembleRelease -PsplitAbis -PVERSION_CODE_BASE=$(VERSION_CODE_BASE) $(if $(DEV_TOOLS),-PdevTools))
 	@if ls android/build/outputs/apk/release/*-unsigned.apk >/dev/null 2>&1; then \
 		echo "release APKs are unsigned: configure release signing (see android/build.gradle)"; exit 1; \
 	fi

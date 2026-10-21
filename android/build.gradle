@@ -63,6 +63,16 @@ android {
         // disable this behaviour.
         buildConfigField "boolean", "USE_GOOGLE_DNS_FALLBACK", getLocalProperty("tailscale.useGoogleDnsFallback", "true")
 
+        // Development builds (-PdevTools; the CI job for pushes to main sets
+        // it) can be updated through remote control (app.update), with the
+        // install permissions in src/devTools/AndroidManifest.xml. Releases
+        // never set it. The "-dev" version suffix keeps a dev build from
+        // being mistaken for a release.
+        buildConfigField "boolean", "DEV_TOOLS", isDevToolsBuild().toString()
+        if (isDevToolsBuild()) {
+            versionNameSuffix "-dev"
+        }
+
         // Opt-in single-ABI filter for local test builds only (e.g. `-PtestAbi=x86_64`
         // to build/install fast against an x86_64 emulator instead of shipping all
         // four ABIs' native libs). Unset by default so normal builds are unaffected.
@@ -343,6 +353,18 @@ def computeVersionCode() {
     return (base + platform) as int
 }
 
+def isDevToolsBuild() {
+    return project.hasProperty('devTools')
+}
+
 def isTV() {
     return project.findProperty('PLATFORM')?.toString() == 'tv'
+}
+
+androidComponents {
+    onVariants(selector().all()) { variant ->
+        if (isDevToolsBuild()) {
+            variant.sources.manifests.addStaticManifestFile("src/devTools/AndroidManifest.xml")
+        }
+    }
 }

@@ -94,12 +94,14 @@ jobs:
             echo "- APK: \`$(du -h tailscale-debug.apk | cut -f1)\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # Release-signed APKs of every push to main, so a CI build installs over the
-  # released app. Pull requests (Dependabot's included) never reach this job,
-  # and the "release" environment, which holds the signing secrets, only
-  # admits main and v* tags.
+  # Development APKs of every push to main: signed with the release key, so
+  # they install over the released app keeping its data, and built with
+  # DEV_TOOLS (remote app updates, "-dev" version name), so they are never
+  # mistaken for a release. Pull requests (Dependabot's included) never reach
+  # this job, and the "release" environment, which holds the signing
+  # secrets, only admits main and v* tags.
   signed-apk:
-    name: Build signed APKs
+    name: Build signed dev APKs
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[ci skip]')
@@ -125,7 +127,7 @@ jobs:
           TAILMESH_KEYSTORE_PASSWORD: ${{ secrets.TAILMESH_KEYSTORE_PASSWORD }}
           TAILMESH_KEY_PASSWORD: ${{ secrets.TAILMESH_KEY_PASSWORD }}
           TAILMESH_KEY_ALIAS: ${{ vars.TAILMESH_KEY_ALIAS }}
-        run: make release-apks RELEASE_TAG="main-${GITHUB_SHA::9}"
+        run: make release-apks DEV_TOOLS=1 RELEASE_TAG="dev-${GITHUB_SHA::9}"
 
       - name: Remove keystore
         if: always()
@@ -147,7 +149,7 @@ jobs:
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: tailmesh-signed-${{ github.sha }}
+          name: tailmesh-dev-${{ github.sha }}
           path: dist/
           retention-days: 30
           if-no-files-found: error
@@ -155,8 +157,9 @@ jobs:
       - name: Summary
         run: |
           {
-            echo "### Signed build"
-            echo "Release-signed; installs over the released app, keeping its data."
+            echo "### Development build"
+            echo "Signed with the release key, so it installs over the released app keeping its data."
+            echo "Not a release: remote app updates are enabled and the version name ends in -dev."
             echo "- core: \`franticplant/tailscale@${{ steps.setup.outputs.core-sha }}\`"
             (cd dist && sha256sum *.apk | sed 's/^/- /')
           } >> "$GITHUB_STEP_SUMMARY"
