@@ -60,8 +60,7 @@ class SettingsViewModel : IpnViewModel() {
       MutableStateFlow((App.get().decryptFromPref("localProxyEnabled") ?: "false").toBoolean())
   val localProxyAddress =
       MutableStateFlow(App.get().decryptFromPref("localProxyAddress") ?: "127.0.0.1:1055")
-  val userspaceOnlyMode =
-      MutableStateFlow((App.get().decryptFromPref("userspaceOnlyMode") ?: "false").toBoolean())
+  val userspaceOnlyMode = MutableStateFlow(App.get().isProxyOnlyMode())
 
   init {
     isClientRemoteLoggingEnabled.set(App.get().isClientLoggingEnabled())
@@ -69,7 +68,7 @@ class SettingsViewModel : IpnViewModel() {
     debugHTTPProxyLogging.set(readEncryptedBool(DEBUG_HTTP_PROXY_LOGGING_KEY, false))
     debugDNSConfigLogging.set(readEncryptedBool(DEBUG_DNS_CONFIG_LOGGING_KEY, false))
     debugDNSQueryLogging.set(readEncryptedBool(DEBUG_DNS_QUERY_LOGGING_KEY, false))
-    userspaceOnlyMode.set(readEncryptedBool("userspaceOnlyMode", false))
+    userspaceOnlyMode.set(readEncryptedBool(App.PROXY_ONLY_MODE_KEY, false))
 
     viewModelScope.launch {
       Notifier.netmap.collect { netmap -> isAdmin.set(netmap?.SelfNode?.isAdmin ?: false) }
@@ -122,7 +121,7 @@ class SettingsViewModel : IpnViewModel() {
 
   fun toggleUserspaceOnlyMode() {
     val next = !userspaceOnlyMode.value
-    App.get().encryptToPref("userspaceOnlyMode", next.toString())
+    App.get().setProxyOnlyMode(next)
     userspaceOnlyMode.set(next)
   }
 

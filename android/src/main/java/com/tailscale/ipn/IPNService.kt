@@ -341,8 +341,11 @@ open class IPNService : VpnService(), libtailscale.IPNService {
               })
     }
 
-    val success = rebuildMultiProxyTunLocked(session)
-    if (!success) {
+    // In Proxy-Only mode the engine runs tailnets, upstreams and listeners without taking over
+    // device traffic, so there is no VPN interface to build (and no VPN permission needed).
+    if (app.isProxyOnlyMode()) {
+      TSLog.d(TAG, "MULTIPROXY in Proxy-Only mode: not building a VPN interface")
+    } else if (!rebuildMultiProxyTunLocked(session)) {
       return false
     }
 

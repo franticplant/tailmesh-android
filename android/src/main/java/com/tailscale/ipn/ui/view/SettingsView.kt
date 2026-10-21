@@ -159,7 +159,9 @@ fun SettingsView(
           Lists.ItemDivider()
           Setting.Switch(
               title = "Proxy-Only Mode (No VPN)",
-              subtitle = "Connect to Tailnet without intercepting device traffic",
+              subtitle =
+                  "Standard and Multi-Tailnet run without intercepting device traffic; " +
+                      "upstreams and listeners still work",
               isOn = viewModel.userspaceOnlyMode.collectAsState().value,
               onToggle = { viewModel.toggleUserspaceOnlyMode() })
 

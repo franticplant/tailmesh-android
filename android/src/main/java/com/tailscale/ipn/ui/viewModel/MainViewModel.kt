@@ -230,9 +230,7 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
           // User wants to turn ON the VPN
           when {
             currentState != Ipn.State.Running -> {
-              val userspaceOnly =
-                  (App.get().decryptFromPref("userspaceOnlyMode") ?: "false").toBoolean()
-              if (userspaceOnly) {
+              if (App.get().isProxyOnlyMode()) {
                 // Bypass VpnService entirely, just start the engine
                 App.get().startUserspaceOnly()
               } else {

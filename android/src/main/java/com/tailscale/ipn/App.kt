@@ -67,6 +67,8 @@ class App : UninitializedApp(), libtailscale.AppContext, ViewModelStoreOwner {
     // Key to store the SAF URI in EncryptedSharedPreferences.
     private val PREF_KEY_SAF_URI = "saf_directory_uri"
     private const val TAG = "App"
+    // Historical name: the key predates Proxy-Only applying to Multi-Tailnet mode.
+    const val PROXY_ONLY_MODE_KEY = "userspaceOnlyMode"
     private lateinit var appInstance: App
     /**
      * Initializes the app (if necessary) and returns the singleton app instance. Always use this
@@ -263,6 +265,20 @@ class App : UninitializedApp(), libtailscale.AppContext, ViewModelStoreOwner {
   @Throws(IOException::class, GeneralSecurityException::class)
   override fun decryptFromPref(prefKey: String?): String? {
     return getEncryptedPrefs().getString(prefKey, null)
+  }
+
+  /**
+   * Proxy-Only mode: run without a VPN interface, so device traffic is left alone. It applies to
+   * Standard and Multi-Tailnet mode alike; tailnets, upstreams and listeners keep working.
+   */
+  fun isProxyOnlyMode(): Boolean = (decryptFromPref(PROXY_ONLY_MODE_KEY) ?: "false").toBoolean()
+
+  /** Sets Proxy-Only mode, restarting Multi-Tailnet mode if it is running so it takes effect. */
+  fun setProxyOnlyMode(enabled: Boolean) {
+    encryptToPref(PROXY_ONLY_MODE_KEY, enabled.toString())
+    if (IPNService.runtimeMode.value == VpnRuntimeMode.MULTIPROXY) {
+      startService(Intent(this, IPNService::class.java).setAction(IPNService.ACTION_RESTART_VPN))
+    }
   }
 
   override fun getStateStoreKeysJSON(): String {

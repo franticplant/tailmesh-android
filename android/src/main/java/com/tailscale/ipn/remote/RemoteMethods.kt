@@ -92,6 +92,7 @@ object RemoteMethods {
               .put("runtimeMode", IPNService.runtimeMode.value.name)
               .put("standardState", Notifier.state.value.name)
               .put("multiTailnetEngineRunning", session.engine != null)
+              .put("proxyOnly", App.get().isProxyOnlyMode())
               .put("captureActive", PacketCaptures.active.value)
         })
     add(
@@ -887,7 +888,7 @@ object RemoteMethods {
     // settings
     // -------------------------------------------------------------------
     add(
-        Method("settings.get", false, "DNS and debug-logging settings.") {
+        Method("settings.get", false, "DNS, debug-logging and Proxy-Only settings.") {
           val app = App.get()
           JSONObject()
               .put("publicDoHURL", app.decryptFromPref(DNSSettingsViewModel.PUBLIC_DOH_URL_KEY))
@@ -911,6 +912,7 @@ object RemoteMethods {
                   "debugDNSQueryLogging",
                   app.decryptFromPref(SettingsViewModel.DEBUG_DNS_QUERY_LOGGING_KEY),
               )
+              .put("proxyOnly", app.isProxyOnlyMode())
         })
     add(
         Method(
@@ -961,6 +963,17 @@ object RemoteMethods {
               .filter { (arg, _) -> it.has(arg) }
               .forEach { (arg, key) -> app.encryptToPref(key, it.optBool(arg, false).toString()) }
           Libtailscale.applyDNSSettings()
+          ok
+        })
+    add(
+        Method(
+            "settings.setProxyOnly",
+            true,
+            "Proxy-Only mode: no VPN interface, in Standard and Multi-Tailnet mode. A running " +
+                "Multi-Tailnet engine restarts to apply it.",
+            mapOf("enabled" to "bool"),
+        ) {
+          App.get().setProxyOnlyMode(it.optBool("enabled", false))
           ok
         })
 

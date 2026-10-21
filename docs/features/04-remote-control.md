@@ -23,7 +23,7 @@ Tailscale client through its LocalAPI:
 | Listeners | `listeners.socks5.list`, `listeners.inbound.list` | `…save`, `…setEnabled`, `…delete` for both |
 | Diagnostics | `diagnostics.snapshot`, `events`, `dnsLog`, `routeDecisions`, `exports` | `diagnostics.setDNSQueryLog`, `setAdvanced`, `setSampleInterval`, `reset`, `exportBundle` |
 | Packet capture | `capture.status`, `capture.list` | `capture.start` (all / apps / listeners), `capture.stop`, `capture.delete` |
-| Settings | `settings.get` | `settings.setPublicDoH`, `settings.setDebugLogging` |
+| Settings | `settings.get` | `settings.setPublicDoH`, `settings.setDebugLogging`, `settings.setProxyOnly` |
 | Standard mode | `tailscale.localapi.get` | `tailscale.localapi.call` (prefs, profiles, exit nodes, login, logout, …) |
 
 `GET /v1/methods` returns the live catalog, with each method's parameters and whether it changes
