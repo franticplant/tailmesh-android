@@ -225,7 +225,7 @@ dependencies {
 
     // Authentication only for tests
     androidTestImplementation 'dev.turingcomplete:kotlin-onetimepassword:2.4.0'
-    androidTestImplementation 'commons-codec:commons-codec:1.16.1'
+    androidTestImplementation 'commons-codec:commons-codec:1.23.0'
 
     // Unit Tests
     testImplementation 'junit:junit:4.13.2'
