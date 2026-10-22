@@ -63,6 +63,14 @@ class RemoteControlSettings(private val app: App = App.get()) {
     get() = bool(KEY_ALLOW_SHELL, false)
     set(v) = put(KEY_ALLOW_SHELL, v.toString())
 
+  /**
+   * Whether every shell command needs approval on the phone (the default), rather than one approval
+   * opening a shell for up to 30 minutes.
+   */
+  var shellApproveEach: Boolean
+    get() = bool(KEY_SHELL_APPROVE_EACH, true)
+    set(v) = put(KEY_SHELL_APPROVE_EACH, v.toString())
+
   /** How long remote control stays on once enabled; 0 means until turned off. */
   var autoOffMinutes: Int
     get() = str(KEY_AUTO_OFF)?.toIntOrNull() ?: 60
@@ -103,6 +111,7 @@ class RemoteControlSettings(private val app: App = App.get()) {
     private const val KEY_AUTO_OFF = "remoteControl.autoOffMinutes"
     private const val KEY_ALLOW_UPDATES = "remoteControl.allowUpdates"
     private const val KEY_ALLOW_SHELL = "remoteControl.allowShell"
+    private const val KEY_SHELL_APPROVE_EACH = "remoteControl.shellApproveEach"
     private const val KEY_EXPIRES = "remoteControl.expiresAt"
   }
 }

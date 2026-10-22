@@ -71,9 +71,11 @@ import com.tailscale.ipn.ui.view.DNSSettingsView
 import com.tailscale.ipn.ui.view.ExitNodePicker
 import com.tailscale.ipn.ui.view.HealthView
 import com.tailscale.ipn.ui.view.IntroView
+import com.tailscale.ipn.ui.view.LogKind
 import com.tailscale.ipn.ui.view.LoginQRView
 import com.tailscale.ipn.ui.view.LoginWithAuthKeyView
 import com.tailscale.ipn.ui.view.LoginWithCustomControlURLView
+import com.tailscale.ipn.ui.view.LogsView
 import com.tailscale.ipn.ui.view.MDMSettingsDebugView
 import com.tailscale.ipn.ui.view.MainView
 import com.tailscale.ipn.ui.view.MainViewNavigation
@@ -331,6 +333,7 @@ class MainActivity : ComponentActivity() {
                       onNavigateToSOCKS5Listeners = { navController.navigate("socks5Listeners") },
                       onNavigateToInboundListeners = { navController.navigate("inboundListeners") },
                       onNavigateToRemoteControl = { navController.navigate("remoteControl") },
+                      onNavigateToLogs = { navController.navigate("logs/APP") },
                       onBackToSettings = backTo("settings"),
                       onNavigateBackHome = backTo("main"),
                   )
@@ -429,7 +432,19 @@ class MainActivity : ComponentActivity() {
               composable("socks5Listeners") {
                 com.tailscale.ipn.ui.view.SOCKS5ListenersView(backTo("settings"))
               }
-              composable("remoteControl") { RemoteControlView(backTo("settings")) }
+              composable("remoteControl") {
+                RemoteControlView(
+                    backTo("settings"),
+                    onOpenLogs = { kind -> navController.navigate("logs/${kind.name}") })
+              }
+              composable("logs/{kind}") { entry ->
+                LogsView(
+                    onBack = { navController.popBackStack() },
+                    initial =
+                        LogKind.entries.firstOrNull {
+                          it.name == entry.arguments?.getString("kind")
+                        } ?: LogKind.APP)
+              }
               composable("inboundListeners") {
                 com.tailscale.ipn.ui.view.InboundListenersView(backTo("settings"))
               }

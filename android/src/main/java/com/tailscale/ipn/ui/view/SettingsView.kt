@@ -160,6 +160,13 @@ fun SettingsView(
           )
 
           Lists.ItemDivider()
+          Setting.Text(
+              title = stringResource(R.string.logs),
+              subtitle = stringResource(R.string.logs_subtitle),
+              onClick = settingsNav.onNavigateToLogs,
+          )
+
+          Lists.ItemDivider()
           Setting.Switch(
               title = "Proxy-Only Mode (No VPN)",
               subtitle =
@@ -483,7 +490,8 @@ fun SettingsPreview() {
   vm.isAdmin.set(true)
   vm.managedByOrganization.set("Tails and Scales Inc.")
   SettingsView(
-      SettingsNav({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}),
+      SettingsNav(
+          {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}),
       vm,
   )
 }

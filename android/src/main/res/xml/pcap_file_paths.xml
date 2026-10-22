@@ -9,4 +9,6 @@
          profiles and Android method-trace files into under context.cacheDir - see
          DiagnosticsView.kt's profilesDir. -->
     <cache-path name="profiles" path="profiles/" />
+    <!-- The log viewer's latest shared export, see LogsView.kt's shareLog. -->
+    <cache-path name="logs" path="logs/" />
 </paths>

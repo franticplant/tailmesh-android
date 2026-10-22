@@ -58,7 +58,10 @@ object SpeedMeter {
   private const val TAG = "SpeedMeter"
   private const val PREFS = "speed_meter"
   private const val KEY_ENABLED = "enabled"
-  const val CHANNEL_ID = "speed-meter"
+  // A new id because importance cannot be raised on an existing channel: the first one, LOW,
+  // counted as "silent", and Pixel hides silent notifications' icons from the status bar.
+  const val CHANNEL_ID = "speed-meter-statusbar"
+  private const val OLD_CHANNEL_ID = "speed-meter"
   const val NOTIFICATION_ID = 0x5bee
 
   /** Per-interface counters need Android 12; before that there is nothing reliable to read. */
@@ -114,6 +117,29 @@ object SpeedMeter {
     } catch (e: Exception) {
       TSLog.w(TAG, "could not start the speed meter now: $e")
     }
+  }
+
+  /**
+   * DEFAULT importance, with no sound or vibration: anything lower is a "silent" notification, and
+   * the status bar (on Pixel by default) leaves silent ones' icons out - the icon is the meter.
+   */
+  fun createChannel(context: Context) {
+    val nm = context.getSystemService(android.app.NotificationManager::class.java)
+    nm.deleteNotificationChannel(OLD_CHANNEL_ID)
+    val channel =
+        android.app
+            .NotificationChannel(
+                CHANNEL_ID,
+                context.getString(R.string.speed_meter_channel),
+                android.app.NotificationManager.IMPORTANCE_DEFAULT)
+            .apply {
+              description = context.getString(R.string.speed_meter_channel_description)
+              setSound(null, null)
+              enableVibration(false)
+              enableLights(false)
+              setShowBadge(false)
+            }
+    nm.createNotificationChannel(channel)
   }
 
   private fun prefs(context: Context) =
@@ -172,13 +198,7 @@ class SpeedMeterService : Service() {
       stopSelf()
       return START_NOT_STICKY
     }
-    App.get()
-        .createNotificationChannel(
-            SpeedMeter.CHANNEL_ID,
-            getString(R.string.speed_meter_channel),
-            getString(R.string.speed_meter_channel_description),
-            // LOW, not MIN: MIN hides the icon from the status bar, which is the whole point.
-            NotificationManagerCompat.IMPORTANCE_LOW)
+    SpeedMeter.createChannel(this)
     ServiceCompat.startForeground(
         this,
         SpeedMeter.NOTIFICATION_ID,
@@ -324,11 +344,10 @@ class SpeedMeterService : Service() {
         .setContentIntent(open)
         .setOngoing(true)
         .setOnlyAlertOnce(true)
-        .setSilent(true)
         .setShowWhen(false)
         .setLocalOnly(true)
         .setCategory(NotificationCompat.CATEGORY_STATUS)
-        .setPriority(NotificationCompat.PRIORITY_LOW)
+        .setPriority(NotificationCompat.PRIORITY_DEFAULT)
         .build()
   }
 

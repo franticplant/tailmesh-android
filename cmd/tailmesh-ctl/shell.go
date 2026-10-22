@@ -17,6 +17,10 @@ import (
 
 // shell drives the remote shell of a development build:
 //
+// By default the phone approves every command, showing it, and exec waits
+// for that; a phone set to approve a whole shell instead needs "shell open"
+// first:
+//
 //	tailmesh-ctl shell open [-minutes 15]     ask; approve on the phone
 //	tailmesh-ctl shell exec 'ls -la' [-timeout 60] [-stdin file]
 //	tailmesh-ctl shell                        one command per line until EOF
@@ -119,6 +123,7 @@ func shellExec(tok, cmd string, timeout int, stdin string) (int, error) {
 		StderrTruncated bool   `json:"stderrTruncated"`
 		Note            string `json:"note"`
 	}
+	fmt.Fprintln(os.Stderr, "[waiting for the phone if it approves each command]")
 	body := map[string]any{"cmd": cmd, "timeoutSeconds": timeout}
 	if stdin != "" {
 		body["stdin"] = stdin
@@ -139,8 +144,9 @@ func shellExec(tok, cmd string, timeout int, stdin string) (int, error) {
 
 func shellRepl(tok string) error {
 	var st struct {
-		ShellAvailable bool            `json:"shellAvailable"`
-		ShellUntil     json.RawMessage `json:"shellUntil"`
+		ShellAvailable   bool            `json:"shellAvailable"`
+		ShellApproveEach bool            `json:"shellApproveEach"`
+		ShellUntil       json.RawMessage `json:"shellUntil"`
 	}
 	if err := get("/v1/status", tok, &st); err != nil {
 		return err
@@ -148,7 +154,9 @@ func shellRepl(tok string) error {
 	if !st.ShellAvailable {
 		return errors.New("this phone offers no shell (development builds, with \"Allow remote shell\" on)")
 	}
-	if string(st.ShellUntil) == "null" || len(st.ShellUntil) == 0 {
+	if st.ShellApproveEach {
+		fmt.Fprintln(os.Stderr, "each command waits for Run on the phone")
+	} else if string(st.ShellUntil) == "null" || len(st.ShellUntil) == 0 {
 		if err := shellOpen(tok, 15); err != nil {
 			return err
 		}
@@ -166,6 +174,9 @@ func shellRepl(tok string) error {
 			continue
 		}
 		if line == "exit" {
+			if st.ShellApproveEach {
+				return nil
+			}
 			return post("/v1/shell/end", tok, struct{}{}, nil)
 		}
 		code, err := shellExec(tok, line, 60, "")

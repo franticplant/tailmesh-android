@@ -123,6 +123,9 @@ type Config struct {
 	ShellDir string `json:"shellDir,omitempty"`
 	// ShellPath is the shell binary; default /system/bin/sh.
 	ShellPath string `json:"shellPath,omitempty"`
+	// ShellApproveEach makes every command need the phone's approval,
+	// instead of approving a shell once for a while.
+	ShellApproveEach bool `json:"shellApproveEach,omitempty"`
 	// ShellMaxMinutes caps one grant; default 30.
 	ShellMaxMinutes int `json:"shellMaxMinutes,omitempty"`
 	// Version is reported by /v1/status.
@@ -877,16 +880,17 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"shellAvailable": s.shellLog != nil,
-		"shellUntil":     shellUntil,
-		"ok":             true,
-		"version":        s.cfg.Version,
-		"startedAt":      s.started,
-		"expiresAt":      expires,
-		"session":        ri.sess,
-		"control":        ri.control,
-		"allowControl":   allow,
-		"methods":        len(s.methods),
+		"shellAvailable":   s.shellLog != nil,
+		"shellApproveEach": s.shellLog != nil && s.cfg.ShellApproveEach,
+		"shellUntil":       shellUntil,
+		"ok":               true,
+		"version":          s.cfg.Version,
+		"startedAt":        s.started,
+		"expiresAt":        expires,
+		"session":          ri.sess,
+		"control":          ri.control,
+		"allowControl":     allow,
+		"methods":          len(s.methods),
 	})
 }
 

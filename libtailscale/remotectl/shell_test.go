@@ -29,6 +29,10 @@ func (e *shellFakeEvents) OnShellEntry(x ShellEntry) {
 func (e *shellFakeEvents) OnShellChanged() {}
 
 func startShell(t *testing.T) (*Server, *shellFakeEvents, string, string) {
+	return startShellMode(t, false)
+}
+
+func startShellMode(t *testing.T, approveEach bool) (*Server, *shellFakeEvents, string, string) {
 	t.Helper()
 	dir := t.TempDir()
 	cfg := Config{
@@ -42,6 +46,7 @@ func startShell(t *testing.T) (*Server, *shellFakeEvents, string, string) {
 		ShellLogPath:          filepath.Join(dir, "shell.log"),
 		ShellDir:              filepath.Join(dir, "home"),
 		ShellPath:             "/bin/sh",
+		ShellApproveEach:      approveEach,
 		Methods:               testMethods,
 	}
 	os.MkdirAll(cfg.ShellDir, 0o700)
@@ -263,5 +268,96 @@ func TestShellDisabledWithoutConfig(t *testing.T) {
 	}
 	if code, _ := do(t, "POST", base+"/v1/shell/exec", tok, map[string]string{"cmd": "true"}); code != http.StatusNotFound {
 		t.Fatalf("exec without Shell = %d, want 404", code)
+	}
+}
+
+func TestShellApproveEachCommand(t *testing.T) {
+	s, ev, base, path := startShellMode(t, true)
+	tok := login(t, base, "correct horse")
+
+	// No shell to open in this mode.
+	if code, _ := do(t, "POST", base+"/v1/shell/request", tok, nil); code != http.StatusConflict {
+		t.Fatalf("shell request in approve-each mode = %d, want 409", code)
+	}
+
+	run := func(cmd string, decide func(ShellRequest)) (int, map[string]any) {
+		done := make(chan struct{})
+		var code int
+		var out map[string]any
+		go func() {
+			code, out = do(t, "POST", base+"/v1/shell/exec", tok, map[string]string{"cmd": cmd})
+			close(done)
+		}()
+		req := <-ev.shellReqs
+		if req.Cmd != cmd {
+			t.Fatalf("phone was asked about %q, want %q", req.Cmd, cmd)
+		}
+		decide(req)
+		<-done
+		return code, out
+	}
+
+	code, out := run("echo approved", func(r ShellRequest) { s.ApproveShell(r.ID) })
+	if code != http.StatusOK || out["stdout"] != "approved\n" {
+		t.Fatalf("approved command: %d %v", code, out)
+	}
+	if len(s.ShellGrants()) != 0 {
+		t.Fatal("a one-command grant outlived its command")
+	}
+
+	code, _ = run("echo denied", func(r ShellRequest) { s.DenyShell(r.ID) })
+	if code != http.StatusForbidden {
+		t.Fatalf("denied command = %d, want 403", code)
+	}
+
+	// The next command needs its own approval: approving one is not a pass.
+	code, _ = run("echo again", func(r ShellRequest) { s.DenyShell(r.ID) })
+	if code != http.StatusForbidden {
+		t.Fatalf("second command ran without approval: %d", code)
+	}
+
+	entries, _ := ReadShellLog(path, 0)
+	var kinds []string
+	for _, e := range entries {
+		kinds = append(kinds, e.Kind)
+	}
+	want := "log-opened request grant exec result request deny request deny"
+	if got := strings.Join(kinds, " "); got != want {
+		t.Fatalf("log = %q, want %q", got, want)
+	}
+	if v := s.VerifyShellLog(); !v.OK {
+		t.Fatalf("log fails verification: %+v", v)
+	}
+}
+
+func TestShellApproveEachEndKillsRunningCommand(t *testing.T) {
+	s, ev, base, _ := startShellMode(t, true)
+	tok := login(t, base, "correct horse")
+	done := make(chan map[string]any, 1)
+	go func() {
+		_, out := do(t, "POST", base+"/v1/shell/exec", tok, map[string]any{"cmd": "sleep 30", "timeoutSeconds": 60})
+		done <- out
+	}()
+	req := <-ev.shellReqs
+	s.ApproveShell(req.ID)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		g := s.ShellGrants()
+		if len(g) == 1 && g[0].Running == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("approved command never started")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	s.EndShell(req.Session)
+	select {
+	case out := <-done:
+		if !strings.Contains(out["note"].(string), "closed") {
+			t.Fatalf("note = %v", out)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("End did not kill the running command")
 	}
 }

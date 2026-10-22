@@ -592,12 +592,18 @@
     <string name="speed_meter_no_network">No network</string>
     <!-- Remote shell (development builds only) -->
     <string name="remote_shell_allow_setting">Allow remote shell</string>
-    <string name="remote_shell_allow_setting_subtitle">Development builds only. A control session may ask to run shell commands as this app. Each shell is approved here, needs the phone unlocked, lasts at most 30 minutes and is logged command by command. Restarts remote control.</string>
+    <string name="remote_shell_allow_setting_subtitle">Development builds only. A control session may ask to run shell commands as this app. Approving needs the phone unlocked, and every command is logged. Restarts remote control.</string>
     <string name="remote_shell_channel">Remote shell</string>
     <string name="remote_shell_channel_description">Requests to open a remote shell, and the open shell itself</string>
     <string name="remote_shell_request_title">%1$s wants a shell</string>
     <string name="remote_shell_request_body">From %1$s. Code %2$s: allow only if it matches what the client shows. A shell can read and change everything this app holds, including tailnet keys.</string>
     <string name="remote_shell_allow">Allow %1$d min</string>
+    <string name="remote_shell_run">Run</string>
+    <string name="remote_shell_command_title">%1$s wants to run a command</string>
+    <string name="remote_shell_command_body">$ %1$s\n\nFrom %2$s. It runs as this app and can read and change everything the app holds.</string>
+    <string name="remote_shell_running_title">Remote command running</string>
+    <string name="remote_shell_approve_each">Approve each command</string>
+    <string name="remote_shell_approve_each_subtitle">On: every command waits for Run on this phone, which shows the command. Off: one approval opens a shell for up to 30 minutes. Restarts remote control.</string>
     <string name="remote_shell_requests">Shell requests</string>
     <string name="remote_shell_open_title">Remote shell open</string>
     <string name="remote_shell_open_text">%1$s, until %2$s</string>
@@ -607,4 +613,29 @@
     <string name="remote_shell_log_failed">FAILED verification: %1$s</string>
     <string name="remote_shell_log_explainer">Each entry includes the hash of the one before, and the newest is held in memory and copied to logcat, so an edited or shortened log shows here.</string>
     <string name="remote_shell_verify">Verify</string>
+    <!-- Log viewer -->
+    <string name="logs">Logs</string>
+    <string name="logs_subtitle">App and engine logs, events, remote access; search, filter and export</string>
+    <string name="logs_tab_app">App &amp; engine</string>
+    <string name="logs_tab_events">Events</string>
+    <string name="logs_tab_access">Remote access</string>
+    <string name="logs_tab_shell">Shell</string>
+    <string name="logs_search">Search</string>
+    <string name="logs_regex">Regex</string>
+    <string name="logs_mode_filter">Only matches</string>
+    <string name="logs_mode_highlight">Highlight</string>
+    <string name="logs_pause">Pause</string>
+    <string name="logs_resume">Resume</string>
+    <string name="logs_paused">paused</string>
+    <string name="logs_count">%1$d of %2$d lines</string>
+    <string name="logs_empty">Nothing logged yet</string>
+    <string name="logs_no_matches">No lines match</string>
+    <string name="logs_new_lines">%1$d new</string>
+    <string name="logs_latest">Latest</string>
+    <string name="logs_share">Share %1$d lines</string>
+    <string name="logs_save">Save %1$d lines to a file</string>
+    <string name="logs_copy_all">Copy %1$d lines</string>
+    <string name="logs_clear_view">Clear view</string>
+    <string name="logs_copied">Copied</string>
+    <string name="logs_open">Open in log viewer</string>
 </resources>

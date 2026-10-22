@@ -6,6 +6,7 @@ package com.tailscale.ipn.ui.view
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -55,7 +56,7 @@ private val autoOffChoices = listOf(15, 60, 240, 1440, 0)
  * itself has no method for any of them (see [com.tailscale.ipn.remote.RemoteMethods]).
  */
 @Composable
-fun RemoteControlView(backToSettings: BackNavigation) {
+fun RemoteControlView(backToSettings: BackNavigation, onOpenLogs: (LogKind) -> Unit = {}) {
   val settings = remember { RemoteControlSettings() }
   val state by RemoteControl.state.collectAsState()
   val pending by RemoteControl.pending.collectAsState()
@@ -76,6 +77,7 @@ fun RemoteControlView(backToSettings: BackNavigation) {
   var allowControl by remember { mutableStateOf(settings.allowControl) }
   var allowUpdates by remember { mutableStateOf(settings.allowRemoteUpdates) }
   var allowShell by remember { mutableStateOf(settings.allowRemoteShell) }
+  var shellApproveEach by remember { mutableStateOf(settings.shellApproveEach) }
   val shellRequests by RemoteShell.requests.collectAsState()
   val shellGrants by RemoteShell.grants.collectAsState()
   var shellLog by remember { mutableStateOf<List<RemoteShell.Entry>>(emptyList()) }
@@ -223,18 +225,46 @@ fun RemoteControlView(backToSettings: BackNavigation) {
             )
           }
 
+      if (BuildConfig.DEV_TOOLS && allowShell)
+          item("shellApproveEach") {
+            ListItem(
+                headlineContent = { Text(stringResource(R.string.remote_shell_approve_each)) },
+                supportingContent = {
+                  Text(stringResource(R.string.remote_shell_approve_each_subtitle))
+                },
+                trailingContent = {
+                  Switch(
+                      checked = shellApproveEach,
+                      onCheckedChange = {
+                        shellApproveEach = it
+                        settings.shellApproveEach = it
+                        if (state.running) RemoteControl.start()
+                      },
+                  )
+                },
+            )
+          }
+
       if (BuildConfig.DEV_TOOLS && shellRequests.isNotEmpty()) {
         item("shellRequestsHeader") {
           Lists.SectionDivider(stringResource(R.string.remote_shell_requests))
         }
         items(shellRequests, key = { "sr-" + it.id }) { r ->
           ListItem(
-              headlineContent = { Text("${r.client} - ${r.code}") },
-              supportingContent = { Text("${r.remote}, ${r.minutes} min") },
+              headlineContent = {
+                Text(if (r.cmd.isNotEmpty()) "$ ${r.cmd}" else "${r.client} - ${r.code}")
+              },
+              supportingContent = {
+                Text(
+                    if (r.cmd.isNotEmpty()) "${r.client}, ${r.remote}"
+                    else "${r.remote}, ${r.minutes} min")
+              },
               trailingContent = {
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                   TextButton(onClick = { RemoteShell.approve(r.id) }) {
-                    Text(stringResource(R.string.remote_shell_allow, r.minutes))
+                    Text(
+                        if (r.cmd.isNotEmpty()) stringResource(R.string.remote_shell_run)
+                        else stringResource(R.string.remote_shell_allow, r.minutes))
                   }
                   TextButton(onClick = { RemoteShell.deny(r.id) }) {
                     Text(stringResource(R.string.remote_control_deny))
@@ -264,6 +294,12 @@ fun RemoteControlView(backToSettings: BackNavigation) {
 
       if (BuildConfig.DEV_TOOLS && (allowShell || shellLog.isNotEmpty())) {
         item("shellLogHeader") { Lists.SectionDivider(stringResource(R.string.remote_shell_log)) }
+        item("shellLogOpen") {
+          ListItem(
+              headlineContent = { Text(stringResource(R.string.logs_open)) },
+              modifier = Modifier.clickable { onOpenLogs(LogKind.SHELL) },
+          )
+        }
         item("shellLogCheck") {
           val c = shellCheck
           ListItem(
@@ -489,6 +525,12 @@ fun RemoteControlView(backToSettings: BackNavigation) {
       }
 
       item("logHeader") { Lists.SectionDivider(stringResource(R.string.remote_control_access_log)) }
+      item("logOpen") {
+        ListItem(
+            headlineContent = { Text(stringResource(R.string.logs_open)) },
+            modifier = Modifier.clickable { onOpenLogs(LogKind.ACCESS) },
+        )
+      }
       item("clearLog") {
         OutlinedButton(
             onClick = {

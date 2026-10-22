@@ -145,3 +145,14 @@ func sortedStrings(s []string) []string {
 	slices.Sort(s)
 	return s
 }
+
+// LogsSince returns up to max buffered lines with Seq > after (the newest
+// ones, when there are more), and the Seq to pass next time. For the app's own
+// log viewer.
+func LogsSince(after uint64, max int) ([]LogLine, uint64) {
+	lines, next, _ := logs.since(after)
+	if max > 0 && len(lines) > max {
+		lines = lines[len(lines)-max:]
+	}
+	return lines, next
+}

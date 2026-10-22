@@ -255,3 +255,16 @@ func RemoteControlVerifyShellLogJSON(path string) string {
 	b, _ := json.Marshal(v)
 	return string(b)
 }
+
+// AppLogsJSON returns {"lines": [...], "next": n}: the app and engine log
+// lines buffered after sequence number after, at most limit of them. The app's
+// log viewer polls it; CaptureRemoteLogsFromStart must have been called for
+// anything to be buffered while remote control is off.
+func AppLogsJSON(after int64, limit int32) string {
+	lines, next := remotectl.LogsSince(uint64(max(after, 0)), int(limit))
+	if lines == nil {
+		lines = []remotectl.LogLine{}
+	}
+	b, _ := json.Marshal(map[string]any{"lines": lines, "next": next})
+	return string(b)
+}

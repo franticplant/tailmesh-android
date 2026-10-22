@@ -28,8 +28,10 @@ import (
 // A shell is far more than the method catalog, so it is gated more tightly
 // than a control session:
 //
-//   - Each shell grant is approved on the phone, every time, for a session
-//     that is already a control session. A password alone never opens one.
+//   - By default (Config.ShellApproveEach) every command is approved on the
+//     phone, which shows the command itself. Otherwise a shell is approved
+//     once and stays open for a while. Either way the session must already
+//     be a control session; a password alone never runs anything.
 //   - A grant lasts at most ShellMaxMinutes and ends early when the session
 //     ends, the server stops or the user taps End on the phone; running
 //     commands are killed with it.
@@ -47,13 +49,17 @@ import (
 
 // ShellRequest is a session asking to open a shell, awaiting the user.
 type ShellRequest struct {
-	ID      string    `json:"id"`
-	Session string    `json:"session"`
-	Client  string    `json:"client"`
-	Remote  string    `json:"remote"`
-	Code    string    `json:"code"`
-	Minutes int       `json:"minutes"`
-	Time    time.Time `json:"time"`
+	ID      string `json:"id"`
+	Session string `json:"session"`
+	Client  string `json:"client"`
+	Remote  string `json:"remote"`
+	Code    string `json:"code"`
+	Minutes int    `json:"minutes,omitempty"`
+	// Cmd is set when this asks to run one command (Config.ShellApproveEach),
+	// not to open a shell.
+	Cmd            string    `json:"cmd,omitempty"`
+	TimeoutSeconds int       `json:"timeoutSeconds,omitempty"`
+	Time           time.Time `json:"time"`
 }
 
 // ShellGrant is an open shell.
@@ -63,6 +69,8 @@ type ShellGrant struct {
 	Remote  string    `json:"remote"`
 	Until   time.Time `json:"until"`
 	Running int       `json:"running"`
+	// Cmd is set for a grant that runs one approved command.
+	Cmd string `json:"cmd,omitempty"`
 }
 
 // ShellEntry is one line of the shell log.
@@ -118,9 +126,11 @@ type shellPending struct {
 	approved  bool
 	expired   bool
 	until     time.Time
+	grant     *shellGrant // the one-command grant, once approved
 }
 
 type shellGrant struct {
+	key     string // its key in shellState.grants
 	info    ShellGrant
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -130,7 +140,9 @@ type shellGrant struct {
 // shellState is the Server's shell bookkeeping, guarded by Server.mu.
 type shellState struct {
 	pending map[string]*shellPending
-	grants  map[string]*shellGrant // by session ID
+	// grants is keyed by session ID for an open shell, and by "cmd-" and the
+	// request ID for one approved command.
+	grants map[string]*shellGrant
 }
 
 // ---------------------------------------------------------------------------
@@ -349,19 +361,36 @@ func (s *Server) decideShell(id string, approve bool) error {
 			close(p.decided)
 			return errors.New("remotectl: that session has ended")
 		}
-		until := time.Now().Add(time.Duration(p.req.Minutes) * time.Minute)
-		if old := s.shell.grants[p.req.Session]; old != nil {
-			old.cancel()
+		if p.req.Cmd != "" {
+			// One command: the grant lasts as long as the command may run,
+			// and handleShellExec removes it when the command ends.
+			until := time.Now().Add(time.Duration(p.req.TimeoutSeconds)*time.Second + 5*time.Second)
+			ctx, cancel := context.WithDeadline(context.Background(), until)
+			g := &shellGrant{
+				key:    "cmd-" + p.req.ID,
+				info:   ShellGrant{Session: p.req.Session, Client: p.req.Client, Remote: p.req.Remote, Until: until, Cmd: p.req.Cmd},
+				ctx:    ctx,
+				cancel: cancel,
+			}
+			s.shell.grants[g.key] = g
+			p.grant = g
+			p.until = until
+		} else {
+			until := time.Now().Add(time.Duration(p.req.Minutes) * time.Minute)
+			if old := s.shell.grants[p.req.Session]; old != nil {
+				old.cancel()
+			}
+			ctx, cancel := context.WithDeadline(context.Background(), until)
+			g := &shellGrant{
+				key:    p.req.Session,
+				info:   ShellGrant{Session: p.req.Session, Client: p.req.Client, Remote: p.req.Remote, Until: until},
+				ctx:    ctx,
+				cancel: cancel,
+			}
+			s.shell.grants[g.key] = g
+			p.until = until
+			time.AfterFunc(time.Until(until), func() { s.endShellGrant(g.key, g, "time is up") })
 		}
-		ctx, cancel := context.WithDeadline(context.Background(), until)
-		g := &shellGrant{
-			info:   ShellGrant{Session: p.req.Session, Client: p.req.Client, Remote: p.req.Remote, Until: until},
-			ctx:    ctx,
-			cancel: cancel,
-		}
-		s.shell.grants[p.req.Session] = g
-		p.until = until
-		time.AfterFunc(time.Until(until), func() { s.endShellGrant(p.req.Session, g, "time is up") })
 	}
 	s.mu.Unlock()
 	close(p.decided)
@@ -370,8 +399,12 @@ func (s *Server) decideShell(id string, approve bool) error {
 	if approve {
 		kind = "grant"
 	}
+	note := fmt.Sprintf("%d minutes", p.req.Minutes)
+	if p.req.Cmd != "" {
+		note = "one command"
+	}
 	s.shellLogEntry(ShellEntry{Kind: kind, Session: p.req.Session, Client: p.req.Client, Remote: p.req.Remote,
-		Note: fmt.Sprintf("%d minutes", p.req.Minutes)})
+		Cmd: p.req.Cmd, Note: note})
 	s.logAccess(AccessEntry{Remote: p.req.Remote, Client: p.req.Client, Session: p.req.Session,
 		Action: "shell." + kind, Status: http.StatusOK})
 	if se := s.shellEvents(); approve && se != nil {
@@ -389,25 +422,38 @@ func (s *Server) sessionExistsLocked(id string) bool {
 	return false
 }
 
-// EndShell closes a session's shell, killing anything it is running.
+// EndShell closes a session's shell and any command of it still running.
 func (s *Server) EndShell(sessionID string) { s.endShell(sessionID, "ended on the phone") }
 
-func (s *Server) endShell(sessionID, why string) { s.endShellGrant(sessionID, nil, why) }
-
-// endShellGrant ends the session's grant; if only is set, only when that is
-// still the grant (an old timer must not end a newer one).
-func (s *Server) endShellGrant(sessionID string, only *shellGrant, why string) {
+// endShell ends every grant of the session.
+func (s *Server) endShell(sessionID, why string) {
 	s.mu.Lock()
-	g := s.shell.grants[sessionID]
+	var keys []string
+	for k, g := range s.shell.grants {
+		if g.info.Session == sessionID {
+			keys = append(keys, k)
+		}
+	}
+	s.mu.Unlock()
+	for _, k := range keys {
+		s.endShellGrant(k, nil, why)
+	}
+}
+
+// endShellGrant ends the grant under key; if only is set, only when that is
+// still the grant (an old timer must not end a newer one).
+func (s *Server) endShellGrant(key string, only *shellGrant, why string) {
+	s.mu.Lock()
+	g := s.shell.grants[key]
 	if g == nil || (only != nil && g != only) {
 		s.mu.Unlock()
 		return
 	}
-	delete(s.shell.grants, sessionID)
+	delete(s.shell.grants, key)
 	s.mu.Unlock()
 	g.cancel()
-	s.shellLogEntry(ShellEntry{Kind: "end", Session: sessionID, Client: g.info.Client, Remote: g.info.Remote, Note: why})
-	s.logAccess(AccessEntry{Remote: g.info.Remote, Client: g.info.Client, Session: sessionID, Action: "shell.end", Status: http.StatusOK, Error: why})
+	s.shellLogEntry(ShellEntry{Kind: "end", Session: g.info.Session, Client: g.info.Client, Remote: g.info.Remote, Cmd: g.info.Cmd, Note: why})
+	s.logAccess(AccessEntry{Remote: g.info.Remote, Client: g.info.Client, Session: g.info.Session, Action: "shell.end", Status: http.StatusOK, Error: why})
 	if se := s.shellEvents(); se != nil {
 		se.OnShellChanged()
 	}
@@ -418,26 +464,26 @@ func (s *Server) endShellGrant(sessionID string, only *shellGrant, why string) {
 func (s *Server) endShellsWithoutSession() {
 	s.mu.Lock()
 	var gone []string
-	for id := range s.shell.grants {
-		if !s.sessionExistsLocked(id) {
-			gone = append(gone, id)
+	for k, g := range s.shell.grants {
+		if !s.sessionExistsLocked(g.info.Session) {
+			gone = append(gone, k)
 		}
 	}
 	s.mu.Unlock()
-	for _, id := range gone {
-		s.endShell(id, "session ended")
+	for _, k := range gone {
+		s.endShellGrant(k, nil, "session ended")
 	}
 }
 
 func (s *Server) endAllShells(why string) {
 	s.mu.Lock()
-	ids := make([]string, 0, len(s.shell.grants))
-	for id := range s.shell.grants {
-		ids = append(ids, id)
+	keys := make([]string, 0, len(s.shell.grants))
+	for k := range s.shell.grants {
+		keys = append(keys, k)
 	}
 	s.mu.Unlock()
-	for _, id := range ids {
-		s.endShell(id, why)
+	for _, k := range keys {
+		s.endShellGrant(k, nil, why)
 	}
 }
 
@@ -502,6 +548,11 @@ func (s *Server) handleShellRequest(w http.ResponseWriter, r *http.Request) {
 	ri := info(r)
 	ri.action = "shell.request"
 	if !s.shellEnabled(w, ri) {
+		return
+	}
+	if s.cfg.ShellApproveEach {
+		ri.err = "approve-each mode"
+		writeError(w, http.StatusConflict, "this phone approves each command: POST /v1/shell/exec directly and approve it there")
 		return
 	}
 	var body struct {
@@ -669,8 +720,17 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 		timeout = min(time.Duration(body.TimeoutSeconds)*time.Second, maxShellTimeout)
 	}
 
+	var g *shellGrant
+	if s.cfg.ShellApproveEach {
+		if g = s.awaitCommandApproval(w, r, ri, body.Cmd, timeout); g == nil {
+			return // refused, expired or abandoned; already answered
+		}
+		defer s.finishCommandGrant(g)
+	}
 	s.mu.Lock()
-	g := s.shell.grants[ri.sess.ID]
+	if g == nil {
+		g = s.shell.grants[ri.sess.ID]
+	}
 	if g != nil && g.ctx.Err() == nil {
 		g.running++
 	}
@@ -766,4 +826,92 @@ func (s *Server) expireShellPendingLocked(now time.Time) {
 			}
 		}
 	}
+}
+
+// awaitCommandApproval asks the phone to approve one command and waits for
+// the answer. It returns the command's grant, or nil after answering the
+// client with why not.
+func (s *Server) awaitCommandApproval(w http.ResponseWriter, r *http.Request, ri *reqInfo, cmd string, timeout time.Duration) *shellGrant {
+	s.mu.Lock()
+	n := 0
+	for _, p := range s.shell.pending {
+		if !p.isDecided {
+			n++
+		}
+	}
+	if n >= maxShellPending {
+		s.mu.Unlock()
+		ri.err = "too many pending"
+		writeError(w, http.StatusTooManyRequests, "a command is already waiting for approval on the phone")
+		return nil
+	}
+	req := ShellRequest{
+		ID:             randomHex(8),
+		Session:        ri.sess.ID,
+		Client:         ri.sess.Client,
+		Remote:         r.RemoteAddr,
+		Code:           randomCode(),
+		Cmd:            cmd,
+		TimeoutSeconds: int(timeout.Seconds()),
+		Time:           time.Now(),
+	}
+	p := &shellPending{req: req, expires: time.Now().Add(approvalLifetime), decided: make(chan struct{})}
+	s.shell.pending[req.ID] = p
+	s.mu.Unlock()
+
+	if _, err := s.shellLogEntry(ShellEntry{Kind: "request", Session: req.Session, Client: req.Client, Remote: req.Remote,
+		Cmd: cmd, Note: "code " + req.Code}); err != nil {
+		s.dropPending(req.ID)
+		ri.err = "shell log failed"
+		writeError(w, http.StatusInternalServerError, "the shell log could not be written, so the command was not offered: "+err.Error())
+		return nil
+	}
+	s.shellEvents().OnShellRequest(req)
+
+	select {
+	case <-p.decided:
+	case <-r.Context().Done():
+		// The client gave up; the phone's prompt goes stale and approving it
+		// later finds nothing.
+		s.dropPending(req.ID)
+		return nil
+	}
+	s.mu.Lock()
+	delete(s.shell.pending, req.ID)
+	approved, expired, g := p.approved, p.expired, p.grant
+	s.mu.Unlock()
+	switch {
+	case expired:
+		ri.err = "approval expired"
+		writeError(w, http.StatusForbidden, "nobody approved the command on the phone in time")
+	case !approved || g == nil:
+		ri.err = "denied"
+		writeError(w, http.StatusForbidden, "the command was denied on the phone")
+	default:
+		return g
+	}
+	return nil
+}
+
+// finishCommandGrant removes a one-command grant once its command is done.
+func (s *Server) finishCommandGrant(g *shellGrant) {
+	s.mu.Lock()
+	if s.shell.grants[g.key] == g {
+		delete(s.shell.grants, g.key)
+	}
+	s.mu.Unlock()
+	g.cancel()
+	if se := s.shellEvents(); se != nil {
+		se.OnShellChanged()
+	}
+}
+
+func (s *Server) dropPending(id string) {
+	s.mu.Lock()
+	if p := s.shell.pending[id]; p != nil && !p.isDecided {
+		p.isDecided, p.expired = true, true
+		close(p.decided)
+	}
+	delete(s.shell.pending, id)
+	s.mu.Unlock()
 }

@@ -44,10 +44,18 @@ object RemoteShell {
       val client: String,
       val remote: String,
       val code: String,
-      val minutes: Int
+      val minutes: Int,
+      /** Set when this asks to run one command rather than open a shell. */
+      val cmd: String,
   )
 
-  data class Grant(val session: String, val client: String, val remote: String, val until: String)
+  data class Grant(
+      val session: String,
+      val client: String,
+      val remote: String,
+      val until: String,
+      val cmd: String,
+  )
 
   data class Entry(
       val seq: Long,
@@ -88,6 +96,7 @@ object RemoteShell {
         .put("shellLogPath", logFile().absolutePath)
         .put("shellDir", homeDir().absolutePath)
         .put("shellMaxMinutes", 30)
+        .put("shellApproveEach", RemoteControlSettings().shellApproveEach)
   }
 
   fun onRequest(json: String) {
@@ -100,6 +109,7 @@ object RemoteShell {
             remote = o.optString("remote"),
             code = o.optString("code"),
             minutes = o.optInt("minutes"),
+            cmd = o.optString("cmd"),
         )
     _requests.value = _requests.value + r
     showRequest(r)
@@ -184,6 +194,7 @@ object RemoteShell {
               client = o.optString("client"),
               remote = o.optString("remote"),
               until = o.optString("until"),
+              cmd = o.optString("cmd"),
           )
         }
   }
@@ -264,10 +275,12 @@ object RemoteShell {
     createChannel()
     val app = App.get()
     val nid = requestNotificationId(r.id)
+    val oneCommand = r.cmd.isNotEmpty()
     val allow =
         NotificationCompat.Action.Builder(
                 0,
-                app.getString(R.string.remote_shell_allow, r.minutes),
+                if (oneCommand) app.getString(R.string.remote_shell_run)
+                else app.getString(R.string.remote_shell_allow, r.minutes),
                 action(RemoteControlReceiver.ACTION_SHELL_ALLOW, r.id, nid * 4 + 1))
             // A shell is the whole app: never from the lock screen.
             .setAuthenticationRequired(true)
@@ -275,10 +288,18 @@ object RemoteShell {
     val n =
         NotificationCompat.Builder(app, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(app.getString(R.string.remote_shell_request_title, r.client))
+            .setContentTitle(
+                app.getString(
+                    if (oneCommand) R.string.remote_shell_command_title
+                    else R.string.remote_shell_request_title,
+                    r.client))
+            .setContentText(if (oneCommand) "$ ${r.cmd}" else null)
             .setStyle(
                 NotificationCompat.BigTextStyle()
-                    .bigText(app.getString(R.string.remote_shell_request_body, r.remote, r.code)))
+                    .bigText(
+                        if (oneCommand)
+                            app.getString(R.string.remote_shell_command_body, r.cmd, r.remote)
+                        else app.getString(R.string.remote_shell_request_body, r.remote, r.code)))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
@@ -304,11 +325,17 @@ object RemoteShell {
     val app = App.get()
     val who = g.joinToString(", ") { "${it.client} (${it.remote.substringBeforeLast(':')})" }
     val until = g.maxOf { it.until }
+    val running = g.firstOrNull { it.cmd.isNotEmpty() }?.cmd
     val n =
         NotificationCompat.Builder(app, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(app.getString(R.string.remote_shell_open_title))
-            .setContentText(app.getString(R.string.remote_shell_open_text, who, shortTime(until)))
+            .setContentTitle(
+                app.getString(
+                    if (running != null) R.string.remote_shell_running_title
+                    else R.string.remote_shell_open_title))
+            .setContentText(
+                if (running != null) "$ $running"
+                else app.getString(R.string.remote_shell_open_text, who, shortTime(until)))
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)

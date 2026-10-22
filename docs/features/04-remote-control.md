@@ -71,10 +71,12 @@ storage), so it can read and change everything the app holds, tailnet keys inclu
 
 It is gated more tightly than a control session:
 
-- **Approved on the phone, every time.** A control session asks (`tailmesh-ctl shell open`); the
-  phone shows who is asking and a code, and **Allow** works only with the phone unlocked. A password
-  alone never opens a shell.
-- **Limited in time.** At most 30 minutes (15 by default). A shell also ends when its session ends,
+- **Approved on the phone.** By default (**Approve each command**) every command waits for **Run**
+  on the phone, which shows the command itself; approving one lets nothing else through. With that
+  switch off, one approval opens a shell instead (`tailmesh-ctl shell open`; the phone shows who is
+  asking and a code). Either way approving works only with the phone unlocked, and a password alone
+  never runs anything.
+- **Limited in time.** An opened shell lasts at most 30 minutes (15 by default). A shell also ends when its session ends,
   when control is switched off, when remote control stops, or when **End** is tapped in the ongoing
   notification or on the Remote control screen. Ending it kills what it is running.
 - **One command at a time.** `POST /v1/shell/exec {"cmd", "timeoutSeconds", "stdin"}` runs one
@@ -94,8 +96,8 @@ logcat copy shows what the real entries were. After the app restarts only the ch
 checked, and its break, if any, is recorded as the first new entry.
 
 ```sh
-tailmesh-ctl shell open -minutes 10     # then Allow on the phone
-tailmesh-ctl shell exec 'ls -la files'
+tailmesh-ctl shell exec 'ls -la files'   # then Run on the phone (approve-each mode)
+tailmesh-ctl shell open -minutes 10     # approve-a-shell mode: Allow on the phone first
 tailmesh-ctl shell exec -stdin conf.json 'cat > shell-home/conf.json'
 tailmesh-ctl shell                      # one command per line; "exit" ends the shell
 tailmesh-ctl shell log                  # entries and the verification result
