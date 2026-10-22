@@ -582,3 +582,15 @@ func TestCaptureLogsFromStart(t *testing.T) {
 		t.Fatal("stopping a server turned capture off")
 	}
 }
+
+func TestAppLinesAreNotDuplicatedByGo(t *testing.T) {
+	r := &logRing{nextSeq: 1, wake: make(chan struct{})}
+	r.enable()
+	r.add("app", "IPNService: MultiProxy peer: a -> fd7a::1")
+	r.add("go", "2026/10/22 18:00:00 IPNService: MultiProxy peer: a -> fd7a::1")
+	r.add("go", "magicsock: derp-3 connected")
+	lines, _, _ := r.since(0)
+	if len(lines) != 2 || lines[1].Text != "magicsock: derp-3 connected" {
+		t.Fatalf("lines = %+v", lines)
+	}
+}

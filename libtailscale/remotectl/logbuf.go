@@ -62,6 +62,10 @@ func (r *logRing) add(source, text string) {
 		return
 	}
 	r.mu.Lock()
+	if source == "go" && r.echoesAppLocked(text) {
+		r.mu.Unlock()
+		return
+	}
 	r.lines = append(r.lines, LogLine{Seq: r.nextSeq, Time: time.Now(), Source: source, Text: text})
 	r.nextSeq++
 	if len(r.lines) > logRingSize {
@@ -70,6 +74,22 @@ func (r *logRing) add(source, text string) {
 	close(r.wake)
 	r.wake = make(chan struct{})
 	r.mu.Unlock()
+}
+
+// appEchoWindow is how far back a "go" line is compared with "app" lines.
+const appEchoWindow = 64
+
+// echoesAppLocked reports whether a "go" line is a recent "app" line coming
+// back: the app's logging also goes to Go's logger (Libtailscale.sendLog),
+// which writes it again, with its own prefix, through TeeLogs. Without this
+// every app line was in /v1/logs twice.
+func (r *logRing) echoesAppLocked(text string) bool {
+	for i := len(r.lines) - 1; i >= 0 && i >= len(r.lines)-appEchoWindow; i-- {
+		if l := r.lines[i]; l.Source == "app" && strings.HasSuffix(text, l.Text) {
+			return true
+		}
+	}
+	return false
 }
 
 // since returns the buffered lines with Seq > after, the sequence number to

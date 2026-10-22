@@ -291,6 +291,7 @@ open class IPNService : VpnService(), libtailscale.IPNService {
 
     if (session.engine == null) {
       val dataDir = app.filesDir.absolutePath
+      val loggedPeers = java.util.concurrent.ConcurrentHashMap<String, String>()
       session.engine =
           Libtailscale.newMultiProxyEngineForApp(
               dataDir,
@@ -302,7 +303,14 @@ open class IPNService : VpnService(), libtailscale.IPNService {
                     syntheticIPv6: String?,
                     tailnetID: String?
                 ) {
-                  TSLog.d(TAG, "MultiProxy peer: $hostname -> $syntheticIPv6 (Tailnet: $tailnetID)")
+                  // Every netmap update reports every peer again; log only new or changed
+                  // mappings, or these lines push everything useful out of the log buffer.
+                  val key = "$tailnetID/$hostname"
+                  if (loggedPeers.put(key, "$syntheticIPv4 $syntheticIPv6") !=
+                      "$syntheticIPv4 $syntheticIPv6") {
+                    TSLog.d(
+                        TAG, "MultiProxy peer: $hostname -> $syntheticIPv6 (Tailnet: $tailnetID)")
+                  }
                 }
 
                 override fun onTailnetStateChange(tailnetID: String?, state: String?) {
