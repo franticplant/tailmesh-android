@@ -712,6 +712,17 @@ object MultiProxySessionCoordinator {
     error("Timed out waiting for MULTIPROXY engine startup")
   }
 
+  /** Each tailnet's state straight from [engine], normalised as [runtimeStates] has it. */
+  fun liveRuntimeStates(engine: libtailscale.MultiProxyEngine): Map<String, String>? =
+      try {
+        json
+            .decodeFromString<List<TailnetRuntimeSnapshot>>(engine.getTailnetStatesJSON())
+            .associate { it.tailnetId to normalizeRuntimeState(it.state) }
+      } catch (e: Exception) {
+        TSLog.e("MultiProxySession", "Failed to decode runtime state: ${e.message}")
+        null
+      }
+
   private suspend fun refreshRuntimeState(session: MultiProxySession) {
     val engine = session.engine
     if (engine == null) {

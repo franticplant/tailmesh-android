@@ -333,6 +333,7 @@ func NewEngineWithStateStore(dataDir string, cb EngineCallback, stateStoreFor fu
 		earlyUID:  newEarlyUIDCache(),
 	}
 	e.obs = newObservability(e)
+	e.upstreams.direct.resolve = e.resolveDirect
 
 	// Tailnets are dialable upstreams too, but their lifecycle belongs to the
 	// tailnet machinery rather than the registry, so they plug in as a source

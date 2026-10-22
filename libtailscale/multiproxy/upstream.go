@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/netip"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -119,6 +120,9 @@ const DirectUpstreamID UpstreamID = "@direct"
 // finishes wiring up the real one.
 type directProvider struct {
 	protectedDial atomic.Pointer[UpstreamDialer]
+	// resolve looks hostnames up (Engine.resolveDirect); nil leaves it to
+	// the dialer.
+	resolve func(context.Context, string) ([]netip.Addr, error)
 }
 
 func (p *directProvider) ID() UpstreamID     { return DirectUpstreamID }
@@ -127,11 +131,11 @@ func (p *directProvider) Ready() bool        { return true }
 func (p *directProvider) Close() error       { return nil }
 
 func (p *directProvider) Dial(ctx context.Context, network, address string) (net.Conn, error) {
+	dial := UpstreamDialer((&net.Dialer{}).DialContext)
 	if d := p.protectedDial.Load(); d != nil {
-		return (*d)(ctx, network, address)
+		dial = *d
 	}
-	var dialer net.Dialer
-	return dialer.DialContext(ctx, network, address)
+	return dialResolved(ctx, dial, p.resolve, network, address)
 }
 
 func (p *directProvider) PeerPathInfo(context.Context, string) string { return "direct-bypass" }

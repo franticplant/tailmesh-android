@@ -367,6 +367,10 @@ open class IPNService : VpnService(), libtailscale.IPNService {
                 }
               })
     }
+    // Keeps the tailnet states (notification, Diagnostics, provisioning, the stop path below)
+    // current. It used to start only when the Multi-Tailnet screen was opened, so after a restart
+    // in the background - an update, a reboot, always-on - every tailnet read as not loaded.
+    MultiProxySessionCoordinator.bind(session)
 
     // In Proxy-Only mode the engine runs tailnets, upstreams and listeners without taking over
     // device traffic, so there is no VPN interface to build (and no VPN permission needed).
@@ -402,7 +406,11 @@ open class IPNService : VpnService(), libtailscale.IPNService {
     val session = app.multiProxySession
     var restoredAllProfiles = true
 
-    val runtimeStates = MultiProxySessionCoordinator.runtimeStates.value
+    // Asked of the engine itself: the polled copy can be empty or a second old, and a tailnet
+    // wrongly taken for never-authenticated is not given back to standard mode below.
+    val runtimeStates =
+        session.engine?.let { MultiProxySessionCoordinator.liveRuntimeStates(it) }
+            ?: MultiProxySessionCoordinator.runtimeStates.value
     session.engine?.stopVPN()
     session.engine?.close()
     session.engine = null
