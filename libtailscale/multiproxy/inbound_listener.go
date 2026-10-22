@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"tailscale.com/tsnet"
 )
@@ -91,6 +93,30 @@ type inboundListener struct {
 	// rationale (and the same leak) as socks5Listener.
 	connsMu sync.Mutex
 	conns   map[net.Conn]struct{}
+
+	stats *inboundStats
+}
+
+// inboundStats counts one listener's forwards. It is carried over when the
+// listener is re-added under the same id, which every reconciliation does, so
+// the numbers cover the listener's life rather than the last settings change.
+type inboundStats struct {
+	accepted  atomic.Int64
+	failed    atomic.Int64
+	active    atomic.Int64
+	bytesIn   atomic.Int64 // tailnet peer -> local target
+	bytesOut  atomic.Int64 // local target -> tailnet peer
+	errMu     sync.Mutex
+	lastErr   string
+	lastErrAt time.Time
+}
+
+func (s *inboundStats) fail(err error) {
+	s.failed.Add(1)
+	s.errMu.Lock()
+	s.lastErr = err.Error()
+	s.lastErrAt = time.Now()
+	s.errMu.Unlock()
 }
 
 // inboundAcceptorFor resolves the acceptor for an upstream. Only enabled
@@ -137,6 +163,10 @@ func (e *Engine) AddInboundListener(cfg InboundListenerConfig) error {
 	// Re-adding on the same tailnet port (every reconciliation does) must
 	// free it first, or Listen fails and the old listener silently stays.
 	e.mu.Lock()
+	var stats *inboundStats
+	if old := e.inboundListeners[cfg.ID]; old != nil {
+		stats = old.stats
+	}
 	if old := e.inboundListeners[cfg.ID]; old != nil && old.cfg.Upstream == cfg.Upstream && old.cfg.ListenPort == cfg.ListenPort {
 		delete(e.inboundListeners, cfg.ID)
 		e.mu.Unlock()
@@ -151,6 +181,9 @@ func (e *Engine) AddInboundListener(cfg InboundListenerConfig) error {
 	cfg.Network = network
 
 	l := newInboundListener(cfg, ln, net.Dial)
+	if stats != nil {
+		l.stats = stats
+	}
 
 	e.mu.Lock()
 	if e.inboundListeners == nil {
@@ -201,6 +234,14 @@ type inboundListenerInfo struct {
 	LocalTarget   string `json:"localTarget"`
 	ProxyProtocol bool   `json:"proxyProtocol"`
 	Network       string `json:"network"`
+
+	Accepted    int64  `json:"accepted"`
+	Failed      int64  `json:"failed"`
+	Active      int64  `json:"active"`
+	BytesIn     int64  `json:"bytesIn"`
+	BytesOut    int64  `json:"bytesOut"`
+	LastError   string `json:"lastError,omitempty"`
+	LastErrorAt int64  `json:"lastErrorAt,omitempty"` // Unix milliseconds
 }
 
 // GetInboundListenersJSON lists every configured listener, ordered by id, as
@@ -214,7 +255,18 @@ func (e *Engine) GetInboundListenersJSON() string {
 	sort.Strings(ids)
 	out := make([]inboundListenerInfo, 0, len(ids))
 	for _, id := range ids {
-		cfg := e.inboundListeners[id].cfg
+		l := e.inboundListeners[id]
+		cfg, st := l.cfg, l.stats
+		if st == nil {
+			st = &inboundStats{}
+		}
+		st.errMu.Lock()
+		lastErr, lastErrAt := st.lastErr, st.lastErrAt
+		st.errMu.Unlock()
+		var lastErrMs int64
+		if !lastErrAt.IsZero() {
+			lastErrMs = lastErrAt.UnixMilli()
+		}
 		out = append(out, inboundListenerInfo{
 			ID:            cfg.ID,
 			Upstream:      string(cfg.Upstream),
@@ -222,6 +274,13 @@ func (e *Engine) GetInboundListenersJSON() string {
 			LocalTarget:   cfg.LocalTarget,
 			ProxyProtocol: cfg.ProxyProtocol,
 			Network:       cfg.Network,
+			Accepted:      st.accepted.Load(),
+			Failed:        st.failed.Load(),
+			Active:        st.active.Load(),
+			BytesIn:       st.bytesIn.Load(),
+			BytesOut:      st.bytesOut.Load(),
+			LastError:     lastErr,
+			LastErrorAt:   lastErrMs,
 		})
 	}
 	e.mu.RUnlock()
@@ -242,6 +301,7 @@ func newInboundListener(cfg InboundListenerConfig, ln net.Listener, dial func(ne
 		dial:   dial,
 		doneCh: make(chan struct{}),
 		conns:  make(map[net.Conn]struct{}),
+		stats:  &inboundStats{},
 	}
 }
 
@@ -282,10 +342,14 @@ func (l *inboundListener) handleConn(conn net.Conn) {
 	l.trackConn(conn, true)
 	defer l.trackConn(conn, false)
 	defer conn.Close()
+	l.stats.accepted.Add(1)
+	l.stats.active.Add(1)
+	defer l.stats.active.Add(-1)
 
 	target, err := l.dial("tcp", l.cfg.LocalTarget)
 	if err != nil {
 		log.Printf("[inbound-%s] forward %s -> %s failed: %v", l.cfg.ID, conn.RemoteAddr(), l.cfg.LocalTarget, err)
+		l.stats.fail(fmt.Errorf("forward from %s: %w", conn.RemoteAddr(), err))
 		return
 	}
 	defer target.Close()
@@ -294,6 +358,7 @@ func (l *inboundListener) handleConn(conn net.Conn) {
 		hdr, err := proxyV2Header(conn.RemoteAddr(), conn.LocalAddr())
 		if err != nil {
 			log.Printf("[inbound-%s] proxy-protocol header: %v", l.cfg.ID, err)
+			l.stats.fail(fmt.Errorf("proxy-protocol header: %w", err))
 			return
 		}
 		if _, err := target.Write(hdr); err != nil {
@@ -306,8 +371,8 @@ func (l *inboundListener) handleConn(conn net.Conn) {
 	// handleConnect: a half-closed peer that keeps the other direction idle
 	// open must not outlive the listener's own accounting of the connection.
 	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(target, conn); done <- struct{}{} }()
-	go func() { _, _ = io.Copy(conn, target); done <- struct{}{} }()
+	go func() { n, _ := io.Copy(target, conn); l.stats.bytesIn.Add(n); done <- struct{}{} }()
+	go func() { n, _ := io.Copy(conn, target); l.stats.bytesOut.Add(n); done <- struct{}{} }()
 	<-done
 }
 

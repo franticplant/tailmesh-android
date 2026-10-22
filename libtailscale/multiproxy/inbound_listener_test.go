@@ -272,9 +272,76 @@ func TestGetInboundListenersJSON(t *testing.T) {
 		"a": {cfg: InboundListenerConfig{ID: "a", Upstream: "tailnetA", ListenPort: 80, LocalTarget: "127.0.0.1:8080", ProxyProtocol: true, Network: "tcp"}},
 	}
 	got := e.GetInboundListenersJSON()
-	want := `[{"id":"a","upstream":"tailnetA","listenPort":80,"localTarget":"127.0.0.1:8080","proxyProtocol":true,"network":"tcp"},` +
-		`{"id":"b","upstream":"tailnetB","listenPort":22,"localTarget":"127.0.0.1:22","proxyProtocol":false,"network":"tcp"}]`
+	want := `[{"id":"a","upstream":"tailnetA","listenPort":80,"localTarget":"127.0.0.1:8080","proxyProtocol":true,"network":"tcp",` +
+		`"accepted":0,"failed":0,"active":0,"bytesIn":0,"bytesOut":0},` +
+		`{"id":"b","upstream":"tailnetB","listenPort":22,"localTarget":"127.0.0.1:22","proxyProtocol":false,"network":"tcp",` +
+		`"accepted":0,"failed":0,"active":0,"bytesIn":0,"bytesOut":0}]`
 	if got != want {
 		t.Fatalf("GetInboundListenersJSON =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestInboundListenerCountsForwards checks the per-listener counters remote
+// control reports: a relayed connection counts as accepted with its bytes, and
+// a refused local target counts as failed with the reason kept.
+func TestInboundListenerCountsForwards(t *testing.T) {
+	echo := newTCPEchoServer(t)
+	ln := newFakeAcceptorListener(t)
+	l := newInboundListener(InboundListenerConfig{ID: "l1", LocalTarget: echo.String()}, ln, net.Dial)
+	go l.serve()
+	t.Cleanup(l.close)
+
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	c.Write([]byte("12345"))
+	c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(c, make([]byte, 5)); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	c.Close()
+
+	waitFor(t, func() bool { return l.stats.active.Load() == 0 && l.stats.bytesOut.Load() == 5 })
+	if got := l.stats.accepted.Load(); got != 1 {
+		t.Errorf("accepted = %d, want 1", got)
+	}
+	if got := l.stats.bytesIn.Load(); got != 5 {
+		t.Errorf("bytesIn = %d, want 5", got)
+	}
+
+	// A target nothing listens on.
+	dead, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadAddr := dead.Addr().String()
+	dead.Close()
+	ln2 := newFakeAcceptorListener(t)
+	l2 := newInboundListener(InboundListenerConfig{ID: "l2", LocalTarget: deadAddr}, ln2, net.Dial)
+	go l2.serve()
+	t.Cleanup(l2.close)
+	c2, err := net.Dial("tcp", ln2.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer c2.Close()
+	waitFor(t, func() bool { return l2.stats.failed.Load() == 1 })
+	l2.stats.errMu.Lock()
+	lastErr := l2.stats.lastErr
+	l2.stats.errMu.Unlock()
+	if lastErr == "" {
+		t.Error("lastErr empty after a refused forward")
+	}
+}
+
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition not met within 3s")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

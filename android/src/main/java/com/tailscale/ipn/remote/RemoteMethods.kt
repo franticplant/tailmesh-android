@@ -118,6 +118,18 @@ object RemoteMethods {
           ok
         })
     add(
+        Method(
+            "multitailnet.reconcile",
+            true,
+            "Push the saved upstreams, routing rules and listeners into the running engine now, " +
+                "the same as any routing change does. Fails with the reason instead of only " +
+                "logging it.",
+        ) {
+          val e = engine()
+          withContext(Dispatchers.IO) { session.upstreamPolicyApplier.apply(e) }
+          ok
+        })
+    add(
         Method("vpn.restart", true, "Rebuild the VPN interface, e.g. after a capture change.") {
           controls.restartVpn()
           ok
@@ -545,9 +557,10 @@ object RemoteMethods {
         Method(
             "listeners.socks5.list",
             false,
-            "Inbound SOCKS5 listeners and whether each is live.",
+            "Inbound SOCKS5 listeners, whether each is live, and why not.",
         ) {
           val live = liveIds(session.engine?.getSOCKS5ListenersJSON())
+          val errors = session.upstreamPolicyApplier.listenerErrors
           JSONArray(
               session.socks5ListenerRepository.listeners.value.map { l ->
                 JSONObject()
@@ -558,6 +571,7 @@ object RemoteMethods {
                     .put("hasAuth", l.hasAuth)
                     .put("enabled", l.enabled)
                     .put("registered", l.id in live)
+                    .putListenerError(errors[l.id], l.id in live)
               })
         })
     add(
@@ -611,9 +625,11 @@ object RemoteMethods {
         Method(
             "listeners.inbound.list",
             false,
-            "Tailnet-facing inbound listeners and whether each is live.",
+            "Tailnet-facing inbound listeners: whether each is live and why not, connections " +
+                "accepted and failed, bytes (counted when a connection closes), last forward error.",
         ) {
-          val live = liveIds(session.engine?.getInboundListenersJSON())
+          val engineRows = byId(session.engine?.getInboundListenersJSON())
+          val errors = session.upstreamPolicyApplier.listenerErrors
           JSONArray(
               session.inboundListenerRepository.listeners.value.map { l ->
                 JSONObject()
@@ -623,7 +639,18 @@ object RemoteMethods {
                     .put("localTarget", l.localTarget)
                     .put("proxyProtocol", l.proxyProtocol)
                     .put("enabled", l.enabled)
-                    .put("registered", l.id in live)
+                    .put("registered", l.id in engineRows)
+                    .putListenerError(errors[l.id], l.id in engineRows)
+                    .apply {
+                      val row = engineRows[l.id] ?: return@apply
+                      for (k in listOf("accepted", "failed", "active", "bytesIn", "bytesOut")) {
+                        put(k, row.optLong(k))
+                      }
+                      if (row.has("lastError")) {
+                        put("lastForwardError", row.optString("lastError"))
+                        put("lastForwardErrorAt", row.optLong("lastErrorAt"))
+                      }
+                    }
               })
         })
     add(
@@ -988,10 +1015,37 @@ object RemoteMethods {
           App.get().setProxyOnlyMode(it.optBool("enabled", false))
           ok
         })
-
-    // -------------------------------------------------------------------
-    // standard-mode Tailscale (everything its screens do goes through this)
-    // -------------------------------------------------------------------
+    add(
+        Method(
+            "device.networks",
+            false,
+            "Every network Android has (interface, transports, routes, whether a socket can be " +
+                "bound to it, which is the default) and, given a destination, the network and " +
+                "interface a direct dial to it would use. A USB-tether downstream is not an " +
+                "Android network and never appears.",
+            mapOf("destination" to "optional IP address"),
+        ) {
+          val nets = com.tailscale.ipn.NetworkChangeCallback.networkInventory()
+          val out =
+              JSONObject()
+                  .put(
+                      "networks",
+                      JSONArray(com.tailscale.ipn.multiproxy.NetworkInventory.toJson(nets)))
+          val dst = it.optStr("destination")
+          if (dst.isNotBlank()) {
+            val r = com.tailscale.ipn.multiproxy.NetworkInventory.pickFor(dst, nets)
+            out.put(
+                "route",
+                r?.let { p ->
+                  JSONObject()
+                      .put("network", p.networkKey)
+                      .put("iface", p.interfaceName)
+                      .put("prefixLength", p.prefixLength)
+                      .put("onLink", p.onLink)
+                } ?: JSONObject.NULL)
+          }
+          out
+        })
     add(
         Method(
             "tailscale.localapi.get",
@@ -1035,7 +1089,17 @@ object RemoteMethods {
   /** Runs one method. Throws [ControlException] (or anything else) on failure. */
   suspend fun call(name: String, argsJson: String): String {
     val m = byName[name] ?: throw ControlException("unknown method $name")
-    val args = Args(if (argsJson.isBlank()) JSONObject() else JSONObject(argsJson))
+    val json = if (argsJson.isBlank()) JSONObject() else JSONObject(argsJson)
+    // A misspelt argument would otherwise be ignored and the method run with its default, which for
+    // a filter means "everything" and for a mutation means doing something else than asked.
+    val unknown = json.keys().asSequence().filter { it !in m.params }.toList()
+    if (unknown.isNotEmpty()) {
+      val accepted = if (m.params.isEmpty()) "none" else m.params.keys.joinToString(", ")
+      throw ControlException(
+          "unknown argument${if (unknown.size > 1) "s" else ""} ${unknown.joinToString(", ")} " +
+              "for $name (accepted: $accepted)")
+    }
+    val args = Args(json)
     return when (val result = m.run(args)) {
       null -> "null"
       is RawJson -> result.json.ifBlank { "null" }
@@ -1059,6 +1123,26 @@ object RemoteMethods {
                 .put("bytes", f.length())
                 .put("modifiedAt", f.lastModified())
           })
+
+  /** Engine rows (a JSON array of objects with an "id") keyed by id. */
+  private fun byId(json: String?): Map<String, JSONObject> =
+      try {
+        val arr = JSONArray(json ?: "[]")
+        (0 until arr.length())
+            .mapNotNull { arr.optJSONObject(it) }
+            .associateBy { it.optString("id") }
+      } catch (e: Exception) {
+        emptyMap()
+      }
+
+  /** Why a listener is not registered; a stale reason is left out once it is. */
+  private fun JSONObject.putListenerError(
+      e: com.tailscale.ipn.multiproxy.UpstreamPolicyApplier.ListenerError?,
+      registered: Boolean,
+  ): JSONObject {
+    if (e == null || registered) return this
+    return put("lastError", e.message).put("lastErrorAt", e.at)
+  }
 
   private fun liveIds(json: String?): Set<String> =
       try {

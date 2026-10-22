@@ -14,6 +14,7 @@ import com.tailscale.ipn.multiproxy.db.Upstream
 import com.tailscale.ipn.multiproxy.db.UpstreamKind
 import com.tailscale.ipn.multiproxy.db.UpstreamRepository
 import com.tailscale.ipn.util.TSLog
+import java.util.concurrent.ConcurrentHashMap
 import libtailscale.Libtailscale
 import libtailscale.MultiProxyEngine
 import org.json.JSONArray
@@ -41,6 +42,20 @@ class UpstreamPolicyApplier(
     private val profiles: ProfileRepository,
 ) {
   private val packageManager: PackageManager = context.applicationContext.packageManager
+
+  /** Why a listener last failed to register, or was left out. */
+  data class ListenerError(val message: String, val at: Long)
+
+  /**
+   * The last registration failure per SOCKS5 or inbound listener id, cleared when it registers or
+   * is turned off. Otherwise the reason exists only in the log, and a listener just shows as not
+   * registered.
+   */
+  val listenerErrors = ConcurrentHashMap<String, ListenerError>()
+
+  private fun listenerFailed(id: String, message: String) {
+    listenerErrors[id] = ListenerError(message, System.currentTimeMillis())
+  }
 
   fun apply(engine: MultiProxyEngine) {
     val desired = upstreams.registrationOrder()
@@ -256,9 +271,16 @@ class UpstreamPolicyApplier(
           .forEach { add(it.id) }
       upstreams.getAllImmediate().filter { it.enabled }.forEach { add(it.id) }
     }
-    val desired =
-        listeners.getAllImmediate().filter { it.enabled && it.upstream in availableUpstreamIds }
+    val all = listeners.getAllImmediate()
+    val desired = all.filter { it.enabled && it.upstream in availableUpstreamIds }
     val desiredIds = desired.map { it.id }.toSet()
+    for (l in all) {
+      when {
+        !l.enabled -> listenerErrors.remove(l.id)
+        l.id !in desiredIds ->
+            listenerFailed(l.id, "upstream ${l.upstream} is disabled, not ready or deleted")
+      }
+    }
 
     val registered =
         try {
@@ -290,8 +312,10 @@ class UpstreamPolicyApplier(
             auth?.optString("username") ?: "",
             auth?.optString("password") ?: "",
         )
+        listenerErrors.remove(listener.id)
       } catch (e: Exception) {
         TSLog.e(TAG, "could not register SOCKS5 listener ${listener.id}: $e")
+        listenerFailed(listener.id, e.message ?: e.toString())
       }
     }
   }
@@ -316,9 +340,16 @@ class UpstreamPolicyApplier(
             .filter { it.enabled && it.provisioningState == ProvisioningState.READY }
             .map { it.id }
             .toSet()
-    val desired =
-        InboundListenerRules.desired(inboundListeners.getAllImmediate(), availableTailnetIds)
+    val all = inboundListeners.getAllImmediate()
+    val desired = InboundListenerRules.desired(all, availableTailnetIds)
     val desiredIds = desired.map { it.id }.toSet()
+    for (l in all) {
+      when {
+        !l.enabled -> listenerErrors.remove(l.id)
+        l.id !in desiredIds ->
+            listenerFailed(l.id, "tailnet ${l.upstream} is not enabled and ready")
+      }
+    }
 
     val registered =
         try {
@@ -346,8 +377,10 @@ class UpstreamPolicyApplier(
             listener.localTarget,
             listener.proxyProtocol,
         )
+        listenerErrors.remove(listener.id)
       } catch (e: Exception) {
         TSLog.e(TAG, "could not register inbound listener ${listener.id}: $e")
+        listenerFailed(listener.id, e.message ?: e.toString())
       }
     }
   }
