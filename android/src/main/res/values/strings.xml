@@ -590,4 +590,21 @@
     <string name="speed_meter_channel_description">Shows the download and upload speed in the status bar</string>
     <string name="speed_meter_mobile">Mobile data</string>
     <string name="speed_meter_no_network">No network</string>
+    <!-- Remote shell (development builds only) -->
+    <string name="remote_shell_allow_setting">Allow remote shell</string>
+    <string name="remote_shell_allow_setting_subtitle">Development builds only. A control session may ask to run shell commands as this app. Each shell is approved here, needs the phone unlocked, lasts at most 30 minutes and is logged command by command. Restarts remote control.</string>
+    <string name="remote_shell_channel">Remote shell</string>
+    <string name="remote_shell_channel_description">Requests to open a remote shell, and the open shell itself</string>
+    <string name="remote_shell_request_title">%1$s wants a shell</string>
+    <string name="remote_shell_request_body">From %1$s. Code %2$s: allow only if it matches what the client shows. A shell can read and change everything this app holds, including tailnet keys.</string>
+    <string name="remote_shell_allow">Allow %1$d min</string>
+    <string name="remote_shell_requests">Shell requests</string>
+    <string name="remote_shell_open_title">Remote shell open</string>
+    <string name="remote_shell_open_text">%1$s, until %2$s</string>
+    <string name="remote_shell_end">End</string>
+    <string name="remote_shell_log">Shell log</string>
+    <string name="remote_shell_log_ok">Verified: %1$d entries, head %2$s…</string>
+    <string name="remote_shell_log_failed">FAILED verification: %1$s</string>
+    <string name="remote_shell_log_explainer">Each entry includes the hash of the one before, and the newest is held in memory and copied to logcat, so an edited or shortened log shows here.</string>
+    <string name="remote_shell_verify">Verify</string>
 </resources>

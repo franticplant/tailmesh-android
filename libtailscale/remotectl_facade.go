@@ -26,6 +26,11 @@ type RemoteControlHandler interface {
 	OnAccess(entryJSON string)
 	OnSessionsChanged()
 	OnStopped(reason string)
+	// Remote shell (development builds): a session asks for a shell, every
+	// shell log entry as it is written, and a shell opening or closing.
+	OnShellRequest(requestJSON string)
+	OnShellEntry(entryJSON string)
+	OnShellChanged()
 }
 
 var remoteCtl struct {
@@ -48,6 +53,18 @@ func (e remoteEvents) OnAccess(a remotectl.AccessEntry) {
 func (e remoteEvents) OnSessionsChanged() { e.h.OnSessionsChanged() }
 
 func (e remoteEvents) OnStopped(reason string) { e.h.OnStopped(reason) }
+
+func (e remoteEvents) OnShellRequest(r remotectl.ShellRequest) {
+	b, _ := json.Marshal(r)
+	e.h.OnShellRequest(string(b))
+}
+
+func (e remoteEvents) OnShellEntry(x remotectl.ShellEntry) {
+	b, _ := json.Marshal(x)
+	e.h.OnShellEntry(string(b))
+}
+
+func (e remoteEvents) OnShellChanged() { e.h.OnShellChanged() }
 
 // StartRemoteControl starts the endpoint with a JSON remotectl.Config, stopping
 // any previous instance first. It returns the address listened on.
@@ -173,3 +190,68 @@ func RemoteControlClearAccessLog(path string) error {
 // RemoteControlLog adds a line from the app's own logging to /v1/logs. A no-op
 // while the endpoint is off.
 func RemoteControlLog(source, line string) { remotectl.AddLog(source, line) }
+
+// RemoteControlApproveShell opens the shell a session asked for.
+func RemoteControlApproveShell(requestID string) error {
+	s := remoteServer()
+	if s == nil {
+		return errors.New("remote control is not running")
+	}
+	return s.ApproveShell(requestID)
+}
+
+// RemoteControlDenyShell refuses a shell request.
+func RemoteControlDenyShell(requestID string) error {
+	s := remoteServer()
+	if s == nil {
+		return errors.New("remote control is not running")
+	}
+	return s.DenyShell(requestID)
+}
+
+// RemoteControlEndShell closes a session's shell, killing what it runs.
+func RemoteControlEndShell(sessionID string) {
+	if s := remoteServer(); s != nil {
+		s.EndShell(sessionID)
+	}
+}
+
+// RemoteControlEndAllShells closes every open shell.
+func RemoteControlEndAllShells() {
+	if s := remoteServer(); s != nil {
+		for _, g := range s.ShellGrants() {
+			s.EndShell(g.Session)
+		}
+	}
+}
+
+// RemoteControlShellGrantsJSON lists open shells.
+func RemoteControlShellGrantsJSON() string {
+	var out []remotectl.ShellGrant
+	if s := remoteServer(); s != nil {
+		out = s.ShellGrants()
+	}
+	b, _ := json.Marshal(out)
+	return string(b)
+}
+
+// RemoteControlShellLogJSON returns the last n entries of the shell log.
+func RemoteControlShellLogJSON(path string, n int32) string {
+	entries, _ := remotectl.ReadShellLog(path, int(n))
+	b, _ := json.Marshal(entries)
+	return string(b)
+}
+
+// RemoteControlVerifyShellLogJSON checks the shell log at path: its chain,
+// and, while remote control runs with the shell on, that it ends at the head
+// this process last wrote.
+func RemoteControlVerifyShellLogJSON(path string) string {
+	var v remotectl.ShellLogVerification
+	if s := remoteServer(); s != nil && s.ShellEnabled() {
+		v = s.VerifyShellLog()
+	} else {
+		v = remotectl.VerifyShellLogFile(path)
+	}
+	b, _ := json.Marshal(v)
+	return string(b)
+}

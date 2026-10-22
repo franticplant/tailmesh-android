@@ -114,6 +114,17 @@ type Config struct {
 	// here and handed to the Handler's "app.update" method, which decides
 	// whether to install it. Empty disables the endpoint.
 	UpdateDir string `json:"updateDir,omitempty"`
+	// Shell enables the remote shell (see shell.go). Development builds only;
+	// the app never sets it in a release.
+	Shell bool `json:"shell,omitempty"`
+	// ShellLogPath is the hash-chained shell log. Required with Shell.
+	ShellLogPath string `json:"shellLogPath,omitempty"`
+	// ShellDir is the commands' working directory and HOME. Required with Shell.
+	ShellDir string `json:"shellDir,omitempty"`
+	// ShellPath is the shell binary; default /system/bin/sh.
+	ShellPath string `json:"shellPath,omitempty"`
+	// ShellMaxMinutes caps one grant; default 30.
+	ShellMaxMinutes int `json:"shellMaxMinutes,omitempty"`
 	// Version is reported by /v1/status.
 	Version string `json:"version,omitempty"`
 	// Methods is the Handler's method catalog.
@@ -218,6 +229,9 @@ type Server struct {
 	done         chan struct{}
 
 	updateMu sync.Mutex // one upload at a time: they share UpdateDir's one slot
+
+	shell    shellState // guarded by mu
+	shellLog *shellLog  // nil unless Config.Shell
 }
 
 // Start validates cfg, starts listening, and serves until Stop or expiry.
@@ -255,13 +269,26 @@ func Start(cfg Config, h Handler, ev Events) (*Server, error) {
 		}
 	}
 
+	if cfg.Shell && (cfg.ShellLogPath == "" || cfg.ShellDir == "") {
+		return nil, errors.New("remotectl: the shell needs a log path and a directory")
+	}
 	access, err := openAccessLog(cfg.AccessLogPath)
 	if err != nil {
 		return nil, err
 	}
+	var shLog *shellLog
+	if cfg.Shell {
+		if shLog, err = openShellLog(cfg.ShellLogPath); err != nil {
+			access.close()
+			return nil, err
+		}
+	}
 	ln, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
 		access.close()
+		if shLog != nil {
+			shLog.close()
+		}
 		return nil, fmt.Errorf("remotectl: listen %s: %w", cfg.Addr, err)
 	}
 
@@ -279,6 +306,8 @@ func Start(cfg Config, h Handler, ev Events) (*Server, error) {
 		sessions:     make(map[[32]byte]*session),
 		pending:      make(map[string]*pending),
 		done:         make(chan struct{}),
+		shell:        shellState{pending: make(map[string]*shellPending), grants: make(map[string]*shellGrant)},
+		shellLog:     shLog,
 	}
 	if cfg.Password != "" {
 		s.pwDigest = sha256.Sum256([]byte(cfg.Password))
@@ -336,7 +365,15 @@ func (s *Server) stop(reason string) {
 			close(p.decided)
 		}
 	}
+	for id, p := range s.shell.pending {
+		delete(s.shell.pending, id)
+		if !p.isDecided {
+			p.isDecided, p.expired = true, true
+			close(p.decided)
+		}
+	}
 	s.mu.Unlock()
+	s.endAllShells("remote control stopped")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	_ = s.srv.Shutdown(ctx)
@@ -345,6 +382,9 @@ func (s *Server) stop(reason string) {
 	logs.disable()
 	s.logAccess(AccessEntry{Action: "server.stop", Error: reason, Status: http.StatusOK})
 	s.access.close()
+	if s.shellLog != nil {
+		s.shellLog.close()
+	}
 	close(s.done)
 	log.Printf("remotectl: stopped (%s)", reason)
 	if s.ev != nil {
@@ -380,9 +420,13 @@ func (s *Server) janitor() {
 				}
 			}
 		}
+		s.expireShellPendingLocked(now)
 		s.mu.Unlock()
-		if changed && s.ev != nil {
-			s.ev.OnSessionsChanged()
+		if changed {
+			s.endShellsWithoutSession()
+			if s.ev != nil {
+				s.ev.OnSessionsChanged()
+			}
 		}
 	}
 }
@@ -453,6 +497,7 @@ func (s *Server) RevokeSession(id string) {
 	}
 	s.mu.Unlock()
 	if found != nil {
+		s.endShellsWithoutSession()
 		s.logAccess(AccessEntry{Remote: found.info.Remote, Client: found.info.Client, Session: id, Action: "session.revoked", Status: http.StatusOK})
 		if s.ev != nil {
 			s.ev.OnSessionsChanged()
@@ -466,6 +511,9 @@ func (s *Server) SetAllowControl(allow bool) {
 	s.mu.Lock()
 	s.allowControl = allow
 	s.mu.Unlock()
+	if !allow {
+		s.endAllShells("control switched off")
+	}
 	s.logAccess(AccessEntry{Action: fmt.Sprintf("server.allowControl=%v", allow), Status: http.StatusOK})
 }
 
@@ -511,6 +559,11 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /v1/access-log", s.need(false, s.handleAccessLog))
 	mux.HandleFunc("GET /v1/files", s.need(true, s.handleFile))
 	mux.HandleFunc("POST /v1/app/update", s.need(true, s.handleAppUpdate))
+	mux.HandleFunc("POST /v1/shell/request", s.need(true, s.handleShellRequest))
+	mux.HandleFunc("GET /v1/shell/request/{id}", s.need(true, s.handleShellPoll))
+	mux.HandleFunc("POST /v1/shell/exec", s.need(true, s.handleShellExec))
+	mux.HandleFunc("POST /v1/shell/end", s.need(false, s.handleShellEnd))
+	mux.HandleFunc("GET /v1/shell/log", s.need(false, s.handleShellLog))
 
 	// Profiling costs CPU on the device and exposes memory contents, so it
 	// takes control.
@@ -802,6 +855,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	delete(s.sessions, key)
 	s.mu.Unlock()
+	s.endShellsWithoutSession()
 	if s.ev != nil {
 		s.ev.OnSessionsChanged()
 	}
@@ -817,16 +871,22 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	allow := s.allowControl
+	var shellUntil *time.Time
+	if g := s.shell.grants[ri.sess.ID]; g != nil {
+		shellUntil = &g.info.Until
+	}
 	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":           true,
-		"version":      s.cfg.Version,
-		"startedAt":    s.started,
-		"expiresAt":    expires,
-		"session":      ri.sess,
-		"control":      ri.control,
-		"allowControl": allow,
-		"methods":      len(s.methods),
+		"shellAvailable": s.shellLog != nil,
+		"shellUntil":     shellUntil,
+		"ok":             true,
+		"version":        s.cfg.Version,
+		"startedAt":      s.started,
+		"expiresAt":      expires,
+		"session":        ri.sess,
+		"control":        ri.control,
+		"allowControl":   allow,
+		"methods":        len(s.methods),
 	})
 }
 

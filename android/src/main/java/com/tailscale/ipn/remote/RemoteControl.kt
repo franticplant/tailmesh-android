@@ -141,6 +141,8 @@ object RemoteControl {
             }
             .put("version", BuildConfig.VERSION_NAME)
             .put("methods", RemoteMethods.catalogJson())
+            // Development builds with "Allow remote shell" on; otherwise adds nothing.
+            .also { RemoteShell.configure(it) }
     try {
       val addr = Libtailscale.startRemoteControl(config.toString(), handler)
       _state.value = State(running = true, address = addr)
@@ -220,11 +222,21 @@ object RemoteControl {
 
         override fun onSessionsChanged() = refreshSessions()
 
+        override fun onShellRequest(requestJSON: String) {
+          // The server only asks when configured with the shell, but a release never acts on it.
+          if (BuildConfig.DEV_TOOLS) RemoteShell.onRequest(requestJSON)
+        }
+
+        override fun onShellEntry(entryJSON: String) = RemoteShell.onEntry(entryJSON)
+
+        override fun onShellChanged() = RemoteShell.onChanged()
+
         override fun onStopped(reason: String) {
           _state.value = State(running = false, stoppedReason = reason)
           _sessions.value = emptyList()
           _pending.value.forEach { cancelApprovalNotification(it.id) }
           _pending.value = emptyList()
+          RemoteShell.onStopped()
           if (reason == "expired") RemoteControlSettings().enabled = false
           NotificationManagerCompat.from(App.get()).cancel(STATUS_NOTIFICATION_ID)
         }
@@ -293,6 +305,7 @@ object RemoteControl {
         app.getString(R.string.remote_control_approval_channel_description),
         NotificationManagerCompat.IMPORTANCE_HIGH,
     )
+    if (BuildConfig.DEV_TOOLS) RemoteShell.createChannel()
   }
 
   private fun openAppIntent(): PendingIntent {

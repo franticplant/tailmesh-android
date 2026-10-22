@@ -41,6 +41,7 @@ import com.tailscale.ipn.BuildConfig
 import com.tailscale.ipn.R
 import com.tailscale.ipn.remote.RemoteControl
 import com.tailscale.ipn.remote.RemoteControlSettings
+import com.tailscale.ipn.remote.RemoteShell
 import com.tailscale.ipn.ui.util.Lists
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -74,6 +75,11 @@ fun RemoteControlView(backToSettings: BackNavigation) {
   var passwordControl by remember { mutableStateOf(settings.passwordGrantsControl) }
   var allowControl by remember { mutableStateOf(settings.allowControl) }
   var allowUpdates by remember { mutableStateOf(settings.allowRemoteUpdates) }
+  var allowShell by remember { mutableStateOf(settings.allowRemoteShell) }
+  val shellRequests by RemoteShell.requests.collectAsState()
+  val shellGrants by RemoteShell.grants.collectAsState()
+  var shellLog by remember { mutableStateOf<List<RemoteShell.Entry>>(emptyList()) }
+  var shellCheck by remember { mutableStateOf<RemoteShell.Verification?>(null) }
   val context = LocalContext.current
   var autoOff by remember { mutableStateOf(settings.autoOffMinutes) }
   var formError by remember { mutableStateOf<String?>(null) }
@@ -82,6 +88,10 @@ fun RemoteControlView(backToSettings: BackNavigation) {
   // The persisted log, re-read whenever new accesses arrive.
   LaunchedEffect(recent.size, state.running) {
     log = withContext(Dispatchers.IO) { RemoteControl.readAccessLog(300) }.reversed()
+    if (BuildConfig.DEV_TOOLS) {
+      shellLog = withContext(Dispatchers.IO) { RemoteShell.readLog(30) }.reversed()
+      shellCheck = withContext(Dispatchers.IO) { RemoteShell.verify() }
+    }
   }
 
   /** Validates and saves the form; returns false (with formError set) if it is invalid. */
@@ -191,6 +201,110 @@ fun RemoteControlView(backToSettings: BackNavigation) {
                 },
             )
           }
+
+      if (BuildConfig.DEV_TOOLS)
+          item("allowShell") {
+            ListItem(
+                headlineContent = { Text(stringResource(R.string.remote_shell_allow_setting)) },
+                supportingContent = {
+                  Text(stringResource(R.string.remote_shell_allow_setting_subtitle))
+                },
+                trailingContent = {
+                  Switch(
+                      checked = allowShell,
+                      onCheckedChange = {
+                        allowShell = it
+                        settings.allowRemoteShell = it
+                        // The server reads it at start; restart a running one so it applies now.
+                        if (state.running) RemoteControl.start()
+                      },
+                  )
+                },
+            )
+          }
+
+      if (BuildConfig.DEV_TOOLS && shellRequests.isNotEmpty()) {
+        item("shellRequestsHeader") {
+          Lists.SectionDivider(stringResource(R.string.remote_shell_requests))
+        }
+        items(shellRequests, key = { "sr-" + it.id }) { r ->
+          ListItem(
+              headlineContent = { Text("${r.client} - ${r.code}") },
+              supportingContent = { Text("${r.remote}, ${r.minutes} min") },
+              trailingContent = {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                  TextButton(onClick = { RemoteShell.approve(r.id) }) {
+                    Text(stringResource(R.string.remote_shell_allow, r.minutes))
+                  }
+                  TextButton(onClick = { RemoteShell.deny(r.id) }) {
+                    Text(stringResource(R.string.remote_control_deny))
+                  }
+                }
+              },
+          )
+        }
+      }
+
+      if (BuildConfig.DEV_TOOLS && shellGrants.isNotEmpty()) {
+        item("shellGrantsHeader") {
+          Lists.SectionDivider(stringResource(R.string.remote_shell_open_title))
+        }
+        items(shellGrants, key = { "sg-" + it.session }) { g ->
+          ListItem(
+              headlineContent = { Text(g.client) },
+              supportingContent = { Text("${g.remote} - until ${RemoteShell.shortTime(g.until)}") },
+              trailingContent = {
+                TextButton(onClick = { RemoteShell.end(g.session) }) {
+                  Text(stringResource(R.string.remote_shell_end))
+                }
+              },
+          )
+        }
+      }
+
+      if (BuildConfig.DEV_TOOLS && (allowShell || shellLog.isNotEmpty())) {
+        item("shellLogHeader") { Lists.SectionDivider(stringResource(R.string.remote_shell_log)) }
+        item("shellLogCheck") {
+          val c = shellCheck
+          ListItem(
+              headlineContent = {
+                Text(
+                    when {
+                      c == null -> ""
+                      c.ok ->
+                          stringResource(R.string.remote_shell_log_ok, c.entries, c.head.take(12))
+                      else -> stringResource(R.string.remote_shell_log_failed, c.problem)
+                    },
+                    color =
+                        if (c != null && !c.ok) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurface,
+                )
+              },
+              supportingContent = { Text(stringResource(R.string.remote_shell_log_explainer)) },
+              trailingContent = {
+                TextButton(onClick = { shellCheck = RemoteShell.verify() }) {
+                  Text(stringResource(R.string.remote_shell_verify))
+                }
+              },
+          )
+        }
+        items(shellLog, key = { "sl-" + it.seq }) { e ->
+          ListItem(
+              headlineContent = {
+                Text(
+                    if (e.cmd.isNotEmpty()) "$ ${e.cmd}"
+                    else e.kind + (e.exit?.let { " exit $it" } ?: ""),
+                    maxLines = 3,
+                )
+              },
+              supportingContent = {
+                Text(
+                    "#${e.seq} ${RemoteShell.shortTime(e.time)} ${e.kind} ${e.client}" +
+                        (if (e.note.isNotEmpty()) " - ${e.note}" else ""))
+              },
+          )
+        }
+      }
 
       if (pending.isNotEmpty()) {
         item("pendingHeader") {

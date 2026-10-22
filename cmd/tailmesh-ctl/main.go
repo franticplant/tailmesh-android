@@ -16,6 +16,7 @@
 //	tailmesh-ctl logs -f -grep flow-
 //	tailmesh-ctl profile -seconds 20 -o cpu.pprof
 //	tailmesh-ctl update tailmesh-v0.4.1-arm64-v8a.apk         # needs "Allow remote updates" on
+//	tailmesh-ctl shell exec 'ls files'                       # needs "Allow remote shell" on
 //
 // The session token is cached per address in the user config directory, so
 // later commands need no flags beyond -addr. Set TAILMESH_ADDR to skip -addr.
@@ -74,6 +75,8 @@ func main() {
 		err = profile(args)
 	case "update":
 		err = update(args)
+	case "shell":
+		err = shell(args)
 	default:
 		usage()
 		os.Exit(2)
@@ -98,6 +101,8 @@ commands:
   pull <device path> [-o file]       download a capture or export
   profile [-seconds n] [-kind k] -o  Go pprof profile (profile, heap, goroutine, ...)
   update <apk>                       install a newer build signed with the same key
+  shell [open|exec 'cmd'|end|log]    development builds: run commands, approved on the phone;
+                                     with no arguments, one command per line
 `)
 }
 

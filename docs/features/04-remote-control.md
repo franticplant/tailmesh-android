@@ -38,6 +38,8 @@ rather than run with a default. Beyond the catalog:
 - `GET /v1/access-log` — the access log (read-only).
 - `POST /v1/app/update` — development builds only: upload an APK (the raw request body) for the app
   to install over itself; see [Updating the app](#updating-the-app).
+- `/v1/shell/*` — development builds only: run shell commands as the app, each shell approved on the
+  phone; see [Remote shell](#remote-shell).
 
 ### Updating the app
 
@@ -61,6 +63,45 @@ notification asks for one. The app restarts on install, ending every session. Af
 control comes back by itself if its auto-off time has not passed, and so does the VPN or
 Multi-Tailnet session that was running. The access log records each upload's SHA-256.
 
+### Remote shell
+
+**Development builds only**, and off until **Allow remote shell** is turned on on the Remote control
+screen. It runs commands as the app (`sh -c`, working directory and `HOME` in the app's private
+storage), so it can read and change everything the app holds, tailnet keys included.
+
+It is gated more tightly than a control session:
+
+- **Approved on the phone, every time.** A control session asks (`tailmesh-ctl shell open`); the
+  phone shows who is asking and a code, and **Allow** works only with the phone unlocked. A password
+  alone never opens a shell.
+- **Limited in time.** At most 30 minutes (15 by default). A shell also ends when its session ends,
+  when control is switched off, when remote control stops, or when **End** is tapped in the ongoing
+  notification or on the Remote control screen. Ending it kills what it is running.
+- **One command at a time.** `POST /v1/shell/exec {"cmd", "timeoutSeconds", "stdin"}` runs one
+  command and returns its exit status and output (up to 1 MiB per stream). Nothing persists between
+  commands (`cd`, variables). The timeout defaults to 60 s, at most 10 minutes, and kills the
+  command's whole process group.
+- **Logged before it runs.** The shell log records every request, approval, denial, command (before
+  it starts: if it cannot be logged, it does not run), result (exit status, duration, output sizes
+  and SHA-256) and end.
+
+The shell runs as the app, so nothing on the device can stop it writing the log file. It cannot
+change the log *unnoticed*, though: each entry carries the SHA-256 of the one before (a hash chain),
+the newest hash is kept in the app's memory, and every entry is also written to logcat (tag
+`RemoteShell`), which an app cannot rewrite. The Remote control screen verifies the file against
+the in-memory head, so an edited, removed or truncated entry shows as **FAILED verification**; the
+logcat copy shows what the real entries were. After the app restarts only the chain itself can be
+checked, and its break, if any, is recorded as the first new entry.
+
+```sh
+tailmesh-ctl shell open -minutes 10     # then Allow on the phone
+tailmesh-ctl shell exec 'ls -la files'
+tailmesh-ctl shell exec -stdin conf.json 'cat > shell-home/conf.json'
+tailmesh-ctl shell                      # one command per line; "exit" ends the shell
+tailmesh-ctl shell log                  # entries and the verification result
+tailmesh-ctl shell end
+```
+
 Every change goes through the same code as the matching control in the UI (`MultiProxyControls`,
 `MultiProxySessionCoordinator`, `PacketCaptures`), so it is validated, persisted and applied
 identically, and the screens show it. A capture started remotely appears on the Packet capture
@@ -74,7 +115,8 @@ widen its own access, extend its own lifetime, disconnect another client, or hid
 
 The one exception is by design, and only in development builds: an app update replaces the app's
 code, remote control's included. That is why it has its own switch, **Allow remote updates**, which
-only the phone can set, and why only builds signed with the same key are accepted.
+only the phone can set, and why only builds signed with the same key are accepted. The remote shell
+is the other, with its own switch and an approval on the phone for every shell.
 
 ---
 
