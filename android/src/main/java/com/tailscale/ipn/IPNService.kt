@@ -35,6 +35,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import libtailscale.Libtailscale
+import org.json.JSONObject
 
 enum class VpnRuntimeMode {
   STOPPED,
@@ -135,6 +136,7 @@ class MultiProxySession(val app: App) {
         val authKey = credentialStore.getAuthKey(profile.id) ?: ""
         try {
           engine?.addTailnet(profile.id, authKey, profile.enabled)
+          engine?.setTailnetAcceptRoutes(profile.id, profile.enabled && profile.acceptRoutes)
           if (profile.enabled && authKey.isNotEmpty()) {
             // After first provision, we can optionally clear the auth key
             // credentialStore.deleteAuthKey(profile.id)
@@ -165,6 +167,9 @@ open class IPNService : VpnService(), libtailscale.IPNService {
     const val ACTION_START_VPN = "com.tailscale.ipn.START_VPN"
     const val ACTION_STOP_VPN = "com.tailscale.ipn.STOP_VPN"
     const val ACTION_RESTART_VPN = "com.tailscale.ipn.RESTART_VPN"
+    // Rebuilds only the TUN interface, keeping the engine and its tsnet
+    // nodes alive - used when the accepted-subnet set changes.
+    const val ACTION_REBUILD_MULTIPROXY_TUN = "com.tailscale.ipn.REBUILD_MULTIPROXY_TUN"
     const val ACTION_START_FOREGROUND_ONLY = "com.tailscale.ipn.START_FOREGROUND_ONLY"
     const val ACTION_START_MULTIPROXY = "com.tailscale.ipn.START_MULTIPROXY"
     const val ACTION_STOP_MULTIPROXY = "com.tailscale.ipn.STOP_MULTIPROXY"
@@ -573,6 +578,29 @@ open class IPNService : VpnService(), libtailscale.IPNService {
       }
     }
 
+    // Routes accepted from tailnet subnet routers. Added after the LAN
+    // exclusions above: a more specific accepted prefix (for example
+    // 192.168.1.0/24 inside the excluded 192.168.0.0/16) must still enter the
+    // VPN so the engine can send it through that tailnet.
+    try {
+      val accepted = JSONObject(engine.getSubnetRoutesJSON()).optJSONArray("accepted")
+      if (accepted != null) {
+        for (i in 0 until accepted.length()) {
+          val prefix = accepted.getJSONObject(i).optString("prefix")
+          val parts = prefix.split("/")
+          if (parts.size != 2) continue
+          val bits = parts[1].toIntOrNull() ?: continue
+          try {
+            b.addRoute(parts[0], bits)
+          } catch (e: Exception) {
+            TSLog.e(TAG, "MultiProxy: could not add accepted subnet $prefix: $e")
+          }
+        }
+      }
+    } catch (e: Exception) {
+      TSLog.e(TAG, "MultiProxy: could not read accepted subnet routes: $e")
+    }
+
     b.setMtu(1280)
 
     engine.stopVPN()
@@ -645,6 +673,19 @@ open class IPNService : VpnService(), libtailscale.IPNService {
                 setActiveMode(VpnRuntimeMode.STOPPED)
                 app.setWantRunning(false)
               }
+            }
+          }
+        }
+        return START_NOT_STICKY
+      }
+      ACTION_REBUILD_MULTIPROXY_TUN -> {
+        scope.launch {
+          transitionMutex.withLock {
+            val session = app.multiProxySession
+            if (activeMode == VpnRuntimeMode.MULTIPROXY &&
+                !app.isProxyOnlyMode() &&
+                session.engine != null) {
+              rebuildMultiProxyTunLocked(session)
             }
           }
         }

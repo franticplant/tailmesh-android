@@ -54,6 +54,7 @@ import com.patrykandpatrick.vico.core.marker.MarkerLabelFormatter
 import com.patrykandpatrick.vico.core.scroll.InitialScroll
 import com.tailscale.ipn.App
 import com.tailscale.ipn.MultiProxySessionCoordinator
+import com.tailscale.ipn.SubnetRoutesSnapshot
 import com.tailscale.ipn.UpstreamStatSnapshot
 import com.tailscale.ipn.multiproxy.AppNameResolver
 import com.tailscale.ipn.multiproxy.db.ObservabilityDatabaseHelper
@@ -136,6 +137,7 @@ fun DiagnosticsView(onNavigateBack: () -> Unit) {
   val scope = rememberCoroutineScope()
   val snapshot by MultiProxySessionCoordinator.observabilitySnapshot.collectAsState()
   val liveEvents by MultiProxySessionCoordinator.observabilityEvents.collectAsState()
+  val subnetRoutes by MultiProxySessionCoordinator.subnetRoutes.collectAsState()
   var section by remember { mutableStateOf(DiagSection.OVERVIEW) }
   var range by remember { mutableStateOf(DiagRange.H1) }
   var resolution by remember { mutableStateOf(GraphResolution.NORMAL) }
@@ -235,7 +237,7 @@ fun DiagnosticsView(onNavigateBack: () -> Unit) {
         when (section) {
           DiagSection.OVERVIEW ->
               overviewSection(this, snapshot, samples, liveEvents, resolution, range)
-          DiagSection.UPSTREAMS -> upstreamsSection(this, snapshot, range, resolution)
+          DiagSection.UPSTREAMS -> upstreamsSection(this, snapshot, range, resolution, subnetRoutes)
           DiagSection.APPS -> appsSection(this, snapshot, range, resolution)
           DiagSection.NETWORK ->
               networkSection(
@@ -988,12 +990,53 @@ private fun overviewSection(
   }
 }
 
+private fun subnetRoutesSection(scope: LazyListScope, routes: SubnetRoutesSnapshot) {
+  if (routes.accepted.isEmpty() && routes.conflicts.isEmpty()) return
+  scope.item {
+    Text(
+        "Subnet routes",
+        style = MaterialTheme.typography.titleMedium,
+        modifier = Modifier.padding(top = 12.dp))
+    Text(
+        "Prefixes accepted from tailnet subnet routers. A conflict is shown when two enabled " +
+            "tailnets advertise the same prefix; the chosen tailnet is the one traffic uses.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+  }
+  scope.items(routes.accepted, key = { "subnet:${it.prefix}:${it.tailnetId}" }) { route ->
+    Text(
+        "${route.prefix} via ${upstreamDisplayName(route.tailnetId)}" +
+            if (route.peer.isNotBlank()) " (${route.peer})" else "",
+        style = MaterialTheme.typography.bodySmall,
+        modifier = Modifier.padding(vertical = 2.dp),
+    )
+  }
+  routes.conflicts.forEach { conflict ->
+    scope.item(key = "subnet-conflict:${conflict.prefix}") {
+      val chosen = conflict.candidates.firstOrNull { it.chosen }
+      val others =
+          conflict.candidates
+              .filterNot { it.chosen }
+              .joinToString { upstreamDisplayName(it.tailnetId) }
+      Text(
+          "${conflict.prefix}: using ${chosen?.let { upstreamDisplayName(it.tailnetId) } ?: "none"}" +
+              if (others.isNotEmpty()) "; also advertised by $others" else "",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.error,
+          modifier = Modifier.padding(vertical = 2.dp),
+      )
+    }
+  }
+}
+
 private fun upstreamsSection(
     scope: LazyListScope,
     snapshot: com.tailscale.ipn.ObservabilitySnapshot,
     range: DiagRange,
     resolution: GraphResolution,
+    subnetRoutes: SubnetRoutesSnapshot,
 ) {
+  subnetRoutesSection(scope, subnetRoutes)
   val runtimeStates = MultiProxySessionCoordinator.runtimeStates.value
   val upstreamStats = MultiProxySessionCoordinator.upstreamStats.value
   // The complete set of upstreams to show, regardless of kind: tailnets and exit nodes come from

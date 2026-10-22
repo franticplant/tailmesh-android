@@ -158,12 +158,20 @@ object RemoteMethods {
         Method(
             "tailnets.list",
             false,
-            "Configured tailnets with runtime state, machine name, last error and exit node.",
+            "Configured tailnets with runtime state, machine name, last error, exit node, accepted subnet routes and route conflicts.",
         ) {
           val states = MultiProxySessionCoordinator.runtimeStates.value
           val names = MultiProxySessionCoordinator.machineNames.value
           val errors = MultiProxySessionCoordinator.lastErrors.value
           val exits = MultiProxySessionCoordinator.exitNodeIps.value
+          val subnets = MultiProxySessionCoordinator.subnetRoutes.value
+          val acceptedByTailnet = subnets.accepted.groupBy { it.tailnetId }
+          val conflictsByTailnet =
+              subnets.conflicts
+                  .flatMap { conflict ->
+                    conflict.candidates.map { it.tailnetId to conflict.prefix }
+                  }
+                  .groupBy({ it.first }, { it.second })
           JSONArray(
               session.profileRepository.profiles.value.map { p ->
                 JSONObject()
@@ -178,6 +186,15 @@ object RemoteMethods {
                     .put("machineName", names[p.id].orEmpty())
                     .put("lastError", errors[p.id])
                     .put("exitNodeIp", exits[p.id].orEmpty())
+                    .put("acceptRoutes", p.acceptRoutes)
+                    .put(
+                        "acceptedRoutes",
+                        JSONArray(acceptedByTailnet[p.id].orEmpty().map { it.prefix }),
+                    )
+                    .put(
+                        "subnetConflicts",
+                        JSONArray(conflictsByTailnet[p.id].orEmpty()),
+                    )
               })
         })
     add(
@@ -216,6 +233,16 @@ object RemoteMethods {
         })
     add(
         Method(
+            "tailnets.setAcceptRoutes",
+            true,
+            "Use the subnet routes this tailnet's peers advertise.",
+            mapOf("id" to "tailnet id", "enabled" to "bool"),
+        ) {
+          MultiProxySessionCoordinator.setAcceptRoutes(session, it.str("id"), it.bool("enabled"))
+          JSONObject().put("accepted", true)
+        })
+    add(
+        Method(
             "tailnets.rename",
             true,
             "Rename a tailnet.",
@@ -245,6 +272,14 @@ object RemoteMethods {
             "Real Tailscale addresses claimed by more than one tailnet.",
         ) {
           RawJson(engine().getAddressConflictsJSON())
+        })
+    add(
+        Method(
+            "tailnets.subnetRoutes",
+            false,
+            "Accepted subnet routes and exact-prefix conflicts between tailnets.",
+        ) {
+          RawJson(engine().getSubnetRoutesJSON())
         })
     add(
         Method("tailnets.states", false, "Raw per-tailnet engine state.") {

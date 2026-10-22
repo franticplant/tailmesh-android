@@ -156,7 +156,8 @@ class TailnetDatabaseHelperMigrationTest {
                     TailnetDatabaseHelper.COL_SOURCE_PROFILE_ID,
                     TailnetDatabaseHelper.COL_OWNER,
                     TailnetDatabaseHelper.COL_STANDARD_SELECTED,
-                    TailnetDatabaseHelper.COL_MIGRATION_VERSION)))
+                    TailnetDatabaseHelper.COL_MIGRATION_VERSION,
+                    TailnetDatabaseHelper.COL_ACCEPT_ROUTES)))
   }
 
   @Test
@@ -215,6 +216,12 @@ class TailnetDatabaseHelperMigrationTest {
   @Test
   fun upgradeFromVersion5_appliesOnlyTheV6Branch() {
     createRawDatabaseAtVersion(5)
+    withHelper(context) { helper -> assertFinalSchema(helper.writableDatabase) }
+  }
+
+  @Test
+  fun upgradeFromVersion8_addsAcceptRoutesOff() {
+    createRawDatabaseAtVersion(8)
     withHelper(context) { helper -> assertFinalSchema(helper.writableDatabase) }
   }
 

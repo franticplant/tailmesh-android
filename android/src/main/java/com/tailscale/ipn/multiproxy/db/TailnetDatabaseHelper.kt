@@ -11,11 +11,13 @@ class TailnetDatabaseHelper(context: Context) :
     SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
   companion object {
     const val DATABASE_NAME = "multiproxy_profiles.db"
-    const val DATABASE_VERSION = 8
+    const val DATABASE_VERSION = 9
     const val TABLE_PROFILES = "profiles"
     const val COL_ID = "id"
     const val COL_DISPLAY_NAME = "display_name"
     const val COL_ENABLED = "enabled"
+    // Per-tailnet "use subnet routes" switch (Tailscale's --accept-routes).
+    const val COL_ACCEPT_ROUTES = "accept_routes"
     const val COL_PROV_STATE = "provisioning_state"
     const val COL_CREATED_AT = "created_at"
     const val COL_UPDATED_AT = "updated_at"
@@ -181,6 +183,7 @@ class TailnetDatabaseHelper(context: Context) :
                 $COL_ID TEXT PRIMARY KEY,
                 $COL_DISPLAY_NAME TEXT NOT NULL,
                 $COL_ENABLED INTEGER NOT NULL,
+                $COL_ACCEPT_ROUTES INTEGER NOT NULL DEFAULT 0,
                 $COL_PROV_STATE TEXT NOT NULL,
                 $COL_CREATED_AT INTEGER NOT NULL,
                 $COL_UPDATED_AT INTEGER NOT NULL,
@@ -287,6 +290,18 @@ class TailnetDatabaseHelper(context: Context) :
       db.beginTransaction()
       try {
         db.execSQL(CREATE_INBOUND_LISTENERS.trimIndent())
+        db.setTransactionSuccessful()
+      } finally {
+        db.endTransaction()
+      }
+    }
+    if (oldVersion < 9) {
+      // Adds the per-tailnet "use subnet routes" switch; existing tailnets
+      // default to off, matching Tailscale's --accept-routes default.
+      db.beginTransaction()
+      try {
+        db.execSQL(
+            "ALTER TABLE $TABLE_PROFILES ADD COLUMN $COL_ACCEPT_ROUTES INTEGER NOT NULL DEFAULT 0")
         db.setTransactionSuccessful()
       } finally {
         db.endTransaction()

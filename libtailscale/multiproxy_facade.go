@@ -346,6 +346,26 @@ func (e *MultiProxyEngine) GetTargetsJSONV2() string {
 	return e.inner.GetTargetsJSONV2()
 }
 
+// SetTailnetAcceptRoutes turns this tailnet's "use subnet routes" switch on or
+// off. The routes themselves come from the peers' PrimaryRoutes in the same
+// tsnet Status() poll the runtime-state view already uses.
+func (e *MultiProxyEngine) SetTailnetAcceptRoutes(identifier string, enabled bool) error {
+	if e == nil || e.inner == nil {
+		return errors.New("engine not initialized")
+	}
+	return e.inner.SetTailnetAcceptRoutes(identifier, enabled)
+}
+
+// GetSubnetRoutesJSON lists the routes currently accepted from tailnet peers,
+// plus exact-prefix conflicts, as
+// {"accepted":[{"prefix","tailnetId","peer"}],"conflicts":[{"prefix","candidates":[{"tailnetId","peer","chosen"}]}]}.
+func (e *MultiProxyEngine) GetSubnetRoutesJSON() string {
+	if e == nil || e.inner == nil {
+		return `{"accepted":[],"conflicts":[]}`
+	}
+	return e.inner.GetSubnetRoutesJSON()
+}
+
 func (e *MultiProxyEngine) ForgetTailnet(identifier string) error {
 	return e.inner.ForgetTailnet(identifier)
 }

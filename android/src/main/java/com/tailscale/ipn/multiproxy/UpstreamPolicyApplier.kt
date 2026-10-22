@@ -58,12 +58,30 @@ class UpstreamPolicyApplier(
   }
 
   fun apply(engine: MultiProxyEngine) {
+    syncAcceptRoutes(engine)
     val desired = upstreams.registrationOrder()
     removeStale(engine, desired)
     register(engine, desired)
     applyPolicy(engine)
     applySOCKS5Listeners(engine)
     applyInboundListeners(engine)
+  }
+
+  /**
+   * Re-applies each tailnet's saved "use subnet routes" switch to a running engine. Tailnets added
+   * after this call (reconstructEngine, provisioning, re-enabling) set their own flag; a tailnet
+   * that is not registered yet is ignored.
+   */
+  private fun syncAcceptRoutes(engine: MultiProxyEngine) {
+    for (profile in profiles.getProfilesImmediate()) {
+      try {
+        engine.setTailnetAcceptRoutes(profile.id, profile.enabled && profile.acceptRoutes)
+      } catch (e: Exception) {
+        if (e.message?.contains("not found", ignoreCase = true) != true) {
+          TSLog.e(TAG, "could not set subnet routes for ${profile.id}: $e")
+        }
+      }
+    }
   }
 
   /**
@@ -192,13 +210,17 @@ class UpstreamPolicyApplier(
   }
 
   /**
-   * Resolves each binding's package to a UID and installs the resulting policy.
+   * Resolves each binding's package to a UID and installs the resulting policy, including the
+   * accepted subnet routes that must beat the broad LAN-stays-direct rule.
    *
    * Package to UID is resolved here rather than stored, because a UID is only stable until the app
    * is reinstalled while the binding is meant to outlive that. A binding whose package is no longer
    * installed is dropped for this session; the row stays, so reinstalling the app restores it.
+   *
+   * Public because the subnet-route poll calls it when the engine's table changes, without
+   * re-registering every upstream.
    */
-  private fun applyPolicy(engine: MultiProxyEngine) {
+  fun applyPolicy(engine: MultiProxyEngine) {
     val entries = JSONArray()
     for ((packageName, binding) in bindings.getAllImmediate()) {
       val uid =
@@ -229,13 +251,34 @@ class UpstreamPolicyApplier(
           if (settings.broadCaptureEnabled) Libtailscale.multiProxyDirectUpstreamID() else ""
         }
 
+    // Accepted subnet routes are inserted ahead of the broad LAN-stays-direct
+    // rule; otherwise a 192.168.x accepted route would match that rule first
+    // and be sent direct instead of through its tailnet.
+    val subnets = JSONArray()
+    try {
+      val accepted = JSONObject(engine.getSubnetRoutesJSON()).optJSONArray("accepted")
+      if (accepted != null) {
+        for (i in 0 until accepted.length()) {
+          val route = accepted.getJSONObject(i)
+          val prefix = route.optString("prefix")
+          val upstream = route.optString("tailnetId")
+          if (prefix.isNotEmpty() && upstream.isNotEmpty()) {
+            subnets.put(JSONObject().put("prefix", prefix).put("upstream", upstream))
+          }
+        }
+      }
+    } catch (e: Exception) {
+      TSLog.e(TAG, "could not read accepted subnet routes: $e")
+    }
+
     val policy =
         try {
-          Libtailscale.buildAppBindingPolicyJSON(
+          Libtailscale.buildAppBindingPolicyJSONWithSubnets(
               entries.toString(),
               defaultUpstream,
               settings.defaultDNSUpstreamId,
-              settings.lanExclusionEnabled)
+              settings.lanExclusionEnabled,
+              subnets.toString())
         } catch (e: Exception) {
           TSLog.e(TAG, "could not build routing policy: $e")
           return

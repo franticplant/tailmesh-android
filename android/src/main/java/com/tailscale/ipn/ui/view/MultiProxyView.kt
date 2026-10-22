@@ -253,6 +253,22 @@ fun MultiProxyView(
             if (state.exitNodeIp.isNotBlank()) {
               Text("Exit node: " + state.exitNodeIp)
             }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Column(modifier = Modifier.weight(1f)) {
+                Text("Use subnet routes")
+                Text(
+                    "Reach the subnets this tailnet's peers advertise.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+              }
+              Switch(
+                  checked = state.profile.acceptRoutes,
+                  onCheckedChange = { viewModel.setAcceptRoutes(state.profile.id, it) },
+              )
+            }
             state.lastError?.let {
               Text(
                   "Error: $it",

@@ -180,6 +180,18 @@ object MultiProxySessionCoordinator {
   private val _exitNodeIps = MutableStateFlow<Map<String, String>>(emptyMap())
   val exitNodeIps: StateFlow<Map<String, String>> = _exitNodeIps.asStateFlow()
 
+  // Accepted subnet routes and exact-prefix conflicts, from the engine's own
+  // table (Engine.GetSubnetRoutesJSON). Used by the tailnet cards, remote
+  // control and Diagnostics, and to notice when the VPN's route table needs
+  // rebuilding after a netmap adds or removes a route.
+  private val _subnetRoutes = MutableStateFlow(SubnetRoutesSnapshot())
+  val subnetRoutes: StateFlow<SubnetRoutesSnapshot> = _subnetRoutes.asStateFlow()
+
+  // The route key the live VPN was built with. Null means "not observed yet";
+  // a change from null to a non-empty set also needs a rebuild, because the
+  // VPN was built before the first netmap arrived.
+  private var lastSubnetRouteKey: String? = null
+
   // Address crossovers: a real (non-synthetic) Tailscale IP was claimed by
   // more than one active tailnet at once and the engine picked one
   // best-effort. Kept as a small accumulating log (not a keyed map like
@@ -242,6 +254,7 @@ object MultiProxySessionCoordinator {
 
   fun bind(session: MultiProxySession) {
     if (boundSession === session && pollJob?.isActive == true) return
+    if (boundSession !== session) lastSubnetRouteKey = null
     boundSession = session
     pollJob?.cancel()
     pollJob =
@@ -631,6 +644,17 @@ object MultiProxySessionCoordinator {
             }
           }
           session.profileRepository.updateProfile(profile.copy(enabled = enabled))
+          // A disabled tailnet must not keep accepting routes; re-enabling
+          // restores the saved per-tailnet preference.
+          session.engine?.let { engine ->
+            try {
+              engine.setTailnetAcceptRoutes(id, enabled && profile.acceptRoutes)
+            } catch (e: Exception) {
+              if (e.message?.contains("not found", ignoreCase = true) != true) {
+                TSLog.e("MultiProxySession", "could not set subnet routes for $id: $e")
+              }
+            }
+          }
           clearError(id)
           // A SOCKS5 listener configured to hand out this tailnet is a
           // "workload identity" the same way an app is: it should stop
@@ -648,6 +672,31 @@ object MultiProxySessionCoordinator {
           }
         } catch (e: Exception) {
           setError(id, e.message ?: "Failed to ${if (enabled) "enable" else "disable"} Tailnet")
+        }
+      }
+    }
+  }
+
+  /**
+   * Turns a tailnet's "use subnet routes" switch on or off. Persisted first, then pushed into the
+   * running engine; the 1s route poll notices the resulting table change, updates the policy and
+   * rebuilds the TUN if one is up.
+   */
+  fun setAcceptRoutes(session: MultiProxySession, id: String, enabled: Boolean) {
+    bind(session)
+    session.app.applicationScope.launch {
+      mutationMutex.withLock {
+        val profile = session.profileRepository.getProfileImmediate(id) ?: return@withLock
+        session.profileRepository.updateProfile(profile.copy(acceptRoutes = enabled))
+        val engine = session.engine ?: return@withLock
+        try {
+          engine.setTailnetAcceptRoutes(id, enabled && profile.enabled)
+        } catch (e: Exception) {
+          // The tailnet may not be registered in the engine yet (disabled,
+          // still provisioning). The saved preference is applied when it is.
+          if (e.message?.contains("not found", ignoreCase = true) != true) {
+            setError(id, e.message ?: "Failed to change subnet routes")
+          }
         }
       }
     }
@@ -729,6 +778,8 @@ object MultiProxySessionCoordinator {
       _runtimeStates.value = emptyMap()
       _machineNames.value = emptyMap()
       _exitNodeIps.value = emptyMap()
+      _subnetRoutes.value = SubnetRoutesSnapshot()
+      lastSubnetRouteKey = null
       return
     }
 
@@ -765,6 +816,34 @@ object MultiProxySessionCoordinator {
               snapshot.exitNodeIp.takeIf { it.isNotBlank() }?.let { snapshot.tailnetId to it }
             }
             .toMap()
+
+    val subnetSnapshot =
+        try {
+          json.decodeFromString<SubnetRoutesSnapshot>(engine.getSubnetRoutesJSON())
+        } catch (e: Exception) {
+          TSLog.e("MultiProxySession", "Failed to decode subnet routes: ${e.message}")
+          SubnetRoutesSnapshot()
+        }
+    _subnetRoutes.value = subnetSnapshot
+    val routeKey = subnetSnapshot.routeKey()
+    val previousRouteKey = lastSubnetRouteKey
+    if (routeKey != previousRouteKey) {
+      lastSubnetRouteKey = routeKey
+      // The policy's LAN-stays-direct rule would otherwise send an accepted
+      // private-range subnet direct, so the route rules have to be replaced
+      // together with the engine's table.
+      try {
+        session.upstreamPolicyApplier.applyPolicy(engine)
+      } catch (e: Exception) {
+        TSLog.e("MultiProxySession", "could not apply subnet route policy: $e")
+      }
+      // The TUN's route list is fixed at establish() time. Rebuild it when
+      // the accepted set changes (including becoming empty, so a removed
+      // route stops being blackholed into the VPN). No-op in Proxy-Only mode.
+      if (previousRouteKey != null || routeKey.isNotEmpty()) {
+        rebuildMultiProxyTunForRoutes(session)
+      }
+    }
 
     // Mirrors the tailnet bootstrap-key retirement below, for an exit-node
     // upstream's own dedicated identity: once a live poll (not just a
@@ -805,6 +884,20 @@ object MultiProxySessionCoordinator {
         }
       }
     }
+  }
+
+  /**
+   * Rebuilds just the VPN interface (not the engine) after the accepted-subnet set changed. The
+   * engine and its tsnet nodes stay up, so the routes it just learned are still there when the new
+   * TUN is built. Proxy-Only has no TUN, and a stopped/standard session has nothing to rebuild.
+   */
+  private fun rebuildMultiProxyTunForRoutes(session: MultiProxySession) {
+    if (session.app.isProxyOnlyMode()) return
+    if (IPNService.runtimeMode.value != VpnRuntimeMode.MULTIPROXY) return
+    val intent =
+        Intent(session.app, IPNService::class.java)
+            .setAction(IPNService.ACTION_REBUILD_MULTIPROXY_TUN)
+    session.app.startService(intent)
   }
 
   // Only the fields UpstreamHealthLine (UpstreamsView.kt) actually renders:

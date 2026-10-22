@@ -73,6 +73,9 @@ type EngineCallback interface {
 type subnetRoute struct {
 	Prefix    netip.Prefix
 	TailnetID string
+	// Peer is the hostname of the peer that advertised the route, when known.
+	// It is informational only; routing uses Prefix and TailnetID.
+	Peer string
 }
 
 type engineEventKind int
@@ -156,6 +159,15 @@ type TailnetRuntime struct {
 	Cancel  context.CancelFunc
 	Wg      *sync.WaitGroup
 	Enabled bool
+
+	// AcceptRoutes is the per-tailnet "use subnet routes" switch. It does not
+	// affect what the netmap advertises; it only decides whether
+	// AdvertisedRoutes below is included in the engine's route table.
+	AcceptRoutes bool
+	// AdvertisedRoutes is every prefix this tailnet's peers currently serve as
+	// primary subnet routers, mapped to the advertising peer's hostname. It is
+	// refreshed from the same Status() call pollTailnetStatus already makes.
+	AdvertisedRoutes map[netip.Prefix]string
 }
 
 type TailnetConfig struct {
@@ -692,6 +704,12 @@ func (e *Engine) setTailnetEnabledLocked(identifier string, enabled bool) error 
 		srv := rt.Srv
 		rt.Srv = nil
 		rt.Enabled = false
+		// A stopped tailnet has no peers to serve its accepted routes, and
+		// leaving them in the table would make those destinations fail closed
+		// (or, worse, look like they still belong to this tailnet) until the
+		// engine restarted.
+		rt.AdvertisedRoutes = nil
+		e.rebuildSubnetsLocked()
 		e.mu.Unlock()
 
 		if wg != nil {
@@ -790,13 +808,9 @@ func (e *Engine) RemoveTailnet(identifier string) error {
 	}
 
 	e.mu.Lock()
-	filtered := e.subnets[:0]
-	for _, sr := range e.subnets {
-		if sr.TailnetID != identifier {
-			filtered = append(filtered, sr)
-		}
-	}
-	e.subnets = filtered
+	// The tailnet is already gone from e.tailnets, so the rebuild drops every
+	// route it owned while keeping the other tailnets' accepted routes.
+	e.rebuildSubnetsLocked()
 
 	if e.exitNodeTailnet == identifier {
 		e.exitNodeTailnet = ""
@@ -838,9 +852,29 @@ func (e *Engine) pollTailnetStatus(ctx context.Context, wg *sync.WaitGroup, uid 
 			}
 
 			var snapshot []TargetRecord
+			advertisedRoutes := make(map[netip.Prefix]string)
 			for _, peer := range status.Peer {
 				if peer.ID == "" {
 					continue
+				}
+
+				if peer.PrimaryRoutes != nil {
+					host := peer.HostName
+					if host == "" {
+						host = strings.TrimSuffix(peer.DNSName, ".")
+					}
+					for _, prefix := range peer.PrimaryRoutes.All() {
+						prefix = prefix.Masked()
+						if !prefix.IsValid() {
+							continue
+						}
+						// Two peers in one tailnet can advertise the same
+						// prefix while control is moving it; keep the choice
+						// stable rather than depending on map order.
+						if existing, ok := advertisedRoutes[prefix]; !ok || host < existing {
+							advertisedRoutes[prefix] = host
+						}
+					}
 				}
 
 				key := TargetKey{
@@ -923,6 +957,8 @@ func (e *Engine) pollTailnetStatus(ctx context.Context, wg *sync.WaitGroup, uid 
 					snapshot = append(snapshot, rec)
 				}
 			}
+
+			e.setTailnetAdvertisedRoutes(uid, advertisedRoutes)
 
 			accepted := e.updateTailnetSnapshot(uid, snapshot)
 

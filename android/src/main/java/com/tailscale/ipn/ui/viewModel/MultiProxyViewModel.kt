@@ -191,6 +191,10 @@ class MultiProxyViewModel : ViewModel() {
     session?.let { MultiProxySessionCoordinator.setEnabled(it, id, enabled) }
   }
 
+  fun setAcceptRoutes(id: String, enabled: Boolean) {
+    session?.let { MultiProxySessionCoordinator.setAcceptRoutes(it, id, enabled) }
+  }
+
   fun deleteProfile(id: String) {
     session?.let { MultiProxySessionCoordinator.forget(it, id) }
   }

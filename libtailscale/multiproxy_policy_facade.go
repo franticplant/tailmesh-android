@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/netip"
 	"sync/atomic"
 
 	"tailscale.com/net/netns"
@@ -452,6 +453,18 @@ func (e *MultiProxyEngine) SetUIDResolver(r MultiProxyUIDResolver) {
 // here are per-app, not per-destination - a future per-app "still tunnel LAN
 // traffic" override would need its own rule ahead of this one).
 func BuildAppBindingPolicyJSON(bindingsJSON, defaultUpstream, defaultDNSUpstream string, excludeLAN bool) (string, error) {
+	return BuildAppBindingPolicyJSONWithSubnets(
+		bindingsJSON, defaultUpstream, defaultDNSUpstream, excludeLAN, "")
+}
+
+// BuildAppBindingPolicyJSONWithSubnets is BuildAppBindingPolicyJSON plus the
+// routes accepted from tailnet subnet routers. subnetsJSON is
+// [{"prefix":"192.168.1.0/24","upstream":"regular-2e2c"}...]; each becomes a
+// route rule ahead of the broad LAN-stays-direct rule, so a more specific
+// accepted prefix reaches its tailnet instead of being sent direct. It stays
+// behind the per-app "tunnel LAN" overrides, which are explicit user choices
+// about a particular app.
+func BuildAppBindingPolicyJSONWithSubnets(bindingsJSON, defaultUpstream, defaultDNSUpstream string, excludeLAN bool, subnetsJSON string) (string, error) {
 	var bindings []struct {
 		AppUID      int32  `json:"appUid"`
 		Upstream    string `json:"upstream"`
@@ -467,6 +480,39 @@ func BuildAppBindingPolicyJSON(bindingsJSON, defaultUpstream, defaultDNSUpstream
 		if err := json.Unmarshal([]byte(bindingsJSON), &bindings); err != nil {
 			return "", fmt.Errorf("parsing app bindings: %w", err)
 		}
+	}
+
+	var subnets []struct {
+		Prefix   string `json:"prefix"`
+		Upstream string `json:"upstream"`
+	}
+	if subnetsJSON != "" {
+		if err := json.Unmarshal([]byte(subnetsJSON), &subnets); err != nil {
+			return "", fmt.Errorf("parsing accepted subnets: %w", err)
+		}
+	}
+
+	type acceptedRoute struct {
+		prefix   netip.Prefix
+		upstream string
+	}
+	routes := make([]acceptedRoute, 0, len(subnets))
+	for _, s := range subnets {
+		prefix, err := netip.ParsePrefix(s.Prefix)
+		if err != nil {
+			return "", fmt.Errorf("parsing accepted subnet %q: %w", s.Prefix, err)
+		}
+		if s.Upstream == "" {
+			continue
+		}
+		routes = append(routes, acceptedRoute{
+			prefix:   prefix.Masked(),
+			upstream: s.Upstream,
+		})
+	}
+	acceptedPrefixes := make([]netip.Prefix, 0, len(routes))
+	for _, r := range routes {
+		acceptedPrefixes = append(acceptedPrefixes, r.prefix)
 	}
 
 	policy := multiproxy.Policy{}
@@ -489,6 +535,34 @@ func BuildAppBindingPolicyJSON(bindingsJSON, defaultUpstream, defaultDNSUpstream
 			Action:      multiproxy.ActionRoute,
 			Upstream:    multiproxy.UpstreamID(b.Upstream),
 			DNSUpstream: multiproxy.UpstreamID(b.DNSUpstream),
+		})
+	}
+
+	// An explicit per-app binding still wins over a globally accepted subnet:
+	// binding an app to Work should not silently send it through Homelab just
+	// because Homelab advertises a route that happens to cover the destination.
+	// One rule per binding, scoped to the accepted prefixes, is enough; it sits
+	// ahead of the global accepted-route rules below.
+	if len(acceptedPrefixes) > 0 {
+		for _, b := range bindings {
+			if b.Upstream == "" {
+				continue
+			}
+			policy.Rules = append(policy.Rules, multiproxy.Rule{
+				Name:        fmt.Sprintf("app %d over accepted subnets", b.AppUID),
+				Selector:    multiproxy.Selector{AppUIDs: []int32{b.AppUID}, DstPrefixes: acceptedPrefixes},
+				Action:      multiproxy.ActionRoute,
+				Upstream:    multiproxy.UpstreamID(b.Upstream),
+				DNSUpstream: multiproxy.UpstreamID(b.DNSUpstream),
+			})
+		}
+	}
+	for _, r := range routes {
+		policy.Rules = append(policy.Rules, multiproxy.Rule{
+			Name:     "accepted subnet " + r.prefix.String(),
+			Selector: multiproxy.Selector{DstPrefixes: []netip.Prefix{r.prefix}},
+			Action:   multiproxy.ActionRoute,
+			Upstream: multiproxy.UpstreamID(r.upstream),
 		})
 	}
 

@@ -89,6 +89,7 @@ class RemoteMethodsTest {
             "peers",
             "states",
             "addressConflicts",
+            "subnetRoutes",
             "exitNodeCandidates",
             "routable",
             "stats",

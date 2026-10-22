@@ -7,6 +7,9 @@ data class TailnetProfile(
     val id: String,
     val displayName: String,
     val enabled: Boolean,
+    // Use the subnet routes this tailnet's peers advertise (Tailscale's
+    // --accept-routes). Off by default, like upstream.
+    val acceptRoutes: Boolean = false,
     val provisioningState: ProvisioningState,
     val createdAt: Long,
     val updatedAt: Long,

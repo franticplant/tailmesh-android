@@ -44,6 +44,7 @@ class ProfileRepository(context: Context) {
                     id = string(TailnetDatabaseHelper.COL_ID),
                     displayName = string(TailnetDatabaseHelper.COL_DISPLAY_NAME),
                     enabled = int(TailnetDatabaseHelper.COL_ENABLED) == 1,
+                    acceptRoutes = int(TailnetDatabaseHelper.COL_ACCEPT_ROUTES) == 1,
                     provisioningState =
                         ProvisioningState.valueOf(string(TailnetDatabaseHelper.COL_PROV_STATE)),
                     createdAt =
@@ -130,6 +131,7 @@ class ProfileRepository(context: Context) {
         put(TailnetDatabaseHelper.COL_ID, profile.id)
         put(TailnetDatabaseHelper.COL_DISPLAY_NAME, profile.displayName)
         put(TailnetDatabaseHelper.COL_ENABLED, if (profile.enabled) 1 else 0)
+        put(TailnetDatabaseHelper.COL_ACCEPT_ROUTES, if (profile.acceptRoutes) 1 else 0)
         put(TailnetDatabaseHelper.COL_PROV_STATE, profile.provisioningState.name)
         put(TailnetDatabaseHelper.COL_CREATED_AT, profile.createdAt)
         put(TailnetDatabaseHelper.COL_UPDATED_AT, profile.updatedAt)
