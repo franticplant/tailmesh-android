@@ -137,6 +137,8 @@ class App : UninitializedApp(), libtailscale.AppContext, ViewModelStoreOwner {
         getString(R.string.health_channel_name),
         getString(R.string.health_channel_description),
         NotificationManagerCompat.IMPORTANCE_HIGH)
+    SpeedMeter.init(this)
+    SpeedMeter.startIfEnabled(this)
   }
 
   override fun onTerminate() {

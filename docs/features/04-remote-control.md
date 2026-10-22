@@ -15,19 +15,21 @@ Tailscale client through its LocalAPI:
 
 | Area | Read | Change |
 |---|---|---|
-| Overview | `app.status` | `multitailnet.start` / `stop`, `standard.connect` / `disconnect`, `vpn.restart` |
+| Overview | `app.status` | `multitailnet.start` / `stop` / `reconcile`, `standard.connect` / `disconnect`, `vpn.restart` |
 | Tailnets | `tailnets.list`, `peers`, `states`, `addressConflicts`, `exitNodeCandidates` | `tailnets.add`, `importRegular`, `setEnabled`, `rename`, `forget`, `setExitNode` |
 | Upstreams | `upstreams.list` (secrets redacted), `routable`, `stats`, `exitNodeStates` | `upstreams.saveSocks5`, `saveWireGuard`, `saveExitNode`, `setEnabled`, `delete` |
 | Routing | `routing.get` | `routing.setDefaultUpstream`, `setDefaultDNSUpstream`, `setBroadCapture`, `setLanExclusion` |
 | Apps | `apps.list` | `apps.bind`, `unbind`, `setDNSUpstream`, `setTunnelLAN` |
-| Listeners | `listeners.socks5.list`, `listeners.inbound.list` | `…save`, `…setEnabled`, `…delete` for both |
+| Listeners | `listeners.socks5.list`, `listeners.inbound.list` (why one is not registered; inbound forward counts and last error) | `…save`, `…setEnabled`, `…delete` for both |
+| Device | `device.networks` (Android's networks and routes, and which one a destination would use), `device.traffic` (what the speed meter counts) | |
 | Diagnostics | `diagnostics.snapshot`, `events`, `dnsLog`, `routeDecisions`, `exports` | `diagnostics.setDNSQueryLog`, `setAdvanced`, `setSampleInterval`, `reset`, `exportBundle` |
 | Packet capture | `capture.status`, `capture.list` | `capture.start` (all / apps / listeners), `capture.stop`, `capture.delete` |
-| Settings | `settings.get` | `settings.setPublicDoH`, `settings.setDebugLogging`, `settings.setProxyOnly` |
+| Settings | `settings.get` | `settings.setPublicDoH`, `settings.setDebugLogging`, `settings.setProxyOnly`, `settings.setSpeedMeter` |
 | Standard mode | `tailscale.localapi.get` | `tailscale.localapi.call` (prefs, profiles, exit nodes, login, logout, …) |
 
 `GET /v1/methods` returns the live catalog, with each method's parameters and whether it changes
-state. Beyond the catalog:
+state. A call with an argument the method does not take is refused, with the accepted ones listed,
+rather than run with a default. Beyond the catalog:
 
 - `GET /v1/logs` — app and Go engine logs, filterable, and with `follow=1` a live stream.
 - `GET /v1/files?path=` — download a capture or a diagnostics export.

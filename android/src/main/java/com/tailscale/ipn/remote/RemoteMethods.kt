@@ -18,6 +18,7 @@ import com.tailscale.ipn.ui.viewModel.DNSSettingsViewModel
 import com.tailscale.ipn.ui.viewModel.SettingsViewModel
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import libtailscale.Libtailscale
 import org.json.JSONArray
@@ -952,6 +953,7 @@ object RemoteMethods {
                   app.decryptFromPref(SettingsViewModel.DEBUG_DNS_QUERY_LOGGING_KEY),
               )
               .put("proxyOnly", app.isProxyOnlyMode())
+              .put("speedMeter", com.tailscale.ipn.SpeedMeter.enabled.value)
         })
     add(
         Method(
@@ -1017,6 +1019,20 @@ object RemoteMethods {
         })
     add(
         Method(
+            "settings.setSpeedMeter",
+            true,
+            "The download/upload speed in the status bar. Android may refuse to start it while " +
+                "the app is in the background; \"running\" says whether it did, and it starts " +
+                "with the app otherwise.",
+            mapOf("enabled" to "bool"),
+        ) {
+          val meter = com.tailscale.ipn.SpeedMeter
+          meter.setEnabled(App.get(), it.bool("enabled"))
+          delay(500)
+          JSONObject().put("enabled", meter.enabled.value).put("running", meter.running)
+        })
+    add(
+        Method(
             "device.networks",
             false,
             "Every network Android has (interface, transports, routes, whether a socket can be " +
@@ -1046,6 +1062,36 @@ object RemoteMethods {
           }
           out
         })
+    add(
+        Method(
+            "device.traffic",
+            false,
+            "What the status-bar speed meter sees: download and upload rate in bytes per second " +
+                "and the non-VPN networks counted (interface, transport, byte counters). Only " +
+                "while the speed meter runs.",
+        ) {
+          val meter = com.tailscale.ipn.SpeedMeter
+          val r = meter.last
+          JSONObject()
+              .put("running", meter.running)
+              .put("rxPerSec", r?.rxPerSec)
+              .put("txPerSec", r?.txPerSec)
+              .put("at", r?.at)
+              .put(
+                  "networks",
+                  JSONArray(
+                      (r?.networks ?: emptyList()).map { n ->
+                        JSONObject()
+                            .put("iface", n.iface)
+                            .put("transport", n.transport)
+                            .put("rxBytes", n.rxBytes)
+                            .put("txBytes", n.txBytes)
+                      }))
+        })
+
+    // -------------------------------------------------------------------
+    // standard-mode Tailscale (everything its screens do goes through this)
+    // -------------------------------------------------------------------
     add(
         Method(
             "tailscale.localapi.get",

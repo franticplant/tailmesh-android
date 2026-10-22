@@ -582,4 +582,12 @@
     <string name="inbound_listener_status_off">Off</string>
     <string name="inbound_listener_invalid">That will not work</string>
 
+    <!-- Status-bar speed meter -->
+    <string name="speed_meter">Speed in status bar</string>
+    <string name="speed_meter_subtitle">Download over upload next to the clock, for Wi-Fi and mobile data, with or without the VPN</string>
+    <string name="speed_meter_unsupported">Needs Android 12 or later</string>
+    <string name="speed_meter_channel">Network speed</string>
+    <string name="speed_meter_channel_description">Shows the download and upload speed in the status bar</string>
+    <string name="speed_meter_mobile">Mobile data</string>
+    <string name="speed_meter_no_network">No network</string>
 </resources>

@@ -24,6 +24,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.SpanStyle
@@ -35,6 +36,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tailscale.ipn.BuildConfig
 import com.tailscale.ipn.R
+import com.tailscale.ipn.SpeedMeter
 import com.tailscale.ipn.mdm.AlwaysNeverUserDecides
 import com.tailscale.ipn.mdm.MDMSettings
 import com.tailscale.ipn.mdm.ShowHide
@@ -72,6 +74,7 @@ fun SettingsView(
   val debugDNSConfigLogging by viewModel.debugDNSConfigLogging.collectAsState()
   val debugDNSQueryLogging by viewModel.debugDNSQueryLogging.collectAsState()
   var showDisableLoggingDialog by remember { mutableStateOf(false) }
+  val context = LocalContext.current
   var showControlProxyDialog by remember { mutableStateOf(false) }
   var controlProxyDraft by remember(controlProxyURL) { mutableStateOf(controlProxyURL) }
 
@@ -164,6 +167,17 @@ fun SettingsView(
                       "upstreams and listeners still work",
               isOn = viewModel.userspaceOnlyMode.collectAsState().value,
               onToggle = { viewModel.toggleUserspaceOnlyMode() })
+
+          Lists.ItemDivider()
+          Setting.Switch(
+              R.string.speed_meter,
+              subtitle =
+                  stringResource(
+                      if (SpeedMeter.supported) R.string.speed_meter_subtitle
+                      else R.string.speed_meter_unsupported),
+              isOn = SpeedMeter.enabled.collectAsState().value,
+              enabled = SpeedMeter.supported,
+              onToggle = { SpeedMeter.setEnabled(context, it) })
 
           Lists.ItemDivider()
           Setting.Switch(

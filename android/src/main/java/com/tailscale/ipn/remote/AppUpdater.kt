@@ -213,6 +213,9 @@ object AppUpdater {
   class PackageReplacedReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
       if (intent.action != Intent.ACTION_MY_PACKAGE_REPLACED) return
+      // App.onCreate tried already, but from the background, where Android may refuse it; this
+      // broadcast is allowed to start foreground services.
+      com.tailscale.ipn.SpeedMeter.startIfEnabled(context)
       val prefs = context.getSharedPreferences("vpn_mode", Context.MODE_PRIVATE)
       if (!prefs.getBoolean("wantRunning", false)) return
       val multiTailnet = prefs.getString("selectedMode", "STANDARD") == "MULTIPROXY"

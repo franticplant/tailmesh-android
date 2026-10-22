@@ -99,6 +99,8 @@ class RemoteMethodsTest {
             "dnsLog",
             "routeDecisions",
             "exports",
+            "networks",
+            "traffic",
         )
     reads.forEach { assertTrue("unexpected read method verb $it", it in allowed) }
   }
