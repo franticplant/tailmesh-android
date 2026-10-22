@@ -104,7 +104,12 @@ object RemoteMethods {
                 "Install the APK uploaded with POST /v1/app/update (tailmesh-ctl update). Needs " +
                     "\"Allow remote updates\" on the phone; refuses another package, another signing " +
                     "key or an older version, since getting past those wipes the app's data.",
-                mapOf("path" to "the uploaded APK, as POST /v1/app/update passes it"),
+                // Both are what POST /v1/app/update passes (remotectl.handleAppUpdate); undeclared,
+                // the unknown-argument check refuses every update.
+                mapOf(
+                    "path" to "the uploaded APK, as POST /v1/app/update passes it",
+                    "sha256" to "its SHA-256, for the log",
+                ),
             ) {
               withContext(Dispatchers.IO) { AppUpdater.install(it.str("path")) }
             })

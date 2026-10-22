@@ -1123,6 +1123,8 @@ func (s *Server) handleAppUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The app refuses arguments a method does not declare: adding one here
+	// means adding it to app.update's params in RemoteMethods.kt too.
 	args, _ := json.Marshal(map[string]string{"path": path, "sha256": sum})
 	result, err := s.callWithTimeout("app.update", string(args))
 	if err != nil {
