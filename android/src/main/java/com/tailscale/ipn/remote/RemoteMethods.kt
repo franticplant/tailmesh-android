@@ -627,7 +627,7 @@ object RemoteMethods {
             "listeners.inbound.list",
             false,
             "Tailnet-facing inbound listeners: whether each is live and why not, connections " +
-                "accepted and failed, bytes (counted when a connection closes), last forward error.",
+                "accepted and failed, bytes, last forward error.",
         ) {
           val engineRows = byId(session.engine?.getInboundListenersJSON())
           val errors = session.upstreamPolicyApplier.listenerErrors

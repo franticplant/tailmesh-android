@@ -418,16 +418,14 @@ func (l *socks5Listener) handleConnect(conn net.Conn, p Provider, host string, p
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		n, _ := io.Copy(upstreamConn, clientToUpstreamR)
-		stats.addBytesOut(n)
+		_, _ = copyCounting(upstreamConn, clientToUpstreamR, stats.addBytesOut)
 		if cw, ok := upstreamConn.(interface{ CloseWrite() error }); ok {
 			cw.CloseWrite()
 		}
 	}()
 	go func() {
 		defer wg.Done()
-		n, _ := io.Copy(conn, upstreamToClientR)
-		stats.addBytesIn(n)
+		_, _ = copyCounting(conn, upstreamToClientR, stats.addBytesIn)
 		if cw, ok := conn.(interface{ CloseWrite() error }); ok {
 			cw.CloseWrite()
 		}

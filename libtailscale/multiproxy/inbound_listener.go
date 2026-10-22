@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"sort"
@@ -371,8 +370,14 @@ func (l *inboundListener) handleConn(conn net.Conn) {
 	// handleConnect: a half-closed peer that keeps the other direction idle
 	// open must not outlive the listener's own accounting of the connection.
 	done := make(chan struct{}, 2)
-	go func() { n, _ := io.Copy(target, conn); l.stats.bytesIn.Add(n); done <- struct{}{} }()
-	go func() { n, _ := io.Copy(conn, target); l.stats.bytesOut.Add(n); done <- struct{}{} }()
+	go func() {
+		_, _ = copyCounting(target, conn, func(n int64) { l.stats.bytesIn.Add(n) })
+		done <- struct{}{}
+	}()
+	go func() {
+		_, _ = copyCounting(conn, target, func(n int64) { l.stats.bytesOut.Add(n) })
+		done <- struct{}{}
+	}()
 	<-done
 }
 

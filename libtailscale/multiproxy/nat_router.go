@@ -594,20 +594,22 @@ func (e *Engine) handleTCPConnection(r *tcp.ForwarderRequest) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			n, _ := io.Copy(conn, gonetConn)
-			stats.addBytesOut(n)
-			uid.addBytesOut(n)
-			uu.addBytesOut(n)
+			_, _ = copyCounting(conn, gonetConn, func(n int64) {
+				stats.addBytesOut(n)
+				uid.addBytesOut(n)
+				uu.addBytesOut(n)
+			})
 			if cw, ok := conn.(interface{ CloseWrite() error }); ok {
 				cw.CloseWrite()
 			}
 		}()
 		go func() {
 			defer wg.Done()
-			n, _ := io.Copy(gonetConn, conn)
-			stats.addBytesIn(n)
-			uid.addBytesIn(n)
-			uu.addBytesIn(n)
+			_, _ = copyCounting(gonetConn, conn, func(n int64) {
+				stats.addBytesIn(n)
+				uid.addBytesIn(n)
+				uu.addBytesIn(n)
+			})
 			gonetConn.CloseRead()
 		}()
 		wg.Wait()
