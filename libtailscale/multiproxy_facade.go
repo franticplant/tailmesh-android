@@ -4,6 +4,7 @@
 package libtailscale
 
 import (
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -386,6 +387,17 @@ func (e *MultiProxyEngine) ApplyDirectLinks(settingOn bool, inventoryJSON string
 		return "{}"
 	}
 	return e.inner.ApplyDirectLinks(settingOn, inventoryJSON)
+}
+
+// ProbeDirectLinksIPv6JSON reports which network an IPv6 packet from a
+// magicsock-like socket would leave through right now. See
+// multiproxy.ProbeIPv6Path.
+func (e *MultiProxyEngine) ProbeDirectLinksIPv6JSON(inventoryJSON string) string {
+	b, err := json.Marshal(multiproxy.ProbeIPv6Path(inventoryJSON))
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
 }
 
 // GetDirectLinksJSON returns the last ApplyDirectLinks state with the

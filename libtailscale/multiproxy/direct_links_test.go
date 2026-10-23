@@ -5,6 +5,7 @@ package multiproxy
 
 import (
 	"encoding/json"
+	"net/netip"
 	"reflect"
 	"testing"
 
@@ -164,5 +165,30 @@ func TestApplyDirectLinks(t *testing.T) {
 	e.Close()
 	if d, _ := netns.AndroidBindToActiveNetworkDisabled(); d {
 		t.Error("Close left the netns flag set")
+	}
+}
+
+func TestNetworkForAddr(t *testing.T) {
+	nets := []InventoryNetwork{
+		invNet("rmnet1", true, true, "0.0.0.0/0", "10.36.206.29/32"),
+		invNet("rmnet2", false, false, "::/0", "2a02:2010:14b4:9f43::/64"),
+	}
+	for addr, want := range map[string]string{
+		"2a02:2010:14b4:9f43:18e0:7ad2:c766:1abc": "rmnet2",
+		"10.36.206.29": "rmnet1",
+		"2001:db8::1":  "",
+	} {
+		if got := networkForAddr(nets, netip.MustParseAddr(addr)); got != want {
+			t.Errorf("networkForAddr(%s) = %q, want %q", addr, got, want)
+		}
+	}
+}
+
+// The probe must not panic off Android either; there it reports whatever the
+// host's routing says (or an error without IPv6).
+func TestProbeIPv6PathRuns(t *testing.T) {
+	p := ProbeIPv6Path("[]")
+	if p.LocalAddr == "" && p.Error == "" {
+		t.Errorf("probe gave neither an address nor an error: %+v", p)
 	}
 }

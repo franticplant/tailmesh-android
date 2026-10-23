@@ -556,9 +556,17 @@ object RemoteMethods {
             false,
             "Direct tailnet connections over cable or hotspot: the setting, whether sockets are " +
                 "unbound now (reason on, off-setting, off-ipv6-unsafe, off-no-network-info or " +
-                "not-running), the IPv6 networks the safety check saw, and the last rebind.",
+                "not-running), the IPv6 networks the safety check saw, and the last rebind. " +
+                "probeIpv6=true also connects a magicsock-like UDP6 socket (no packet is sent) " +
+                "and reports the source address and network the kernel picked.",
+            mapOf("probeIpv6" to "bool, default false"),
         ) {
-          stateJson(com.tailscale.ipn.multiproxy.DirectLinks.current())
+          val dl = com.tailscale.ipn.multiproxy.DirectLinks
+          val out = stateJson(dl.current())
+          if (it.optBool("probeIpv6", false)) {
+            out.put("ipv6Probe", dl.probeIPv6()?.let { raw -> JSONObject(raw) } ?: JSONObject.NULL)
+          }
+          out
         })
     add(
         Method(

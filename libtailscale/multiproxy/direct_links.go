@@ -7,12 +7,14 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"net"
 	"net/netip"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
 	"tailscale.com/tsnet"
 )
@@ -312,4 +314,66 @@ func (e *Engine) resetDirectLinks() {
 		netns.SetAppDisableAndroidBindToActiveNetwork(log.Printf, false)
 		t.applied = false
 	}
+}
+
+// IPv6PathProbe is ProbeIPv6Path's result.
+type IPv6PathProbe struct {
+	// Unbound is whether the probe socket was left unbound (the effective
+	// state at the time of the probe).
+	Unbound bool `json:"unbound"`
+	// LocalAddr is the source address the kernel picked, empty on error.
+	LocalAddr string `json:"localAddr,omitempty"`
+	// Network is the inventory network whose on-link IPv6 prefix contains
+	// LocalAddr, if any.
+	Network string `json:"network,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+// ProbeIPv6Path asks the kernel which way an IPv6 packet from a socket made
+// like magicsock's (netns: VPN-protected, bound or not per the current
+// setting) would go: it connects a UDP socket to a public IPv6 address, which
+// sends nothing, and reports the source address chosen and which network it
+// belongs to. An error such as "network is unreachable", or the app refusing
+// to bind an IPv6 socket, means IPv6 has nowhere to go.
+func ProbeIPv6Path(inventoryJSON string) IPv6PathProbe {
+	var p IPv6PathProbe
+	p.Unbound, _ = netns.AndroidBindToActiveNetworkDisabled()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	// The monitor is only a required argument; Android's netns ignores it.
+	d := netns.FromDialer(log.Printf, netmon.NewStatic(), &net.Dialer{})
+	c, err := d.DialContext(ctx, "udp6", "[2001:4860:4860::8888]:53")
+	if err != nil {
+		p.Error = err.Error()
+		return p
+	}
+	defer c.Close()
+	ap, err := netip.ParseAddrPort(c.LocalAddr().String())
+	if err != nil {
+		p.LocalAddr = c.LocalAddr().String()
+		return p
+	}
+	p.LocalAddr = ap.Addr().String()
+	var nets []InventoryNetwork
+	_ = json.Unmarshal([]byte(inventoryJSON), &nets)
+	p.Network = networkForAddr(nets, ap.Addr())
+	return p
+}
+
+// networkForAddr returns the label of the network with a non-default route
+// prefix containing a, or "".
+func networkForAddr(nets []InventoryNetwork, a netip.Addr) string {
+	best, bestBits := "", -1
+	for _, n := range nets {
+		for _, r := range n.Routes {
+			pfx, err := netip.ParsePrefix(r.CIDR)
+			if err != nil || pfx.Bits() == 0 || !pfx.Contains(a) {
+				continue
+			}
+			if pfx.Bits() > bestBits {
+				best, bestBits = n.label(), pfx.Bits()
+			}
+		}
+	}
+	return best
 }

@@ -116,6 +116,16 @@ object DirectLinks {
     }
   }
 
+  /**
+   * Which network an IPv6 packet from a magicsock-like socket would leave through right now, as the
+   * engine's raw JSON ({unbound, localAddr, network, error}); null while Multi-Tailnet is off.
+   */
+  fun probeIPv6(): String? {
+    val engine = App.get().multiProxySession.engine ?: return null
+    return engine.probeDirectLinksIPv6JSON(
+        NetworkInventory.toJson(NetworkChangeCallback.networkInventory()))
+  }
+
   /** One plain line for the Settings subtitle. */
   fun describe(s: State, enabled: Boolean): String =
       when {
