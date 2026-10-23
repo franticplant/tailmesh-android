@@ -407,6 +407,9 @@ object NetworkChangeCallback {
     // Diagnostics: capture the full network/route inventory (and, when set, a destination's on-link
     // answer) on every recompute, so an OFF/ON attribution run has it in logcat.
     logNetworkInventory(why, diagnosticDestination)
+
+    // Direct tailnet connections over cable/hotspot depend on which networks carry IPv6.
+    com.tailscale.ipn.multiproxy.DirectLinks.reevaluate(why)
   }
 
   // maybeUpdateDNSConfig will maybe update our DNS configuration based on the

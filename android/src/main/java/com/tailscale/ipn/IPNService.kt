@@ -403,6 +403,9 @@ open class IPNService : VpnService(), libtailscale.IPNService {
     NetworkChangeCallback.currentUnderlyingDnsServer()?.let { session.onUnderlyingDnsChanged(it) }
         ?: session.applyUpstreamDNS()
 
+    // Before the tailnets start, so their first sockets already follow the setting.
+    com.tailscale.ipn.multiproxy.DirectLinks.reevaluate("engine-start")
+
     session.reconstructEngine(this@IPNService.scope)
     return true
   }
@@ -419,6 +422,7 @@ open class IPNService : VpnService(), libtailscale.IPNService {
     session.engine?.stopVPN()
     session.engine?.close()
     session.engine = null
+    com.tailscale.ipn.multiproxy.DirectLinks.reevaluate("engine-stop")
 
     for (profile in session.profileRepository.getProfilesImmediate()) {
       val sourceProfileId = profile.sourceProfileId ?: continue

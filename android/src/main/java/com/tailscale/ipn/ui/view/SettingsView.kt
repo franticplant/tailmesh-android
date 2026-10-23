@@ -40,6 +40,7 @@ import com.tailscale.ipn.SpeedMeter
 import com.tailscale.ipn.mdm.AlwaysNeverUserDecides
 import com.tailscale.ipn.mdm.MDMSettings
 import com.tailscale.ipn.mdm.ShowHide
+import com.tailscale.ipn.multiproxy.DirectLinks
 import com.tailscale.ipn.ui.Links
 import com.tailscale.ipn.ui.theme.link
 import com.tailscale.ipn.ui.theme.listItem
@@ -174,6 +175,18 @@ fun SettingsView(
                       "upstreams and listeners still work",
               isOn = viewModel.userspaceOnlyMode.collectAsState().value,
               onToggle = { viewModel.toggleUserspaceOnlyMode() })
+
+          Lists.ItemDivider()
+          val directLinksOn = DirectLinks.enabled.collectAsState().value
+          val directLinksState = DirectLinks.state.collectAsState().value
+          Setting.Switch(
+              R.string.direct_links,
+              subtitle =
+                  stringResource(R.string.direct_links_subtitle) +
+                      "\n" +
+                      DirectLinks.describe(directLinksState, directLinksOn),
+              isOn = directLinksOn,
+              onToggle = { DirectLinks.setEnabled(context, it) })
 
           Lists.ItemDivider()
           Setting.Switch(

@@ -189,6 +189,10 @@ type Engine struct {
 
 	tailnets map[UpstreamID]*TailnetRuntime
 
+	// directLinks is the "direct tailnet connections over cable or hotspot"
+	// state. See direct_links.go.
+	directLinks directLinksTracker
+
 	// exitNodes holds every exit-node upstream: a dedicated tsnet.Server
 	// pinned to one peer of some tailnet via Prefs.ExitNodeIP. See
 	// upstream_exitnode.go. Guarded by mu, lifecycle guarded by
@@ -1011,6 +1015,7 @@ func (e *Engine) Close() {
 	e.mu.Unlock()
 
 	e.StopVPN()
+	e.resetDirectLinks()
 	e.closeAllSOCKS5Listeners()
 	e.closeAllInboundListeners()
 

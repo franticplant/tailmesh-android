@@ -377,6 +377,26 @@ func (e *MultiProxyEngine) GetTailnetPeersJSON(identifier string) (string, error
 	return e.inner.GetTailnetPeersJSON(identifier)
 }
 
+// ApplyDirectLinks applies the "direct tailnet connections over cable or
+// hotspot" setting against the current network inventory (the app's
+// NetworkInventory.toJson output) and returns the resulting state as JSON. See
+// multiproxy/direct_links.go.
+func (e *MultiProxyEngine) ApplyDirectLinks(settingOn bool, inventoryJSON string) string {
+	if e == nil || e.inner == nil {
+		return "{}"
+	}
+	return e.inner.ApplyDirectLinks(settingOn, inventoryJSON)
+}
+
+// GetDirectLinksJSON returns the last ApplyDirectLinks state with the
+// effective binding read fresh.
+func (e *MultiProxyEngine) GetDirectLinksJSON() string {
+	if e == nil || e.inner == nil {
+		return "{}"
+	}
+	return e.inner.DirectLinksJSON()
+}
+
 func (e *MultiProxyEngine) ForgetTailnet(identifier string) error {
 	return e.inner.ForgetTailnet(identifier)
 }

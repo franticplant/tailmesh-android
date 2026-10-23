@@ -584,6 +584,8 @@
 
     <!-- Status-bar speed meter -->
     <string name="speed_meter">Speed in status bar</string>
+    <string name="direct_links">Direct tailnet connections over cable or hotspot</string>
+    <string name="direct_links_subtitle">Multi-Tailnet: reach tailnet devices on the USB tether or hotspot directly instead of through a relay. Sockets are no longer tied to Wi-Fi or mobile data, so this pauses itself whenever that could send IPv6 over the wrong network.</string>
     <string name="speed_meter_subtitle">Download over upload next to the clock, for Wi-Fi and mobile data, with or without the VPN</string>
     <string name="speed_meter_unsupported">Needs Android 12 or later</string>
     <string name="speed_meter_channel">Network speed</string>

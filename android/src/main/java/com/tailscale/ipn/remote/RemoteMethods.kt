@@ -82,6 +82,21 @@ object RemoteMethods {
 
   private val ok = JSONObject().put("done", true)
 
+  private fun stateJson(s: com.tailscale.ipn.multiproxy.DirectLinks.State): JSONObject =
+      JSONObject()
+          .put("setting", s.setting)
+          .put("reason", s.reason)
+          .put("unbound", s.unbound)
+          .put("byNodeAttr", s.byNodeAttr)
+          .put("defaultNetwork", s.defaultNetwork)
+          .put("defaultHasIpv6", s.defaultHasIpv6)
+          .put("otherIpv6Networks", JSONArray(s.otherIpv6Networks))
+          .put("ignoredIpv6Networks", JSONArray(s.ignoredIpv6Networks))
+          .put("changedAtMillis", s.changedAtMillis)
+          .put("reboundAtMillis", s.reboundAtMillis)
+          .put("reboundNodes", s.reboundNodes)
+          .put("reboundFailedNodes", s.reboundFailedNodes)
+
   private val methods: List<Method> = buildList {
     // -------------------------------------------------------------------
     // overview
@@ -534,6 +549,28 @@ object RemoteMethods {
         ) {
           controls.setLanExclusionEnabled(it.bool("enabled"))
           ok
+        })
+    add(
+        Method(
+            "routing.directLinks",
+            false,
+            "Direct tailnet connections over cable or hotspot: the setting, whether sockets are " +
+                "unbound now (reason on, off-setting, off-ipv6-unsafe, off-no-network-info or " +
+                "not-running), the IPv6 networks the safety check saw, and the last rebind.",
+        ) {
+          stateJson(com.tailscale.ipn.multiproxy.DirectLinks.current())
+        })
+    add(
+        Method(
+            "routing.setDirectLinks",
+            true,
+            "Turn direct tailnet connections over cable or hotspot on or off. Applies at once " +
+                "and rebinds the tailnets' sockets if the effective state changes.",
+            mapOf("enabled" to "bool"),
+        ) {
+          val dl = com.tailscale.ipn.multiproxy.DirectLinks
+          dl.setEnabled(App.get(), it.bool("enabled"))
+          stateJson(dl.reevaluateNow("remote"))
         })
 
     // -------------------------------------------------------------------

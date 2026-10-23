@@ -138,6 +138,7 @@ class App : UninitializedApp(), libtailscale.AppContext, ViewModelStoreOwner {
         getString(R.string.health_channel_description),
         NotificationManagerCompat.IMPORTANCE_HIGH)
     SpeedMeter.init(this)
+    com.tailscale.ipn.multiproxy.DirectLinks.init(this)
     SpeedMeter.startIfEnabled(this)
   }
 

@@ -103,6 +103,7 @@ class RemoteMethodsTest {
             "exports",
             "networks",
             "traffic",
+            "directLinks",
         )
     reads.forEach { assertTrue("unexpected read method verb $it", it in allowed) }
   }
