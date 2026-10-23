@@ -40,7 +40,7 @@ type tailnetStateProbe struct {
 // observability.go's noteExitNodePath, which this feeds).
 type pathInfo struct {
 	hasExitNode bool
-	direct      bool
+	kind        string // a PeerPath* value, set only with needPath
 	derpRegion  string
 }
 
@@ -82,7 +82,7 @@ func observedTailnetState(enabled bool, srv *tsnet.Server, needPath bool) (state
 					if peer == nil || peer.ID != status.ExitNodeStatus.ID {
 						continue
 					}
-					path.direct = peer.CurAddr != ""
+					path.kind = peerPathOf(peer)
 					path.derpRegion = peer.Relay
 					break
 				}
@@ -127,7 +127,7 @@ func (e *Engine) GetTailnetStatesJSON() string {
 				MachineName: machineName,
 				ExitNodeIP:  exitNodeIP,
 			}
-			e.noteExitNodePath(p.id, path.hasExitNode, path.direct, path.derpRegion)
+			e.noteExitNodePath(p.id, path.hasExitNode, path.kind, path.derpRegion)
 		}(i, p)
 	}
 	wg.Wait()

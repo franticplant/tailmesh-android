@@ -141,13 +141,12 @@ func (u *tsnetUpstream) PeerPathInfo(ctx context.Context, destIP string) string 
 			if ip.String() != destIP {
 				continue
 			}
-			if ps.CurAddr != "" {
-				return "direct"
-			}
-			if ps.Relay != "" {
+			switch path := peerPathOf(ps); path {
+			case PeerPathDERP:
 				return "derp:" + ps.Relay
+			default:
+				return path
 			}
-			return "no-path"
 		}
 	}
 	return "unknown"
@@ -168,6 +167,11 @@ type TailnetRuntime struct {
 	// primary subnet routers, mapped to the advertising peer's hostname. It is
 	// refreshed from the same Status() call pollTailnetStatus already makes.
 	AdvertisedRoutes map[netip.Prefix]string
+	// Peers is every peer with its current connection path, from the same
+	// poll; PeersAt is when it was read (zero before the first poll). See
+	// peer_paths.go.
+	Peers   []TailnetPeer
+	PeersAt time.Time
 }
 
 type TailnetConfig struct {
@@ -959,6 +963,7 @@ func (e *Engine) pollTailnetStatus(ctx context.Context, wg *sync.WaitGroup, uid 
 			}
 
 			e.setTailnetAdvertisedRoutes(uid, advertisedRoutes)
+			e.setTailnetPeers(uid, tailnetPeersFromStatus(status), time.Now())
 
 			accepted := e.updateTailnetSnapshot(uid, snapshot)
 

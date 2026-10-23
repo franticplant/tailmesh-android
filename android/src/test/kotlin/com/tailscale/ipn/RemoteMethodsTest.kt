@@ -87,6 +87,7 @@ class RemoteMethodsTest {
             "status",
             "list",
             "peers",
+            "peerPaths",
             "states",
             "addressConflicts",
             "subnetRoutes",

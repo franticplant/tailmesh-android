@@ -267,6 +267,30 @@ object RemoteMethods {
         })
     add(
         Method(
+            "tailnets.peerPaths",
+            false,
+            "Each peer's connection path (direct, derp, peer-relay, idle) per running tailnet, " +
+                "from the 10s status poll.",
+            mapOf("id" to "optional tailnet id; all running tailnets when omitted"),
+        ) {
+          val e = engine()
+          val id = it.optStr("id")
+          if (id.isNotEmpty()) {
+            RawJson(e.getTailnetPeersJSON(id))
+          } else {
+            val states = JSONArray(e.getTailnetStatesJSON())
+            JSONArray(
+                (0 until states.length())
+                    .map { i -> states.getJSONObject(i) }
+                    .filter { s -> s.optBoolean("enabled") }
+                    .mapNotNull { s ->
+                      runCatching { JSONObject(e.getTailnetPeersJSON(s.getString("tailnetId"))) }
+                          .getOrNull()
+                    })
+          }
+        })
+    add(
+        Method(
             "tailnets.addressConflicts",
             false,
             "Real Tailscale addresses claimed by more than one tailnet.",

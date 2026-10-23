@@ -102,27 +102,27 @@ func TestNoteExitNodePathDeduplication(t *testing.T) {
 	// First observation with an exit node, direct path: connected + no
 	// direct/DERP transition (there was no known prior state to transition
 	// from).
-	e.noteExitNodePath(id, true, true, "")
+	e.noteExitNodePath(id, true, PeerPathDirect, "")
 	waitForObsEventCount(t, cb, 1)
 
 	// Same state again: must not fire another event.
-	e.noteExitNodePath(id, true, true, "")
+	e.noteExitNodePath(id, true, PeerPathDirect, "")
 	waitForObsEventCount(t, cb, 1)
 
 	// Flip to DERP: exactly one new event (the path transition).
-	e.noteExitNodePath(id, true, false, "sfo")
+	e.noteExitNodePath(id, true, PeerPathDERP, "sfo")
 	waitForObsEventCount(t, cb, 2)
 
 	// Same DERP state again: no new event.
-	e.noteExitNodePath(id, true, false, "sfo")
+	e.noteExitNodePath(id, true, PeerPathDERP, "sfo")
 	waitForObsEventCount(t, cb, 2)
 
 	// Exit node goes away: one disconnect event.
-	e.noteExitNodePath(id, false, false, "")
+	e.noteExitNodePath(id, false, "", "")
 	waitForObsEventCount(t, cb, 3)
 
 	// Repeated "no exit node": no new event.
-	e.noteExitNodePath(id, false, false, "")
+	e.noteExitNodePath(id, false, "", "")
 	waitForObsEventCount(t, cb, 3)
 
 	cb.mu.Lock()

@@ -76,6 +76,30 @@ data class UpstreamStatSnapshot(
     val lastAttemptAtMillis: Long = 0,
 )
 
+/** One peer of a tailnet with its connection path, from `Engine.GetTailnetPeersJSON()`. */
+@Serializable
+data class TailnetPeerSnapshot(
+    val name: String = "",
+    val dnsName: String = "",
+    val tailnetIps: List<String> = emptyList(),
+    val online: Boolean = false,
+    val active: Boolean = false,
+    val path: String = "",
+    val addr: String = "",
+    val derpRegion: String = "",
+    val peerRelay: String = "",
+    val peerRelayNode: String = "",
+    val rxBytes: Long = 0,
+    val txBytes: Long = 0,
+)
+
+@Serializable
+data class TailnetPeersSnapshot(
+    val summary: String = "",
+    val updatedAtMillis: Long = 0,
+    val peers: List<TailnetPeerSnapshot> = emptyList(),
+)
+
 /**
  * Mirrors multiproxy.ProcessSample (observability.go). CPUSeconds is real /proc/self/stat kernel
  * accounting; CPUPercent and CPUSecondsPerGiB are derived from it over the sampler's own interval -
@@ -428,6 +452,16 @@ object MultiProxySessionCoordinator {
   fun appUidsSince(sinceMillis: Long): List<Int> = obsDb?.appUidsSince(sinceMillis) ?: emptyList()
 
   /** Per-upstream history for one upstream id, for the Tailnets tab's per-upstream graph. */
+  /** The peers of a running tailnet with their paths, or null if it isn't running. */
+  fun tailnetPeers(tailnetId: String): TailnetPeersSnapshot? {
+    val engine = boundSession?.engine ?: return null
+    return try {
+      json.decodeFromString<TailnetPeersSnapshot>(engine.getTailnetPeersJSON(tailnetId))
+    } catch (e: Exception) {
+      null
+    }
+  }
+
   fun upstreamSamplesSince(
       upstreamId: String,
       sinceMillis: Long

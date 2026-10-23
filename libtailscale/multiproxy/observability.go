@@ -418,21 +418,21 @@ func (e *Engine) enqueueObservabilityEvent(eventType, upstreamID string, appUID 
 type pathState struct {
 	mu         sync.Mutex
 	known      bool
-	direct     bool
+	kind       string // a PeerPath* value
 	derpRegion string
 }
 
 // noteExitNodePath is called by runtime_state.go's existing per-tailnet poll
 // with what the same Status() call already told it about the exit node
-// path, if any (PeerStatus.CurAddr non-empty means direct; PeerStatus.Relay
-// is the DERP region code when relayed). It fires
-// ObsEventPathDirectToDERP/ObsEventPathDERPToDirect only on a genuine
-// change, and ObsEventExitNodeConnected/Disconnected when hasExitNode
+// path, if any: kind is peerPathOf(exit node) and derpRegion its DERP region
+// code. It fires ObsEventPathDirectToDERP/ObsEventPathDERPToDirect only on a
+// genuine change between direct and DERP (idle in between is not a
+// transition), and ObsEventExitNodeConnected/Disconnected when hasExitNode
 // itself flips.
-func (e *Engine) noteExitNodePath(upstreamID string, hasExitNode, direct bool, derpRegion string) {
+func (e *Engine) noteExitNodePath(upstreamID string, hasExitNode bool, kind, derpRegion string) {
 	ps := e.obs.pathFor(upstreamID)
 	ps.mu.Lock()
-	wasKnown, wasDirect, wasDerp := ps.known, ps.direct, ps.derpRegion
+	wasKnown, wasKind, wasDerp := ps.known, ps.kind, ps.derpRegion
 	if !hasExitNode {
 		if ps.known {
 			ps.known = false
@@ -446,8 +446,10 @@ func (e *Engine) noteExitNodePath(upstreamID string, hasExitNode, direct bool, d
 	// A transition event only makes sense once there was a prior known
 	// state to transition from - the very first observation after
 	// connecting is "connected", not itself a direct<->DERP transition.
-	changed := wasKnown && wasDirect != direct
-	ps.known, ps.direct, ps.derpRegion = true, direct, derpRegion
+	direct := kind == PeerPathDirect
+	changed := wasKnown && wasKind != PeerPathIdle && kind != PeerPathIdle &&
+		(wasKind == PeerPathDirect) != direct
+	ps.known, ps.kind, ps.derpRegion = true, kind, derpRegion
 	ps.mu.Unlock()
 
 	if !wasKnown {
@@ -601,14 +603,15 @@ func (o *observability) pathFor(upstreamID string) *pathState {
 // peerPathFor reports the current peer-connection state for id, generically
 // across every upstream kind:
 //
-//   - Tailnet/exit-node: the last-known direct/DERP path this upstream's
-//     exit-node peer was observed at, read from the cached pathState that
+//   - Tailnet/exit-node: the last-known path (a PeerPath* value) this
+//     upstream's exit-node peer was observed at, read from the cached pathState that
 //     runtime_state.go's existing per-tailnet poller already keeps up to
 //     date via noteExitNodePath (piggybacking on a Status() call it makes
 //     anyway). This snapshot deliberately does not make its own tsnet
 //     Status() call - it would be redundant work on every UI poll, and
 //     would need a per-destination peer, which a "current state of this
-//     upstream" summary does not have.
+//     upstream" summary does not have. A tailnet with no exit node set
+//     reports summarizePeerPaths over its cached peer list instead.
 //   - WireGuard: the tunnel's own handshake state (wireguardProvider's
 //     PeerPathInfo just inspects its already-open device, no I/O).
 //   - SOCKS5/direct: a fixed, kind-describing string, since neither has a
@@ -618,14 +621,24 @@ func (e *Engine) peerPathFor(id UpstreamID, kind UpstreamKind) string {
 	case UpstreamKindTailnet, UpstreamKindExitNode:
 		ps := e.obs.pathFor(string(id))
 		ps.mu.Lock()
-		defer ps.mu.Unlock()
-		if !ps.known {
+		known, pathKind, derpRegion := ps.known, ps.kind, ps.derpRegion
+		ps.mu.Unlock()
+		if !known {
+			if kind == UpstreamKindTailnet {
+				// No exit node set: summarize the tailnet's peers (cached
+				// by pollTailnetStatus, see peer_paths.go).
+				return e.tailnetPeerSummary(id)
+			}
 			return "unknown"
 		}
-		if ps.direct {
-			return "direct"
+		switch pathKind {
+		case "":
+			return "unknown" // the full Status() call failed
+		case PeerPathDERP:
+			return "derp:" + derpRegion
+		default:
+			return pathKind
 		}
-		return "derp:" + ps.derpRegion
 	default:
 		p, ok := e.lookupProvider(id)
 		if !ok {

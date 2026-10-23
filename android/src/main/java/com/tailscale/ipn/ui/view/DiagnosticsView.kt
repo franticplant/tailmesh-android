@@ -55,6 +55,7 @@ import com.patrykandpatrick.vico.core.scroll.InitialScroll
 import com.tailscale.ipn.App
 import com.tailscale.ipn.MultiProxySessionCoordinator
 import com.tailscale.ipn.SubnetRoutesSnapshot
+import com.tailscale.ipn.TailnetPeersSnapshot
 import com.tailscale.ipn.UpstreamStatSnapshot
 import com.tailscale.ipn.multiproxy.AppNameResolver
 import com.tailscale.ipn.multiproxy.db.ObservabilityDatabaseHelper
@@ -816,6 +817,10 @@ private fun peerPathLabel(raw: String): String =
     when {
       raw == "direct" -> "direct"
       raw.startsWith("derp:") -> "relayed via ${raw.removePrefix("derp:")}"
+      raw == "derp" -> "relayed"
+      raw == "peer-relay" -> "via a peer relay"
+      raw == "mixed" -> "some peers direct, some relayed"
+      raw == "idle" -> "idle (no recent traffic)"
       raw == "no-path" -> "no path"
       raw == "wireguard:established" -> "handshake established"
       raw == "wireguard:no-handshake" -> "no handshake yet"
@@ -1134,7 +1139,10 @@ private fun UpstreamRow(
         }
       }
 
-  LaunchedEffect(expanded, range) {
+  var peers by remember(id) { mutableStateOf<TailnetPeersSnapshot?>(null) }
+  val isTailnet = stat?.kind == "tailnet"
+
+  LaunchedEffect(expanded, range, isTailnet) {
     if (!expanded) return@LaunchedEffect
     while (expanded) {
       val since = System.currentTimeMillis() - range.millis
@@ -1142,6 +1150,8 @@ private fun UpstreamRow(
           withContext(Dispatchers.IO) {
             MultiProxySessionCoordinator.upstreamSamplesSince(id, since)
           }
+      // A cached list in the engine (refreshed by its 10s status poll), not a tsnet query.
+      if (isTailnet) peers = MultiProxySessionCoordinator.tailnetPeers(id)
       delay(2000)
     }
   }
@@ -1222,6 +1232,7 @@ private fun UpstreamRow(
           Text(if (expanded) "▲" else "▼", style = MaterialTheme.typography.bodySmall)
         }
         if (expanded) {
+          peers?.let { TailnetPeerPaths(it) }
           Spacer(modifier = Modifier.height(8.dp))
           Text("Traffic over time", style = MaterialTheme.typography.titleSmall)
           val (trafficEntries, trafficTimestamps) =
@@ -1271,6 +1282,45 @@ private fun UpstreamRow(
           }
         }
       }
+}
+
+/** Online peers of a tailnet and how each is reached: direct (with address), relayed or idle. */
+@Composable
+private fun TailnetPeerPaths(snapshot: TailnetPeersSnapshot) {
+  val online = snapshot.peers.filter { it.online || it.path != "idle" }
+  Spacer(modifier = Modifier.height(8.dp))
+  Text("Peers", style = MaterialTheme.typography.titleSmall)
+  if (online.isEmpty()) {
+    Text("No online peers.", style = MaterialTheme.typography.bodySmall)
+  }
+  online.take(30).forEach { p ->
+    val detail =
+        when (p.path) {
+          "direct" -> "direct ${p.addr}"
+          "derp" -> "relayed via ${p.derpRegion}"
+          "peer-relay" ->
+              "via peer relay " + p.peerRelayNode.ifEmpty { p.peerRelay.substringBefore(":vni") }
+          else -> "idle"
+        }
+    Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+      Text(p.name, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+      Text(
+          detail,
+          style = MaterialTheme.typography.bodySmall,
+          color =
+              if (p.path == "derp" || p.path == "peer-relay") MaterialTheme.colorScheme.tertiary
+              else MaterialTheme.colorScheme.secondary,
+      )
+    }
+  }
+  val hidden = snapshot.peers.size - minOf(online.size, 30)
+  if (hidden > 0) {
+    Text(
+        "$hidden more offline or not shown",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.secondary,
+    )
+  }
 }
 
 private fun appsSection(

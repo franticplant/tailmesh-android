@@ -366,6 +366,17 @@ func (e *MultiProxyEngine) GetSubnetRoutesJSON() string {
 	return e.inner.GetSubnetRoutesJSON()
 }
 
+// GetTailnetPeersJSON lists one running tailnet's peers with their current
+// connection path (direct, derp, peer-relay or idle), as
+// {"tailnetId","summary","updatedAtMillis","peers":[...]}. It reads the list
+// cached by the tailnet's 10s status poll; it does not query tsnet itself.
+func (e *MultiProxyEngine) GetTailnetPeersJSON(identifier string) (string, error) {
+	if e == nil || e.inner == nil {
+		return "", errors.New("engine not initialized")
+	}
+	return e.inner.GetTailnetPeersJSON(identifier)
+}
+
 func (e *MultiProxyEngine) ForgetTailnet(identifier string) error {
 	return e.inner.ForgetTailnet(identifier)
 }
