@@ -159,6 +159,14 @@ type TailnetRuntime struct {
 	Wg      *sync.WaitGroup
 	Enabled bool
 
+	// WantEnabled is what was last asked for. A tailnet whose node failed to
+	// start is wanted but not Enabled, and is retried (tailnet_retry.go)
+	// until it starts or is turned off. StartFailures counts failures in a
+	// row; LastStartError is the latest.
+	WantEnabled    bool
+	StartFailures  int
+	LastStartError string
+
 	// AcceptRoutes is the per-tailnet "use subnet routes" switch. It does not
 	// affect what the netmap advertises; it only decides whether
 	// AdvertisedRoutes below is included in the engine's route table.
@@ -702,6 +710,7 @@ func (e *Engine) setTailnetEnabledLocked(identifier string, enabled bool) error 
 		return errors.New("tailnet not found")
 	}
 
+	rt.WantEnabled = enabled
 	if rt.Enabled == enabled {
 		e.mu.Unlock()
 		return nil
@@ -766,18 +775,24 @@ func (e *Engine) setTailnetEnabledLocked(identifier string, enabled bool) error 
 				err = fmt.Errorf("recovered panic in tsnet startup: %v", r)
 			}
 		}()
-		_, err = rt.Srv.LocalClient()
-		return err
+		return startTsnet(rt.Srv)
 	}()
 	if localClientErr != nil {
 		rt.Srv.Close()
 		rt.Srv = nil
+		rt.StartFailures++
+		rt.LastStartError = localClientErr.Error()
+		attempt := rt.StartFailures
 		e.mu.Unlock()
 		e.enqueueStateEvent(identifier, "ERROR")
+		log.Printf("[VPN] tailnet %s did not start (attempt %d): %v", identifier, attempt, localClientErr)
+		e.scheduleTailnetStartRetry(identifier, attempt)
 		return fmt.Errorf("failed to start tsnet: %v", localClientErr)
 	}
 
 	rt.Enabled = true
+	rt.StartFailures = 0
+	rt.LastStartError = ""
 	ctx, cancel := context.WithCancel(context.Background())
 	rt.Cancel = cancel
 

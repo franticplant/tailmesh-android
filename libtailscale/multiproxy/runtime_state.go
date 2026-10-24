@@ -26,12 +26,20 @@ type TailnetRuntimeExport struct {
 	// closed and its local state discarded - see GetExitNodeCandidatesJSON's
 	// doc comment for why the UI otherwise has no way to know this.
 	ExitNodeIP string `json:"exitNodeIp,omitempty"`
+	// StartError is why the node failed to start, while it is wanted but not
+	// running (state ERROR); it is retried with backoff. StartFailures counts
+	// the failures in a row.
+	StartError    string `json:"startError,omitempty"`
+	StartFailures int    `json:"startFailures,omitempty"`
 }
 
 type tailnetStateProbe struct {
-	id      string
-	enabled bool
-	srv     *tsnet.Server
+	id         string
+	enabled    bool
+	wanted     bool
+	startError string
+	failures   int
+	srv        *tsnet.Server
 }
 
 // pathInfo is the direct/DERP observation observedTailnetState derives from
@@ -106,9 +114,12 @@ func (e *Engine) GetTailnetStatesJSON() string {
 	probes := make([]tailnetStateProbe, 0, len(e.tailnets))
 	for id, rt := range e.tailnets {
 		probes = append(probes, tailnetStateProbe{
-			id:      string(id),
-			enabled: rt.Enabled,
-			srv:     rt.Srv,
+			id:         string(id),
+			enabled:    rt.Enabled,
+			wanted:     rt.WantEnabled,
+			startError: rt.LastStartError,
+			failures:   rt.StartFailures,
+			srv:        rt.Srv,
 		})
 	}
 	e.mu.RUnlock()
@@ -126,6 +137,12 @@ func (e *Engine) GetTailnetStatesJSON() string {
 				State:       state,
 				MachineName: machineName,
 				ExitNodeIP:  exitNodeIP,
+			}
+			if p.wanted && !p.enabled && p.failures > 0 {
+				// Not "STOPPED": it is meant to run and is being retried.
+				out[i].State = "ERROR"
+				out[i].StartError = p.startError
+				out[i].StartFailures = p.failures
 			}
 			e.noteExitNodePath(p.id, path.hasExitNode, path.kind, path.derpRegion)
 		}(i, p)
