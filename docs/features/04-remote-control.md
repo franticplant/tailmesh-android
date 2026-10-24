@@ -35,7 +35,14 @@ rather than run with a default. Beyond the catalog:
   requests served, client and server errors, requests in flight, latency of the last 64 quick
   requests (p50, p95, max), the slowest recent one, the last error, and how long until remote
   control turns itself off. Counted per request; nothing runs in between.
-- `GET /v1/logs` — app and Go engine logs, filterable, and with `follow=1` a live stream.
+- `GET /v1/logs` — app and Go engine logs, and with `follow=1` a live stream. Filters: `since` (a
+  sequence number, a duration such as `10m`, or an RFC 3339 time), `level` (`error`, `warn`,
+  `info`, `debug`, `verbose`: that level and more severe), `component` (comma-separated prefixes:
+  an app log tag, or `flow`, `wireguard`, `magicsock`, `control`, …) and `grep`. Each line carries
+  its `level` and `component`. App lines have their real level; Go's logger has none, so a Go
+  line counts as `error` when it mentions an error or failure and `info` otherwise. The methods
+  `logs.clear` empties the buffer, and `logs.mute components=flow,wireguard` keeps noisy
+  components out of it until the app restarts (`logs.muted` lists them; logcat is unaffected).
 - `GET /v1/files?path=` — download a capture or a diagnostics export.
 - `/debug/pprof/*` — Go CPU, heap, goroutine, allocation, block, mutex profiles and traces, for the
   whole process.
@@ -221,6 +228,9 @@ tailmesh-ctl call capture.start mode=apps packages='["com.android.chrome"]'
 tailmesh-ctl call capture.stop           # prints the path
 tailmesh-ctl pull <path>                 # then open it in Wireshark
 tailmesh-ctl logs -f -grep flow-
+tailmesh-ctl logs -since 10m -level warn -v      # level and component on each line
+tailmesh-ctl logs -since 14:30 -component magicsock,MultiProxySession
+tailmesh-ctl logs -clear
 tailmesh-ctl profile -kind heap -o heap.pprof
 tailmesh-ctl call tailscale.localapi.get path=status
 ```

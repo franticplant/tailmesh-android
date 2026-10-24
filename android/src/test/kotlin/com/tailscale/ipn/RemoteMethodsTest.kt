@@ -68,6 +68,8 @@ class RemoteMethodsTest {
             "reset",
             "export",
             "call",
+            "clear",
+            "mute",
         )
     catalog.forEach { m ->
       // The leading camelCase word: "setEnabled" -> "set", "addressConflicts" -> "address".
@@ -104,6 +106,7 @@ class RemoteMethodsTest {
             "networks",
             "traffic",
             "directLinks",
+            "muted",
         )
     reads.forEach { assertTrue("unexpected read method verb $it", it in allowed) }
   }

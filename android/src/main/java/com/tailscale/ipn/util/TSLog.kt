@@ -16,18 +16,18 @@ object TSLog {
 
   fun d(tag: String?, message: String) {
     Log.d(tag, message)
-    libtailscaleWrapper.sendLog(tag, message)
+    libtailscaleWrapper.sendLog(tag, message, "D")
   }
 
   fun w(tag: String, message: String) {
     Log.w(tag, message)
-    libtailscaleWrapper.sendLog(tag, message)
+    libtailscaleWrapper.sendLog(tag, message, "W")
   }
 
   fun v(tag: String?, message: String) {
     if (isUnstableRelease()) {
       Log.v(tag, message)
-      libtailscaleWrapper.sendLog(tag, message)
+      libtailscaleWrapper.sendLog(tag, message, "V")
     }
   }
 
@@ -35,16 +35,16 @@ object TSLog {
   @JvmStatic
   fun e(tag: String?, message: String) {
     Log.e(tag, message)
-    libtailscaleWrapper.sendLog(tag, message)
+    libtailscaleWrapper.sendLog(tag, message, "E")
   }
 
   fun e(tag: String?, message: String, throwable: Throwable? = null) {
     if (throwable == null) {
       Log.e(tag, message)
-      libtailscaleWrapper.sendLog(tag, message)
+      libtailscaleWrapper.sendLog(tag, message, "E")
     } else {
       Log.e(tag, message, throwable)
-      libtailscaleWrapper.sendLog(tag, "$message ${throwable.localizedMessage}")
+      libtailscaleWrapper.sendLog(tag, "$message ${throwable.localizedMessage}", "E")
     }
   }
 
@@ -58,11 +58,14 @@ object TSLog {
   }
 
   class LibtailscaleWrapper {
-    public fun sendLog(tag: String?, message: String) {
+    public fun sendLog(tag: String?, message: String) = sendLog(tag, message, "I")
+
+    /** [level] is E, W, I, D or V; remote control's log filter uses it. */
+    public fun sendLog(tag: String?, message: String, level: String) {
       val logTag = tag ?: ""
       Libtailscale.sendLog((logTag + ": " + message).toByteArray(Charsets.UTF_8))
       // Shown in the remote-control log stream; a no-op while it is off.
-      Libtailscale.remoteControlLog("app", "$logTag: $message")
+      Libtailscale.remoteControlLogLevel("app", level, "$logTag: $message")
     }
   }
 }

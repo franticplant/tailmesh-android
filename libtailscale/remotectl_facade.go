@@ -191,6 +191,34 @@ func RemoteControlClearAccessLog(path string) error {
 // while the endpoint is off.
 func RemoteControlLog(source, line string) { remotectl.AddLog(source, line) }
 
+// RemoteControlLogLevel is RemoteControlLog for an app line with its level
+// (E, W, I, D or V), which GET /v1/logs?level= filters on.
+func RemoteControlLogLevel(source, level, line string) {
+	remotectl.AddLogLevel(source, level, line)
+}
+
+// ClearRemoteLogs empties the buffered log lines (remote control's and the
+// Logs screen's) and returns how many there were.
+func ClearRemoteLogs() int32 { return int32(remotectl.ClearLogs()) }
+
+// SetRemoteLogMutedJSON keeps lines from the given components (a JSON array;
+// prefix match) out of the log buffer from now on, and returns the muted list
+// as JSON. An empty array unmutes everything. Not persisted.
+func SetRemoteLogMutedJSON(componentsJSON string) (string, error) {
+	var c []string
+	if err := json.Unmarshal([]byte(componentsJSON), &c); err != nil {
+		return "", err
+	}
+	b, _ := json.Marshal(remotectl.SetMutedComponents(c))
+	return string(b), nil
+}
+
+// RemoteLogMutedJSON returns the muted components as a JSON array.
+func RemoteLogMutedJSON() string {
+	b, _ := json.Marshal(remotectl.MutedComponents())
+	return string(b)
+}
+
 // RemoteControlApproveShell opens the shell a session asked for.
 func RemoteControlApproveShell(requestID string) error {
 	s := remoteServer()

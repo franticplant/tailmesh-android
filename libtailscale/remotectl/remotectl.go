@@ -994,8 +994,13 @@ func argNames(m map[string]json.RawMessage) string {
 // filtered by ?grep=. With ?follow=1 it keeps the response open and streams
 // new lines as they are written, one JSON object per line.
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
-	since, _ := strconv.ParseUint(r.URL.Query().Get("since"), 10, 64)
-	grep := r.URL.Query().Get("grep")
+	f, err := parseLogFilter(r.URL.Query(), time.Now())
+	if err != nil {
+		info(r).err = err.Error()
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	since := f.after
 	follow := r.URL.Query().Get("follow") == "1"
 
 	w.Header().Set("Content-Type", "application/x-ndjson")
@@ -1005,9 +1010,10 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	for {
 		lines, next, wait := logs.since(since)
 		for _, l := range lines {
-			if grep != "" && !strings.Contains(l.Text, grep) {
+			if !f.match(l) {
 				continue
 			}
+			l.Level, l.Component = lineLevel(l), lineComponent(l)
 			if err := enc.Encode(l); err != nil {
 				return
 			}

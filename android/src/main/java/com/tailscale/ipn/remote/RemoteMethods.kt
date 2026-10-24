@@ -186,6 +186,36 @@ object RemoteMethods {
             })
     add(
         Method(
+            "logs.clear",
+            true,
+            "Empty the log buffer (GET /v1/logs and the Logs screen). Sequence numbers keep " +
+                "counting. Logcat is not touched.") {
+              JSONObject().put("cleared", Libtailscale.clearRemoteLogs())
+            })
+    add(
+        Method(
+            "logs.mute",
+            true,
+            "Keep lines from these components out of the log buffer from now on (prefix " +
+                "match, as GET /v1/logs reports them: flow, wireguard, magicsock, an app log " +
+                "tag...). [] unmutes. Until the app restarts; logcat still gets them.",
+            mapOf("components" to "component names: a JSON array or comma-separated; [] unmutes"),
+        ) {
+          val raw = it.str("components").trim()
+          val list =
+              if (raw.startsWith("[")) it.strList("components")
+              else raw.split(',').map { c -> c.trim() }.filter { c -> c.isNotEmpty() }
+          JSONObject()
+              .put(
+                  "muted",
+                  JSONArray(Libtailscale.setRemoteLogMutedJSON(JSONArray(list).toString())))
+        })
+    add(
+        Method("logs.muted", false, "The components logs.mute keeps out of the log buffer.") {
+          JSONObject().put("muted", JSONArray(Libtailscale.remoteLogMutedJSON()))
+        })
+    add(
+        Method(
             "perf.stats",
             false,
             "What the app itself costs: process CPU time (and per hour of uptime), the threads " +

@@ -96,7 +96,8 @@ commands:
   status                             session and server status
   methods                            list every callable method
   call <method> [k=v ...|'{json}']   call a method; v may be JSON (true, 3, ["a"])
-  logs [-f] [-grep s] [-since n]     app and engine logs
+  logs [-f] [-grep s] [-since n|10m|15:04] [-level l] [-component c] [-v] [-clear]
+                                     app and engine logs
   access-log                         recent entries of the phone's access log
   pull <device path> [-o file]       download a capture or export
   profile [-seconds n] [-kind k] -o  Go pprof profile (profile, heap, goroutine, ...)
@@ -305,6 +306,10 @@ func call(args []string) error {
 			}
 		}
 	}
+	return callMethod(tok, method, body)
+}
+
+func callMethod(tok, method string, body map[string]any) error {
 	var out json.RawMessage
 	if err := post("/v1/call/"+url.PathEscape(method), tok, body, &out); err != nil {
 		return err
@@ -316,16 +321,35 @@ func logs(args []string) error {
 	fs := flag.NewFlagSet("logs", flag.ExitOnError)
 	follow := fs.Bool("f", false, "follow")
 	grep := fs.String("grep", "", "only lines containing this")
-	since := fs.Uint64("since", 0, "only lines after this sequence number")
+	since := fs.String("since", "", "only lines after this sequence number, in the last duration (10m), or from a time (15:04, 15:04:05 today, or RFC 3339)")
+	level := fs.String("level", "", "error, warn, info, debug or verbose: this level and more severe (Go lines: error if they mention an error or failure)")
+	component := fs.String("component", "", "comma-separated components (prefix): an app log tag, or flow, wireguard, magicsock, control, ...")
+	verbose := fs.Bool("v", false, "show each line's level and component")
+	clear := fs.Bool("clear", false, "empty the phone's log buffer (needs control) and exit")
 	fs.Parse(args)
 	tok, err := token()
 	if err != nil {
 		return err
 	}
+	if *clear {
+		return callMethod(tok, "logs.clear", map[string]any{})
+	}
 	q := url.Values{}
-	q.Set("since", strconv.FormatUint(*since, 10))
+	if *since != "" {
+		s, err := sinceParam(*since, time.Now())
+		if err != nil {
+			return err
+		}
+		q.Set("since", s)
+	}
 	if *grep != "" {
 		q.Set("grep", *grep)
+	}
+	if *level != "" {
+		q.Set("level", *level)
+	}
+	if *component != "" {
+		q.Set("component", *component)
 	}
 	if *follow {
 		q.Set("follow", "1")
@@ -339,16 +363,44 @@ func logs(args []string) error {
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
 	for sc.Scan() {
 		var l struct {
-			Time   time.Time `json:"time"`
-			Source string    `json:"source"`
-			Text   string    `json:"text"`
+			Time      time.Time `json:"time"`
+			Source    string    `json:"source"`
+			Text      string    `json:"text"`
+			Level     string    `json:"level"`
+			Component string    `json:"component"`
 		}
 		if json.Unmarshal(sc.Bytes(), &l) != nil {
 			continue
 		}
-		fmt.Printf("%s %-6s %s\n", l.Time.Format("15:04:05.000"), l.Source, l.Text)
+		if *verbose {
+			fmt.Printf("%s %-6s %s %-18s %s\n", l.Time.Local().Format("15:04:05.000"), l.Source, l.Level, l.Component, l.Text)
+		} else {
+			fmt.Printf("%s %-6s %s\n", l.Time.Format("15:04:05.000"), l.Source, l.Text)
+		}
 	}
 	return sc.Err()
+}
+
+// sinceParam turns -since into the server's since: a sequence number or
+// duration as given, a clock time today (local) as RFC 3339.
+func sinceParam(s string, now time.Time) (string, error) {
+	if _, err := strconv.ParseUint(s, 10, 64); err == nil {
+		return s, nil
+	}
+	if _, err := time.ParseDuration(s); err == nil {
+		return s, nil
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t.UTC().Format(time.RFC3339), nil
+	}
+	for _, layout := range []string{"15:04:05", "15:04"} {
+		if t, err := time.ParseInLocation(layout, s, now.Location()); err == nil {
+			y, m, d := now.Date()
+			t = time.Date(y, m, d, t.Hour(), t.Minute(), t.Second(), 0, now.Location())
+			return t.UTC().Format(time.RFC3339), nil
+		}
+	}
+	return "", fmt.Errorf("-since %q: want a sequence number, a duration (10m), a time (15:04) or RFC 3339", s)
 }
 
 func pull(args []string) error {

@@ -29,6 +29,10 @@ type LogLine struct {
 	Time   time.Time `json:"time"`
 	Source string    `json:"source"`
 	Text   string    `json:"text"`
+	// Level is E, W, I, D or V for app lines; empty for Go's (see lineLevel).
+	Level string `json:"level,omitempty"`
+	// Component is filled in when the line is sent (see lineComponent).
+	Component string `json:"component,omitempty"`
 }
 
 type logRing struct {
@@ -39,6 +43,8 @@ type logRing struct {
 	lines   []LogLine
 	nextSeq uint64
 	wake    chan struct{}
+
+	muted atomic.Pointer[[]string] // components kept out (SetMutedComponents)
 }
 
 var logs = &logRing{nextSeq: 1, wake: make(chan struct{})}
@@ -55,12 +61,18 @@ func (r *logRing) disable() {
 	r.mu.Unlock()
 }
 
-func (r *logRing) add(source, text string) {
+func (r *logRing) add(source, text string) { r.addLevel(source, "", text) }
+
+func (r *logRing) addLevel(source, level, text string) {
 	if !r.on.Load() {
 		return
 	}
 	text = strings.TrimRight(text, "\n")
 	if text == "" {
+		return
+	}
+	line := LogLine{Source: source, Text: text, Level: level}
+	if r.mutedLine(line) {
 		return
 	}
 	r.mu.Lock()
@@ -69,7 +81,8 @@ func (r *logRing) add(source, text string) {
 		return
 	}
 	perfLogLines.Inc()
-	r.lines = append(r.lines, LogLine{Seq: r.nextSeq, Time: time.Now(), Source: source, Text: text})
+	line.Seq, line.Time = r.nextSeq, time.Now()
+	r.lines = append(r.lines, line)
 	r.nextSeq++
 	if len(r.lines) > logRingSize {
 		r.lines = slices.Delete(r.lines, 0, len(r.lines)-logRingSize)
@@ -135,6 +148,9 @@ func (t teeWriter) Write(p []byte) (int, error) {
 // AddLog captures a log line from another source, such as the app's own
 // Kotlin logging.
 func AddLog(source, text string) { logs.add(source, text) }
+
+// AddLogLevel is AddLog with the line's level (E, W, I, D or V).
+func AddLogLevel(source, level, text string) { logs.addLevel(source, level, text) }
 
 // CaptureLogsFromStart buffers log lines from now on, whether or not a server
 // is running, so start-up (and anything before remote control was turned on)
