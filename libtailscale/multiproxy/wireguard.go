@@ -104,6 +104,13 @@ type wireguardProvider struct {
 	events *wgEvents
 }
 
+// quietWireGuardLine reports wireguard-go log lines that are left out of
+// the app's log: keepalives, every 25 s per tunnel, which were most of the
+// log and say nothing a handshake time in upstreams.stats doesn't.
+func quietWireGuardLine(format string) bool {
+	return format == "%v - Sending keepalive packet" || format == "%v - Receiving keepalive packet"
+}
+
 // wgHexToBase64 is the inverse of wgKeyToHex, for showing a UAPI key.
 func wgHexToBase64(h string) string {
 	raw, err := hex.DecodeString(h)
@@ -291,6 +298,9 @@ func NewWireGuardUpstream(cfg WireGuardConfig, bind conn.Bind, logf func(string,
 	logger := &device.Logger{
 		Verbosef: func(format string, args ...any) {
 			events.observe(false, format, args...)
+			if quietWireGuardLine(format) {
+				return
+			}
 			logf("wireguard/"+string(cfg.ID)+": "+format, args...)
 		},
 		Errorf: func(format string, args ...any) {

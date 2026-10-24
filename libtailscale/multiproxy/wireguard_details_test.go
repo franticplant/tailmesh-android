@@ -66,3 +66,12 @@ func TestWireGuardEvents(t *testing.T) {
 		t.Errorf("lastError = %q", ev.lastError)
 	}
 }
+
+func TestQuietWireGuardLines(t *testing.T) {
+	if !quietWireGuardLine("%v - Sending keepalive packet") || !quietWireGuardLine("%v - Receiving keepalive packet") {
+		t.Error("keepalives not quiet")
+	}
+	if quietWireGuardLine("%v - Sending handshake initiation") {
+		t.Error("handshake lines must stay")
+	}
+}
