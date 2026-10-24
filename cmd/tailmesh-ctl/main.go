@@ -375,7 +375,7 @@ func logs(args []string) error {
 		if *verbose {
 			fmt.Printf("%s %-6s %s %-18s %s\n", l.Time.Local().Format("15:04:05.000"), l.Source, l.Level, l.Component, l.Text)
 		} else {
-			fmt.Printf("%s %-6s %s\n", l.Time.Format("15:04:05.000"), l.Source, l.Text)
+			fmt.Printf("%s %-6s %s\n", l.Time.Local().Format("15:04:05.000"), l.Source, l.Text)
 		}
 	}
 	return sc.Err()
