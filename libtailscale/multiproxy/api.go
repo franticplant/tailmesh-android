@@ -246,6 +246,11 @@ type Engine struct {
 	uidResolver UIDResolver
 
 	dataDir         string
+
+	// The tailnet status poll's cadence (SetForeground).
+	statusPollBackground atomic.Bool
+	statusPollMu         sync.Mutex
+	statusPollWake       chan struct{} // closed to wake every poll at once
 	stateStoreFor   func(string) ipn.StateStore
 	callback        EngineCallback
 	exitNodeTailnet string
@@ -980,17 +985,58 @@ func (e *Engine) pollTailnetStatus(ctx context.Context, wg *sync.WaitGroup, uid 
 
 	doPoll()
 
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-
 	for {
+		t := time.NewTimer(e.statusPollInterval())
 		select {
 		case <-ctx.Done():
+			t.Stop()
 			return
-		case <-ticker.C:
-			doPoll()
+		case <-e.statusPollWakeChan():
+			t.Stop()
+		case <-t.C:
 		}
+		doPoll()
 	}
+}
+
+// Status poll cadence (pollTailnetStatus): every 10 s while the app's
+// screens are open, every 30 s otherwise. The poll is a full Status() with
+// every peer; it feeds peer paths, VIP services, MagicDNS targets and subnet
+// routes, none of which change often.
+const (
+	statusPollForeground = 10 * time.Second
+	statusPollBackground = 30 * time.Second
+)
+
+func (e *Engine) statusPollInterval() time.Duration {
+	if e.statusPollBackground.Load() {
+		return statusPollBackground
+	}
+	return statusPollForeground
+}
+
+func (e *Engine) statusPollWakeChan() <-chan struct{} {
+	e.statusPollMu.Lock()
+	defer e.statusPollMu.Unlock()
+	if e.statusPollWake == nil {
+		e.statusPollWake = make(chan struct{})
+	}
+	return e.statusPollWake
+}
+
+// SetForeground tells the engine whether one of the app's screens is open.
+// In the background the tailnet status poll slows down; coming back wakes
+// every poll at once.
+func (e *Engine) SetForeground(foreground bool) {
+	if e.statusPollBackground.Swap(!foreground) == !foreground || !foreground {
+		return
+	}
+	e.statusPollMu.Lock()
+	if e.statusPollWake != nil {
+		close(e.statusPollWake)
+	}
+	e.statusPollWake = make(chan struct{})
+	e.statusPollMu.Unlock()
 }
 
 // Close gracefully shuts down the Engine and all its components.

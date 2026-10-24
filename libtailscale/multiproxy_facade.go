@@ -88,6 +88,10 @@ func (e *MultiProxyEngine) RemoveTailnet(identifier string) error {
 
 func (e *MultiProxyEngine) Close() { e.inner.Close() }
 
+// SetForeground tells the engine whether one of the app's screens is open:
+// its 10 s tailnet status poll slows to 30 s in the background.
+func (e *MultiProxyEngine) SetForeground(foreground bool) { e.inner.SetForeground(foreground) }
+
 func (e *MultiProxyEngine) SetUpstreamDNS(dns string) { e.inner.SetUpstreamDNS(dns) }
 
 // SetBootstrapDNS supplies the underlying network's plain resolver, used only

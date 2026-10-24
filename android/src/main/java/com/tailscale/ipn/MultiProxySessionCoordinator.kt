@@ -283,6 +283,7 @@ object MultiProxySessionCoordinator {
    */
   fun setUiVisible(visible: Boolean) {
     uiVisible = visible
+    boundSession?.engine?.setForeground(visible)
     if (visible) pollWake.trySend(Unit)
   }
 
@@ -317,6 +318,8 @@ object MultiProxySessionCoordinator {
           val power = session.app.getSystemService(android.os.PowerManager::class.java)
           while (true) {
             PerfCounters.inc("kt.statePoll")
+            // A new engine starts in the foreground; keep it in step (a no-op if unchanged).
+            session.engine?.setForeground(uiVisible)
             refreshState(session)
             // Once a second only while a screen of the app is visible; otherwise the state
             // only feeds provisioning, subnet-route changes and the notification, which can

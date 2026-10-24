@@ -218,3 +218,38 @@ func TestPathClaimCheck(t *testing.T) {
 		t.Error("not due after the clock went back")
 	}
 }
+
+func TestStatusPollCadence(t *testing.T) {
+	e := NewEngine(t.TempDir(), &MockCallback{})
+	t.Cleanup(e.Close)
+	if got := e.statusPollInterval(); got != statusPollForeground {
+		t.Fatalf("default = %v", got)
+	}
+	wake := e.statusPollWakeChan()
+	e.SetForeground(false)
+	if got := e.statusPollInterval(); got != statusPollBackground {
+		t.Errorf("background = %v", got)
+	}
+	select {
+	case <-wake:
+		t.Error("going to the background woke the polls")
+	default:
+	}
+	e.SetForeground(true)
+	select {
+	case <-wake:
+	default:
+		t.Error("coming to the foreground did not wake the polls")
+	}
+	if got := e.statusPollInterval(); got != statusPollForeground {
+		t.Errorf("foreground again = %v", got)
+	}
+	// A second foreground call doesn't wake again.
+	wake = e.statusPollWakeChan()
+	e.SetForeground(true)
+	select {
+	case <-wake:
+		t.Error("woke without a change")
+	default:
+	}
+}
