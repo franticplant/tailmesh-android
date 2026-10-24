@@ -519,9 +519,14 @@ object RemoteMethods {
               })
         })
     add(
-        Method("upstreams.stats", false, "Raw per-upstream dataplane stats from the engine.") {
-          RawJson(engine().getUpstreamStatsJSON())
-        })
+        Method(
+            "upstreams.stats",
+            false,
+            "Raw per-upstream dataplane stats from the engine; WireGuard upstreams add a " +
+                "wireguard object: each peer's endpoint, last handshake, bytes and keepalive, " +
+                "handshake initiations, responses and timeouts, and the last error.") {
+              RawJson(engine().getUpstreamStatsDetailedJSON())
+            })
     add(
         Method(
             "upstreams.probe",

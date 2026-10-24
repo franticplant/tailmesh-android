@@ -137,7 +137,18 @@ func (e *MultiProxyEngine) GetUpstreamsJSON() string {
 // that has never been dialed appears with every counter at zero, not absent,
 // so the UI does not need to distinguish "no data yet" from "not present".
 func (e *MultiProxyEngine) GetUpstreamStatsJSON() string {
-	infos := e.inner.UpstreamStatsSnapshot()
+	return upstreamStatsJSON(e.inner.UpstreamStatsSnapshot())
+}
+
+// GetUpstreamStatsDetailedJSON is GetUpstreamStatsJSON plus, for WireGuard
+// upstreams, a "wireguard" object: each peer's endpoint, last handshake and
+// bytes, handshake attempts and timeouts, and the last error. For remote
+// control's upstreams.stats; the app's 1 s poll uses GetUpstreamStatsJSON.
+func (e *MultiProxyEngine) GetUpstreamStatsDetailedJSON() string {
+	return upstreamStatsJSON(e.inner.UpstreamStatsSnapshotDetailed())
+}
+
+func upstreamStatsJSON(infos []multiproxy.UpstreamStatsInfo) string {
 	if infos == nil {
 		infos = []multiproxy.UpstreamStatsInfo{}
 	}

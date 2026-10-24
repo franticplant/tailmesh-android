@@ -98,6 +98,19 @@ type wireguardProvider struct {
 
 	mu     sync.Mutex
 	closed bool
+
+	// events counts handshakes and keeps the last error, from the device's
+	// log calls (wireguard_details.go).
+	events *wgEvents
+}
+
+// wgHexToBase64 is the inverse of wgKeyToHex, for showing a UAPI key.
+func wgHexToBase64(h string) string {
+	raw, err := hex.DecodeString(h)
+	if err != nil {
+		return h
+	}
+	return base64.StdEncoding.EncodeToString(raw)
 }
 
 // wgKeyToHex converts a base64 WireGuard key to the hex form the UAPI expects.
@@ -274,9 +287,16 @@ func NewWireGuardUpstream(cfg WireGuardConfig, bind conn.Bind, logf func(string,
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
+	events := &wgEvents{}
 	logger := &device.Logger{
-		Verbosef: func(format string, args ...any) { logf("wireguard/"+string(cfg.ID)+": "+format, args...) },
-		Errorf:   func(format string, args ...any) { logf("wireguard/"+string(cfg.ID)+": "+format, args...) },
+		Verbosef: func(format string, args ...any) {
+			events.observe(false, format, args...)
+			logf("wireguard/"+string(cfg.ID)+": "+format, args...)
+		},
+		Errorf: func(format string, args ...any) {
+			events.observe(true, format, args...)
+			logf("wireguard/"+string(cfg.ID)+": "+format, args...)
+		},
 	}
 
 	dev := device.NewDevice(tunDev, bind, logger)
@@ -290,7 +310,7 @@ func NewWireGuardUpstream(cfg WireGuardConfig, bind conn.Bind, logf func(string,
 	}
 
 	v4, v6 := cfg.carriedFamilies()
-	p := &wireguardProvider{id: cfg.ID, via: cfg.Via, dev: dev, stack: tstack, tun: tunDev, v4: v4, v6: v6, dns: cfg.DNS}
+	p := &wireguardProvider{id: cfg.ID, via: cfg.Via, dev: dev, stack: tstack, tun: tunDev, v4: v4, v6: v6, dns: cfg.DNS, events: events}
 	p.resolver = newTunnelResolver(p)
 	return p, nil
 }

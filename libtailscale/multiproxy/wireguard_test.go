@@ -543,6 +543,16 @@ func TestWireGuardTunnelCarriesTCP(t *testing.T) {
 		t.Errorf("PeerPathInfo = %q, want wireguard:established", info)
 	}
 
+	d := client.(*wireguardProvider).details()
+	if d.HandshakeInitiations == 0 || d.HandshakeResponses == 0 || len(d.Peers) != 1 {
+		t.Fatalf("details: %+v", d)
+	}
+	peer := d.Peers[0]
+	if peer.PublicKey != serverPub || peer.Endpoint != net.JoinHostPort("127.0.0.1", strconv.Itoa(serverPort)) ||
+		peer.LastHandshakeAtMillis == 0 || peer.RxBytes == 0 || peer.TxBytes == 0 || peer.KeepaliveSeconds != 1 {
+		t.Errorf("peer details: %+v", peer)
+	}
+
 	// A closed upstream must refuse to dial rather than half-work.
 	if err := client.Close(); err != nil {
 		t.Fatalf("Close: %v", err)

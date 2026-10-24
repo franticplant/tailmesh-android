@@ -327,13 +327,26 @@ type UpstreamStatsInfo struct {
 	// meaningful path, or "unknown" if it could not be determined. See
 	// Engine.peerPathFor.
 	PeerPath string `json:"peerPath,omitempty"`
+
+	// WireGuard is a WireGuard upstream's peers and handshake history. Only
+	// in UpstreamStatsSnapshotDetailed (remote control's upstreams.stats),
+	// not in the app's 1 s poll.
+	WireGuard *WireGuardDetails `json:"wireguard,omitempty"`
 }
 
 // UpstreamStatsSnapshot lists live stats for every upstream currently known:
 // every upstream UpstreamSnapshot would list, plus any upstream that has
 // recorded stats even if it has since been removed, so its last-known state
 // stays visible rather than disappearing along with the row that explains it.
-func (e *Engine) UpstreamStatsSnapshot() []UpstreamStatsInfo {
+func (e *Engine) UpstreamStatsSnapshot() []UpstreamStatsInfo { return e.upstreamStatsSnapshot(false) }
+
+// UpstreamStatsSnapshotDetailed is UpstreamStatsSnapshot plus each WireGuard
+// upstream's peers and handshake details, read from the device on the call.
+func (e *Engine) UpstreamStatsSnapshotDetailed() []UpstreamStatsInfo {
+	return e.upstreamStatsSnapshot(true)
+}
+
+func (e *Engine) upstreamStatsSnapshot(detailed bool) []UpstreamStatsInfo {
 	infoByID := make(map[UpstreamID]UpstreamInfo)
 	if e.upstreams != nil {
 		for _, p := range e.upstreams.List() {
@@ -365,6 +378,13 @@ func (e *Engine) UpstreamStatsSnapshot() []UpstreamStatsInfo {
 		item := UpstreamStatsInfo{ID: info.ID, Kind: info.Kind, Ready: info.Ready, Via: info.Via}
 		if info.Kind != "" {
 			item.PeerPath = e.peerPathFor(id, UpstreamKind(info.Kind))
+		}
+		if detailed && UpstreamKind(info.Kind) == UpstreamKindWireGuard {
+			if p, ok := e.lookupProvider(id); ok {
+				if wg, ok := p.(*wireguardProvider); ok && wg.events != nil {
+					item.WireGuard = wg.details()
+				}
+			}
 		}
 
 		if s := statsByID[id]; s != nil {
