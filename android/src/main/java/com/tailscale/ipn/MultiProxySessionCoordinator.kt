@@ -7,6 +7,7 @@ import android.content.Intent
 import com.tailscale.ipn.multiproxy.db.ProvisioningState
 import com.tailscale.ipn.util.TSLog
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -14,6 +15,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import libtailscale.Libtailscale
@@ -267,6 +269,35 @@ object MultiProxySessionCoordinator {
   private var boundSession: MultiProxySession? = null
   private var pollJob: Job? = null
 
+  // The state poll's cadence (see bind): 1 s while an app screen is visible, slower otherwise.
+  private const val statePollVisibleMillis = 1_000L
+  private const val statePollBackgroundMillis = 15_000L
+  private const val statePollScreenOffMillis = 60_000L
+  @Volatile private var uiVisible = false
+  private val pollWake = Channel<Unit>(Channel.CONFLATED)
+  private val pollMutex = Mutex()
+
+  /**
+   * MainActivity calls this from onStart/onStop. Becoming visible polls at once, so the screen
+   * never starts on state up to a minute old.
+   */
+  fun setUiVisible(visible: Boolean) {
+    uiVisible = visible
+    if (visible) pollWake.trySend(Unit)
+  }
+
+  private suspend fun refreshState(session: MultiProxySession) {
+    pollMutex.withLock {
+      refreshRuntimeState(session)
+      refreshUpstreamStats(session)
+    }
+  }
+
+  /** Brings the polled state up to date now, for a reader that can't wait for the next poll. */
+  suspend fun refreshForRead() {
+    boundSession?.let { refreshState(it) }
+  }
+
   // Called when the user changes DNS settings (e.g. selects/clears a
   // public DoH resolver) so the active Multi-Tailnet session's DNS
   // fallback picks it up immediately, the same way
@@ -283,11 +314,20 @@ object MultiProxySessionCoordinator {
     pollJob?.cancel()
     pollJob =
         session.app.applicationScope.launch {
+          val power = session.app.getSystemService(android.os.PowerManager::class.java)
           while (true) {
             PerfCounters.inc("kt.statePoll")
-            refreshRuntimeState(session)
-            refreshUpstreamStats(session)
-            delay(1000)
+            refreshState(session)
+            // Once a second only while a screen of the app is visible; otherwise the state
+            // only feeds provisioning, subnet-route changes and the notification, which can
+            // wait. Remote reads call refreshForRead first.
+            val interval =
+                when {
+                  uiVisible -> statePollVisibleMillis
+                  power?.isInteractive != false -> statePollBackgroundMillis
+                  else -> statePollScreenOffMillis
+                }
+            withTimeoutOrNull(interval) { pollWake.receive() }
           }
         }
     if (obsDb == null) {

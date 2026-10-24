@@ -303,6 +303,7 @@ object RemoteMethods {
             false,
             "Configured tailnets with runtime state, machine name, last error, exit node, accepted subnet routes and route conflicts.",
         ) {
+          MultiProxySessionCoordinator.refreshForRead()
           val states = MultiProxySessionCoordinator.runtimeStates.value
           val names = MultiProxySessionCoordinator.machineNames.value
           val errors = MultiProxySessionCoordinator.lastErrors.value
@@ -488,6 +489,7 @@ object RemoteMethods {
             false,
             "Configured upstreams (secrets omitted) with their live stats.",
         ) {
+          MultiProxySessionCoordinator.refreshForRead()
           val stats = MultiProxySessionCoordinator.upstreamStats.value
           JSONArray(
               session.upstreamRepository.upstreams.value.map { u ->

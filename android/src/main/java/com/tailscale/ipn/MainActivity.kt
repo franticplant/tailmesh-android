@@ -619,8 +619,14 @@ class MainActivity : ComponentActivity() {
     lifecycleScope.launch(Dispatchers.IO) { MDMSettings.update(App.get(), restrictionsManager) }
   }
 
+  override fun onStart() {
+    super.onStart()
+    MultiProxySessionCoordinator.setUiVisible(true)
+  }
+
   override fun onStop() {
     super.onStop()
+    MultiProxySessionCoordinator.setUiVisible(false)
     val restrictionsManager =
         this.getSystemService(Context.RESTRICTIONS_SERVICE) as RestrictionsManager
     lifecycleScope.launch(Dispatchers.IO) { MDMSettings.update(App.get(), restrictionsManager) }

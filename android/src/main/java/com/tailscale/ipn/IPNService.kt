@@ -837,7 +837,10 @@ open class IPNService : VpnService(), libtailscale.IPNService {
         scope.launch {
           while (activeMode == VpnRuntimeMode.MULTIPROXY) {
             kotlinx.coroutines.delay(30_000)
-            if (activeMode == VpnRuntimeMode.MULTIPROXY) {
+            // Nobody sees the notification with the screen off; the first refresh after it
+            // comes back on catches up.
+            val screenOn = getSystemService(android.os.PowerManager::class.java)?.isInteractive
+            if (activeMode == VpnRuntimeMode.MULTIPROXY && screenOn != false) {
               PerfCounters.inc("kt.notificationRefresh")
               showForegroundNotification()
             }

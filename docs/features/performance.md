@@ -43,9 +43,9 @@ Tailmesh screen is visible. Counter names are the `jobs` / `kotlinJobs` keys in 
 
 | Job | Where | Interval | Screen off | No UI | Counter |
 |---|---|---|---|---|---|
-| Multi-Tailnet state poll: tailnet and exit-node states, subnet routes, upstream stats (four JNI calls returning JSON) | `MultiProxySessionCoordinator.bind` | 1 s | yes | yes | `kt.statePoll` |
+| Multi-Tailnet state poll: tailnet and exit-node states, subnet routes, upstream stats (four JNI calls returning JSON) | `MultiProxySessionCoordinator.bind` | 1 s while an app screen is visible, 15 s otherwise, 60 s screen off | 60 s | 15 s | `kt.statePoll` |
 | Observability snapshot (and its SQLite samples) | `MultiProxySessionCoordinator.bind` | 60 s, 1 s while Diagnostics is open | yes | yes | `kt.observabilityPoll` |
-| Multi-Tailnet notification rebuild | `IPNService.startMultiProxyNotificationRefresh` | 30 s | yes | yes | `kt.notificationRefresh` |
+| Multi-Tailnet notification rebuild | `IPNService.startMultiProxyNotificationRefresh` | 30 s, skipped while the screen is off | wakes, skips | yes | `kt.notificationRefresh` |
 | Speed meter (when turned on) | `SpeedMeterService.run` | 1 s screen on, 5 s screen off | yes (5 s) | yes | `kt.speedMeterTick` |
 | Peer list for the Multi-Tailnet screen | `MultiProxyViewModel` | 2 s | while the activity lives | while the activity lives | `kt.ui.peersPoll` |
 | Diagnostics charts, expanded rows | `DiagnosticsView` | 2 s | — | no | `kt.ui.diagnosticsPoll`, `kt.ui.diagnosticsRowPoll` |
