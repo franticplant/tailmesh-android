@@ -31,6 +31,10 @@ Tailscale client through its LocalAPI:
 state. A call with an argument the method does not take is refused, with the accepted ones listed,
 rather than run with a default. Beyond the catalog:
 
+- `GET /v1/status` (`tailmesh-ctl status`) — the session, and the server's health: uptime,
+  requests served, client and server errors, requests in flight, latency of the last 64 quick
+  requests (p50, p95, max), the slowest recent one, the last error, and how long until remote
+  control turns itself off. Counted per request; nothing runs in between.
 - `GET /v1/logs` — app and Go engine logs, filterable, and with `follow=1` a live stream.
 - `GET /v1/files?path=` — download a capture or a diagnostics export.
 - `/debug/pprof/*` — Go CPU, heap, goroutine, allocation, block, mutex profiles and traces, for the

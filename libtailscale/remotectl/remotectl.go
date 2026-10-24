@@ -235,6 +235,8 @@ type Server struct {
 
 	shell    shellState // guarded by mu
 	shellLog *shellLog  // nil unless Config.Shell
+
+	health health
 }
 
 // Start validates cfg, starts listening, and serves until Stop or expiry.
@@ -319,7 +321,7 @@ func Start(cfg Config, h Handler, ev Events) (*Server, error) {
 		s.methods[m.Name] = m
 	}
 	s.srv = &http.Server{
-		Handler:           s.routes(),
+		Handler:           s.measure(s.routes()),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	if !expires.IsZero() {
@@ -892,6 +894,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"control":          ri.control,
 		"allowControl":     allow,
 		"methods":          len(s.methods),
+		"health":           s.healthInfo(),
 	})
 }
 
@@ -1167,6 +1170,7 @@ func (s *Server) logAccess(e AccessEntry) {
 		e.Time = time.Now()
 	}
 	s.access.append(e)
+	s.health.noteError(e)
 	if s.ev != nil {
 		s.ev.OnAccess(e)
 	}
