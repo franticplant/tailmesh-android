@@ -124,6 +124,10 @@ func TestLogFiltersClearAndMute(t *testing.T) {
 		t.Errorf("muted wireguard: %q", texts(got))
 	}
 
+	if m := SetMutedComponents(nil); m == nil || len(m) != 0 || len(MutedComponents()) != 0 {
+		t.Errorf("unmute: %v, then %v", m, MutedComponents())
+	}
+
 	if n := ClearLogs(); n != 5 {
 		t.Errorf("cleared %d, want 5", n)
 	}

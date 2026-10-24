@@ -158,6 +158,7 @@ func SetMutedComponents(components []string) []string {
 	m = slices.Compact(m)
 	if len(m) == 0 {
 		logs.muted.Store(nil)
+		return []string{}
 	} else {
 		logs.muted.Store(&m)
 	}
