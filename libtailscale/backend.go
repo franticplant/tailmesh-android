@@ -81,6 +81,7 @@ func start(dataDir, directFileRoot string, hwAttestationPref bool, appCtx AppCon
 	android.mu.Unlock()
 
 	initLogging(appCtx)
+	disablePortList()
 	installAndroidControlProxy(appCtx)
 	installAndroidPublicDoH(appCtx)
 	// Set XDG_CACHE_HOME to make os.UserCacheDir work.
