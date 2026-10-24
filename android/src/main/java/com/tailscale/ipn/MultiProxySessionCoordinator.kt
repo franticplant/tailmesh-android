@@ -284,6 +284,7 @@ object MultiProxySessionCoordinator {
     pollJob =
         session.app.applicationScope.launch {
           while (true) {
+            PerfCounters.inc("kt.statePoll")
             refreshRuntimeState(session)
             refreshUpstreamStats(session)
             delay(1000)
@@ -299,6 +300,7 @@ object MultiProxySessionCoordinator {
             val intervalSeconds =
                 if (diagnosticsUiVisible) obsIntervalVisibleSeconds
                 else obsIntervalBackgroundSeconds
+            PerfCounters.inc("kt.observabilityPoll")
             refreshObservabilitySnapshot(session)
             delay(intervalSeconds * 1000L)
           }

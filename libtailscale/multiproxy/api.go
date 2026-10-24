@@ -846,6 +846,7 @@ func (e *Engine) pollTailnetStatus(ctx context.Context, wg *sync.WaitGroup, uid 
 	lastState := ""
 
 	doPoll := func() {
+		perfTailnetStatusPoll.Inc()
 		status, err := lc.Status(ctx)
 		if err == nil && status != nil {
 			if status.BackendState != lastState {

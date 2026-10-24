@@ -111,6 +111,31 @@ object RemoteMethods {
               .put("proxyOnly", App.get().isProxyOnlyMode())
               .put("captureActive", PacketCaptures.active.value)
         })
+    add(
+        Method(
+            "perf.stats",
+            false,
+            "What the app itself costs: process CPU time (and per hour of uptime), the threads " +
+                "using the most CPU, context switches (wakeups), memory (RSS, PSS, Java and Go " +
+                "heap), Go runtime metrics, and how often each periodic job has run. Read on " +
+                "demand; compare two readings for a rate.",
+            mapOf("top" to "how many of the busiest threads to list (default 15)"),
+        ) {
+          val top = it.optLong("top", 15).coerceIn(0, 200).toInt()
+          withContext(Dispatchers.IO) {
+            val o = JSONObject(Libtailscale.perfStatsJSON(top))
+            val rt = Runtime.getRuntime()
+            val app = App.get()
+            o.put("kotlinJobs", JSONObject(com.tailscale.ipn.PerfCounters.snapshot()))
+                .put("javaHeapUsedBytes", rt.totalMemory() - rt.freeMemory())
+                .put("javaHeapMaxBytes", rt.maxMemory())
+                .put("pssBytes", android.os.Debug.getPss() * 1024)
+                .put(
+                    "screenOn",
+                    app.getSystemService(android.os.PowerManager::class.java).isInteractive)
+                .put("runtimeMode", IPNService.runtimeMode.value.name)
+          }
+        })
     if (BuildConfig.DEV_TOOLS)
         add(
             Method(

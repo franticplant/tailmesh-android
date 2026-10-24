@@ -15,6 +15,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/tailscale/tailscale-android/libtailscale/perfstats"
 )
 
 // Observability - production-safe metrics, samples and events.
@@ -687,6 +689,7 @@ func (o *observability) samplerLoop() {
 }
 
 func (o *observability) sampleOnce() {
+	perfObsSample.Inc()
 	now := time.Now()
 	cpuSecs := readProcessCPUSeconds()
 
@@ -1008,3 +1011,9 @@ func (e *Engine) CaptureGoroutineDumpToFile(path string) error {
 	defer f.Close()
 	return pprof.Lookup("goroutine").WriteTo(f, 1)
 }
+
+// Run counts of the engine's periodic jobs, for perf.stats.
+var (
+	perfObsSample         = perfstats.NewCounter("go.observabilitySample")
+	perfTailnetStatusPoll = perfstats.NewCounter("go.tailnetStatusPoll")
+)

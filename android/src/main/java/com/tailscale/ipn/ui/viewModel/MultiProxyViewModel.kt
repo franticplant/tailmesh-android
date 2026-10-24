@@ -9,6 +9,7 @@ import com.tailscale.ipn.AddressCrossover
 import com.tailscale.ipn.IPNService
 import com.tailscale.ipn.MultiProxySession
 import com.tailscale.ipn.MultiProxySessionCoordinator
+import com.tailscale.ipn.PerfCounters
 import com.tailscale.ipn.UninitializedApp
 import com.tailscale.ipn.multiproxy.db.TailnetProfile
 import com.tailscale.ipn.ui.localapi.Client
@@ -141,6 +142,7 @@ class MultiProxyViewModel : ViewModel() {
     peersJob =
         viewModelScope.launch {
           while (true) {
+            PerfCounters.inc("kt.ui.peersPoll")
             try {
               val jsonStr = s.engine?.getTargetsJSONV2() ?: "[]"
               _peers.value = json.decodeFromString<List<MultiProxyPeer>>(jsonStr)

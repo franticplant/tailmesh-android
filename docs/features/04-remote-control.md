@@ -15,7 +15,7 @@ Tailscale client through its LocalAPI:
 
 | Area | Read | Change |
 |---|---|---|
-| Overview | `app.status` | `multitailnet.start` / `stop` / `reconcile`, `standard.connect` / `disconnect`, `vpn.restart` |
+| Overview | `app.status`, `perf.stats` (the app's own CPU, wakeups, memory and periodic-job counts; see [performance](performance.md)) | `multitailnet.start` / `stop` / `reconcile`, `standard.connect` / `disconnect`, `vpn.restart` |
 | Tailnets | `tailnets.list` (accepted routes and conflicts included), `peers`, `peerPaths` (direct, DERP, peer relay or idle per peer), `states`, `addressConflicts`, `subnetRoutes`, `exitNodeCandidates` | `tailnets.add`, `importRegular`, `setEnabled`, `setAcceptRoutes`, `rename`, `forget`, `setExitNode` |
 | Upstreams | `upstreams.list` (secrets redacted), `routable`, `stats`, `exitNodeStates` | `upstreams.saveSocks5`, `saveWireGuard`, `saveExitNode`, `setEnabled`, `delete` |
 | Routing | `routing.get`, `directLinks` (direct tailnet connections over cable or hotspot: setting, effective state, IPv6 check) | `routing.setDefaultUpstream`, `setDefaultDNSUpstream`, `setBroadCapture`, `setLanExclusion`, `setDirectLinks` |

@@ -54,6 +54,7 @@ import com.patrykandpatrick.vico.core.marker.MarkerLabelFormatter
 import com.patrykandpatrick.vico.core.scroll.InitialScroll
 import com.tailscale.ipn.App
 import com.tailscale.ipn.MultiProxySessionCoordinator
+import com.tailscale.ipn.PerfCounters
 import com.tailscale.ipn.SubnetRoutesSnapshot
 import com.tailscale.ipn.TailnetPeersSnapshot
 import com.tailscale.ipn.UpstreamStatSnapshot
@@ -171,6 +172,7 @@ fun DiagnosticsView(onNavigateBack: () -> Unit) {
 
   LaunchedEffect(range) {
     while (true) {
+      PerfCounters.inc("kt.ui.diagnosticsPoll")
       val since = System.currentTimeMillis() - range.millis
       samples =
           withContext(Dispatchers.IO) {
@@ -1145,6 +1147,7 @@ private fun UpstreamRow(
   LaunchedEffect(expanded, range, isTailnet) {
     if (!expanded) return@LaunchedEffect
     while (expanded) {
+      PerfCounters.inc("kt.ui.diagnosticsRowPoll")
       val since = System.currentTimeMillis() - range.millis
       history =
           withContext(Dispatchers.IO) {
@@ -1365,6 +1368,7 @@ private fun AppRow(
   LaunchedEffect(expanded, range) {
     if (!expanded) return@LaunchedEffect
     while (expanded) {
+      PerfCounters.inc("kt.ui.diagnosticsRowPoll")
       val since = System.currentTimeMillis() - range.millis
       history =
           withContext(Dispatchers.IO) {

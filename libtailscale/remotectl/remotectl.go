@@ -405,6 +405,7 @@ func (s *Server) janitor() {
 			return
 		case <-t.C:
 		}
+		perfJanitor.Inc()
 		now := time.Now()
 		changed := false
 		s.mu.Lock()

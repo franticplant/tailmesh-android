@@ -838,6 +838,7 @@ open class IPNService : VpnService(), libtailscale.IPNService {
           while (activeMode == VpnRuntimeMode.MULTIPROXY) {
             kotlinx.coroutines.delay(30_000)
             if (activeMode == VpnRuntimeMode.MULTIPROXY) {
+              PerfCounters.inc("kt.notificationRefresh")
               showForegroundNotification()
             }
           }

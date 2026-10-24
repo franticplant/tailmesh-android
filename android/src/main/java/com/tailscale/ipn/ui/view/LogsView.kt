@@ -75,6 +75,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import com.tailscale.ipn.BuildConfig
 import com.tailscale.ipn.MultiProxySessionCoordinator
+import com.tailscale.ipn.PerfCounters
 import com.tailscale.ipn.R
 import com.tailscale.ipn.remote.RemoteControl
 import com.tailscale.ipn.remote.RemoteShell
@@ -136,6 +137,7 @@ fun LogsView(onBack: () -> Unit, initial: LogKind = LogKind.APP) {
         Libtailscale.captureRemoteLogsFromStart()
         var next = rows.lastOrNull()?.key ?: 0L
         while (true) {
+          PerfCounters.inc("kt.ui.logsPoll")
           val fresh = withContext(Dispatchers.IO) { readAppLogs(next) }
           if (fresh.isNotEmpty()) {
             rows.addAll(fresh)

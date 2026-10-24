@@ -10,6 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/tailscale/tailscale-android/libtailscale/perfstats"
 )
 
 // Log capture for /v1/logs.
@@ -66,6 +68,7 @@ func (r *logRing) add(source, text string) {
 		r.mu.Unlock()
 		return
 	}
+	perfLogLines.Inc()
 	r.lines = append(r.lines, LogLine{Seq: r.nextSeq, Time: time.Now(), Source: source, Text: text})
 	r.nextSeq++
 	if len(r.lines) > logRingSize {
@@ -156,3 +159,10 @@ func LogsSince(after uint64, max int) ([]LogLine, uint64) {
 	}
 	return lines, next
 }
+
+// Run counts for perf.stats: lines kept in the log ring (each one is work
+// for every running remote-control session's follow), and janitor passes.
+var (
+	perfLogLines = perfstats.NewCounter("go.logRingLines")
+	perfJanitor  = perfstats.NewCounter("go.remoteJanitor")
+)

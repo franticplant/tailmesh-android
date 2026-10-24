@@ -305,6 +305,7 @@ class SpeedMeterService : Service() {
     val window = SpeedMeter.RateWindow()
     var shown: String? = null
     while (scope.isActive) {
+      PerfCounters.inc("kt.speedMeterTick")
       if (!power.isInteractive) {
         // Nobody sees the status bar; don't wake up every second for it. Start a fresh window
         // afterwards, or the first reading would average over the whole time the screen was off.
