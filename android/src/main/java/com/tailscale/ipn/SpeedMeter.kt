@@ -174,6 +174,38 @@ object SpeedMeter {
     }
   }
 
+  /**
+   * The rate over a short sliding window of cumulative counter samples. Android's per-interface
+   * counters advance in batches, so two samples a second apart often differ by nothing and the next
+   * pair by twice the real rate; over about three seconds that evens out, and a stop in traffic
+   * still shows as 0 within the window.
+   */
+  class RateWindow(private val windowMs: Long = 3_000) {
+    private data class Sample(val at: Long, val rx: Long, val tx: Long)
+
+    private val samples = ArrayDeque<Sample>()
+
+    /** Forgets every sample, e.g. after the screen was off, so nothing averages over that gap. */
+    fun reset() = samples.clear()
+
+    /**
+     * Adds the counters read at [at] (milliseconds, monotonic) and returns the rate in bytes per
+     * second down and up, or null until there are two samples.
+     */
+    fun add(at: Long, rx: Long, tx: Long): Pair<Long, Long>? {
+      val last = samples.lastOrNull()
+      // A counter going back (an interface went away) or time not moving: start again.
+      if (last != null && (rx < last.rx || tx < last.tx || at <= last.at)) samples.clear()
+      samples.addLast(Sample(at, rx, tx))
+      // Keep the newest sample at or before the window's start, so the span covers the window.
+      while (samples.size > 2 && samples[1].at <= at - windowMs) samples.removeFirst()
+      val first = samples.first()
+      if (samples.size < 2) return null
+      val ms = at - first.at
+      return (rx - first.rx) * 1000 / ms to (tx - first.tx) * 1000 / ms
+    }
+  }
+
   /** Starts the meter after a reboot, if it was on. */
   class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -270,32 +302,33 @@ class SpeedMeterService : Service() {
 
   private suspend fun run() {
     val power = getSystemService(PowerManager::class.java)
-    var prevRx = -1L
-    var prevTx = -1L
-    var prevAt = 0L
+    val window = SpeedMeter.RateWindow()
+    var shown: String? = null
     while (scope.isActive) {
       if (!power.isInteractive) {
-        // Nobody sees the status bar; don't wake up every second for it. Start a fresh baseline
+        // Nobody sees the status bar; don't wake up every second for it. Start a fresh window
         // afterwards, or the first reading would average over the whole time the screen was off.
-        prevRx = -1
+        window.reset()
         delay(5_000)
         continue
       }
       val sample = sample()
-      val rx = sample.sumOf { it.rxBytes }
-      val tx = sample.sumOf { it.txBytes }
-      val now = SystemClock.elapsedRealtime()
-      if (prevRx >= 0 && now > prevAt) {
-        val ms = now - prevAt
-        // An interface going away makes the sum drop; show zero rather than a negative rate.
-        val down = ((rx - prevRx).coerceAtLeast(0) * 1000 / ms)
-        val up = ((tx - prevTx).coerceAtLeast(0) * 1000 / ms)
+      val rate =
+          window.add(
+              SystemClock.elapsedRealtime(),
+              sample.sumOf { it.rxBytes },
+              sample.sumOf { it.txBytes })
+      if (rate != null) {
+        val (down, up) = rate
         SpeedMeter.last = SpeedMeter.Rate(down, up, sample, System.currentTimeMillis())
-        notify(build(down, up, sample))
+        // Post only when something visible changed: the icon, the text or the networks.
+        val key =
+            "${SpeedMeter.readable(down)} ${SpeedMeter.readable(up)} ${sample.map { it.transport }.distinct()}"
+        if (key != shown) {
+          notify(build(down, up, sample))
+          shown = key
+        }
       }
-      prevRx = rx
-      prevTx = tx
-      prevAt = now
       delay(1_000)
     }
   }
