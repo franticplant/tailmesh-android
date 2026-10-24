@@ -8,6 +8,7 @@ import com.tailscale.ipn.BuildConfig
 import com.tailscale.ipn.IPNService
 import com.tailscale.ipn.MultiProxySessionCoordinator
 import com.tailscale.ipn.UninitializedApp
+import com.tailscale.ipn.VpnRuntimeMode
 import com.tailscale.ipn.multiproxy.ControlException
 import com.tailscale.ipn.multiproxy.MultiProxyControls
 import com.tailscale.ipn.multiproxy.PacketCaptures
@@ -97,20 +98,92 @@ object RemoteMethods {
           .put("reboundNodes", s.reboundNodes)
           .put("reboundFailedNodes", s.reboundFailedNodes)
 
+  /** app.status: what is running, without making the caller combine flags. */
+  private fun appStatus(): JSONObject {
+    val runtimeMode = IPNService.runtimeMode.value
+    val engine = session.engine
+    val proxyOnly = App.get().isProxyOnlyMode()
+    val standardState = Notifier.state.value.name
+    val mode =
+        when {
+          engine != null || runtimeMode == VpnRuntimeMode.MULTIPROXY -> "multi-tailnet"
+          runtimeMode == VpnRuntimeMode.STANDARD || standardState in setOf("Running", "Starting") ->
+              "standard"
+          else -> "off"
+        }
+    val o =
+        JSONObject()
+            .put("version", BuildConfig.VERSION_NAME)
+            .put("mode", mode)
+            .put("proxyOnly", proxyOnly)
+            // A VPN interface is up: standard mode, or Multi-Tailnet without Proxy-Only.
+            .put(
+                "vpnInterface",
+                when (mode) {
+                  "multi-tailnet" -> session.activeFd >= 0
+                  "standard" -> runtimeMode == VpnRuntimeMode.STANDARD
+                  else -> false
+                })
+            .put("captureActive", PacketCaptures.active.value)
+            // The fields from before 2026-10-24, unchanged (see the method description).
+            .put("runtimeMode", runtimeMode.name)
+            .put("standardState", standardState)
+            .put("multiTailnetEngineRunning", engine != null)
+    if (engine == null) {
+      return o.put(
+          "summary",
+          when (mode) {
+            "standard" -> "Standard mode: $standardState"
+            "multi-tailnet" -> "Multi-Tailnet starting"
+            else -> "Off"
+          })
+    }
+    // Live, on demand: the same call the state poll makes.
+    val states = JSONArray(engine.getTailnetStatesJSON())
+    val byState = JSONObject()
+    val notRunning = JSONArray()
+    var enabled = 0
+    for (i in 0 until states.length()) {
+      val t = states.getJSONObject(i)
+      val st = t.optString("state")
+      byState.put(st, byState.optInt(st) + 1)
+      if (t.optBoolean("enabled")) {
+        enabled++
+        if (st != "Running") {
+          notRunning.put(JSONObject().put("id", t.optString("tailnetId")).put("state", st))
+        }
+      }
+    }
+    val running = byState.optInt("Running")
+    return o.put(
+            "tailnets",
+            JSONObject()
+                .put("total", states.length())
+                .put("enabled", enabled)
+                .put("running", running)
+                .put("byState", byState)
+                .put("enabledNotRunning", notRunning))
+        .put(
+            "summary",
+            "Multi-Tailnet ${if (proxyOnly) "(Proxy-Only)" else "(VPN)"}: " +
+                "$running of $enabled enabled tailnets running")
+  }
+
   private val methods: List<Method> = buildList {
     // -------------------------------------------------------------------
     // overview
     // -------------------------------------------------------------------
     add(
-        Method("app.status", false, "App version, VPN mode and engine state.") {
-          JSONObject()
-              .put("version", BuildConfig.VERSION_NAME)
-              .put("runtimeMode", IPNService.runtimeMode.value.name)
-              .put("standardState", Notifier.state.value.name)
-              .put("multiTailnetEngineRunning", session.engine != null)
-              .put("proxyOnly", App.get().isProxyOnlyMode())
-              .put("captureActive", PacketCaptures.active.value)
-        })
+        Method(
+            "app.status",
+            false,
+            "App version, mode and engine state. mode is multi-tailnet, standard or off; " +
+                "tailnets counts Multi-Tailnet's tailnets by state. The older fields stay: " +
+                "runtimeMode is the VPN service's mode (STOPPED in Multi-Tailnet Proxy-Only, " +
+                "which has no VPN), and standardState is the standard-mode Tailscale backend, " +
+                "which says nothing about Multi-Tailnet's tailnets.") {
+              appStatus()
+            })
     add(
         Method(
             "perf.stats",
