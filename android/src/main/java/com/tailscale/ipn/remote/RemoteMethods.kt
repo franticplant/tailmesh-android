@@ -568,6 +568,18 @@ object RemoteMethods {
           }
         })
     add(
+        Method(
+            "tailnets.identities",
+            false,
+            "The node identities this device holds: each tsnet state directory, the tailnet or " +
+                "exit-node upstream it belongs to (none: a leftover), its stored login profiles " +
+                "(node ID, tailnet, login, which one is current) and, for a running node, its " +
+                "live node ID, name and addresses. Never includes keys. Forgetting old nodes in " +
+                "the admin console needs an API key the app does not have.") {
+              val e = engine()
+              withContext(Dispatchers.IO) { RawJson(e.getIdentitiesJSON()) }
+            })
+    add(
         Method("upstreams.exitNodeStates", false, "Raw exit-node upstream state.") {
           RawJson(engine().getExitNodeStatesJSON())
         })

@@ -495,3 +495,15 @@ func (e *MultiProxyEngine) ProbeUpstreamJSON(upstreamID, target string, udp, wai
 	}
 	return string(b), nil
 }
+
+// GetIdentitiesJSON lists the node identities this device holds: every tsnet
+// state directory, the tailnet or exit-node upstream it belongs to (none for
+// a leftover), its stored login profiles (node ID, tailnet, which is
+// current) and, for a running node, its live node ID, name and addresses.
+// Never includes keys.
+func (e *MultiProxyEngine) GetIdentitiesJSON() string {
+	if e == nil || e.inner == nil {
+		return "[]"
+	}
+	return e.inner.IdentitiesJSON(context.Background())
+}
