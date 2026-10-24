@@ -45,9 +45,9 @@ object AppUpdater {
 
   /** Checks the APK at [path] and starts installing it. Returns what was started. */
   fun install(path: String): JSONObject {
-    val app = App.get()
     if (!BuildConfig.DEV_TOOLS)
         throw ControlException("remote updates exist only in development builds")
+    val app = App.get()
     if (!RemoteControlSettings().allowRemoteUpdates) {
       throw ControlException(
           "remote updates are off; turn on \"Allow remote updates\" on the phone")

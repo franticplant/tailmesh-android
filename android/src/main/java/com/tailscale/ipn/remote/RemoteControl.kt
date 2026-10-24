@@ -135,14 +135,9 @@ object RemoteControl {
                         RemoteMethods.exportsDir().absolutePath,
                     )),
             )
-            .apply {
-              // Development builds only; without it the server has no update endpoint.
-              if (BuildConfig.DEV_TOOLS) put("updateDir", AppUpdater.updateDir().absolutePath)
-            }
             .put("version", BuildConfig.VERSION_NAME)
             .put("methods", RemoteMethods.catalogJson())
-            // Development builds with "Allow remote shell" on; otherwise adds nothing.
-            .also { RemoteShell.configure(it) }
+            .also { putDevTools(it) }
     try {
       val addr = Libtailscale.startRemoteControl(config.toString(), handler)
       _state.value = State(running = true, address = addr)
@@ -153,6 +148,19 @@ object RemoteControl {
       TSLog.e(TAG, "could not start remote control: $e")
       _state.value = State(running = false, error = e.message ?: "Could not start")
       s.enabled = false
+    }
+  }
+
+  /**
+   * The development-only part of the server config: the update directory (without it the server has
+   * no update endpoint) and, with "Allow remote shell" on, the shell. DEV_TOOLS is a compile-time
+   * constant, so a release build has no call to either here; scripts/check-release-apk.sh checks
+   * that in the release dex, and DevToolsGateTest that it adds nothing.
+   */
+  internal fun putDevTools(config: JSONObject) {
+    if (BuildConfig.DEV_TOOLS) {
+      config.put("updateDir", AppUpdater.updateDir().absolutePath)
+      RemoteShell.configure(config)
     }
   }
 

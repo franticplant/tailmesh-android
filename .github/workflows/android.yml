@@ -69,6 +69,15 @@ jobs:
       - name: Build debug APK and run unit tests
         run: make tailscale-debug.apk
 
+      # A release-configuration APK (no -PdevTools, R8 as in a release;
+      # unsigned), checked for development-only features: the same check
+      # release.yml runs before publishing.
+      - name: Build release-config APK
+        run: (cd android && ./gradlew assembleRelease)
+
+      - name: Check release-config APK has no dev-only features
+        run: scripts/check-release-apk.sh android/build/outputs/apk/release/*.apk
+
       - name: Upload debug APK
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -132,6 +141,11 @@ jobs:
       - name: Remove keystore
         if: always()
         run: rm -f "$RUNNER_TEMP/tailmesh-release.jks"
+
+      # The inverse of the release check: it must still recognise every
+      # dev-only piece here, or it would pass releases without looking.
+      - name: Check the release check still sees dev builds
+        run: scripts/check-release-apk.sh --expect-dev dist/*.apk
 
       - name: Verify signatures
         env:

@@ -120,6 +120,9 @@ jobs:
           RELEASE_TAG: ${{ env.TAG }}
         run: make release-apks
 
+      - name: Check no dev-only features
+        run: scripts/check-release-apk.sh dist/*.apk
+
       - name: Verify signatures
         env:
           EXPECTED: ${{ vars.TAILMESH_CERT_SHA256 }}

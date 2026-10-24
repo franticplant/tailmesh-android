@@ -45,7 +45,8 @@ rather than run with a default. Beyond the catalog:
 
 **Development builds only.** The APKs CI builds for each push to `main` (named `tailmesh-dev-…`,
 version name ending in `-dev`) have this; releases and pre-releases have neither the feature nor
-the install permissions. A dev build is signed with the release key, so installing a later release
+the install permissions. `scripts/check-release-apk.sh` checks that on every release APK before it is
+published, and on a release-configuration build in CI for every push. A dev build is signed with the release key, so installing a later release
 over it keeps the app's data (Android simply drops the install permission).
 
 `tailmesh-ctl update tailmesh-dev-….apk` installs a newer build without anyone touching the phone.
