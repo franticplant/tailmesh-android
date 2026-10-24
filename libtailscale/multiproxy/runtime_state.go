@@ -152,6 +152,10 @@ type ExitNodeRuntimeExport struct {
 	MachineName     string `json:"machineName,omitempty"`
 }
 
+// exitNodePathInterval is how often GetExitNodeStatesJSON looks up an
+// exit-node upstream's path to its exit node, matching pollTailnetStatus.
+const exitNodePathInterval = 10 * time.Second
+
 type exitNodeStateProbe struct {
 	id              string
 	sourceTailnetID string
@@ -197,7 +201,15 @@ func (e *Engine) GetExitNodeStatesJSON() string {
 		wg.Add(1)
 		go func(i int, p exitNodeStateProbe) {
 			defer wg.Done()
-			state, machineName, _, _ := observedTailnetState(p.enabled, p.srv, false)
+			// The exit node's path (upstreams.stats peerPath) needs the
+			// full peer list; take it at most every exitNodePathInterval,
+			// the tailnets' own status-poll cadence, not every 1s call.
+			needPath := p.enabled && p.srv != nil &&
+				e.obs.pathFor(p.id).claimCheck(time.Now(), exitNodePathInterval)
+			state, machineName, _, path := observedTailnetState(p.enabled, p.srv, needPath)
+			if needPath && state == "Running" {
+				e.noteExitNodePath(p.id, path.hasExitNode, path.kind, path.derpRegion)
+			}
 			out[i] = ExitNodeRuntimeExport{
 				ID:              p.id,
 				SourceTailnetID: p.sourceTailnetID,

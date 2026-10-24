@@ -176,3 +176,45 @@ func TestTailnetPeerPathInStats(t *testing.T) {
 		t.Error("stopped tailnet: want an error")
 	}
 }
+
+func TestExitNodeUpstreamPeerPath(t *testing.T) {
+	e := NewEngine(t.TempDir(), &MockCallback{})
+	t.Cleanup(e.Close)
+	id := UpstreamID("exit-a")
+	if got := e.peerPathFor(id, UpstreamKindExitNode); got != "unknown" {
+		t.Errorf("before a lookup: %q, want unknown", got)
+	}
+	e.noteExitNodePath(string(id), true, PeerPathDERP, "fra")
+	if got := e.peerPathFor(id, UpstreamKindExitNode); got != "derp:fra" {
+		t.Errorf("relayed: %q, want derp:fra", got)
+	}
+	e.noteExitNodePath(string(id), true, PeerPathDirect, "fra")
+	if got := e.peerPathFor(id, UpstreamKindExitNode); got != PeerPathDirect {
+		t.Errorf("direct: %q, want direct", got)
+	}
+	// The exit node went away (prefs cleared): unknown again.
+	e.noteExitNodePath(string(id), false, "", "")
+	if got := e.peerPathFor(id, UpstreamKindExitNode); got != "unknown" {
+		t.Errorf("no exit node: %q, want unknown", got)
+	}
+}
+
+func TestPathClaimCheck(t *testing.T) {
+	var ps pathState
+	t0 := time.Unix(1000, 0)
+	if !ps.claimCheck(t0, 10*time.Second) {
+		t.Fatal("first check not due")
+	}
+	for _, d := range []time.Duration{0, time.Second, 9 * time.Second} {
+		if ps.claimCheck(t0.Add(d), 10*time.Second) {
+			t.Errorf("due again after %v", d)
+		}
+	}
+	if !ps.claimCheck(t0.Add(10*time.Second), 10*time.Second) {
+		t.Error("not due after the interval")
+	}
+	// A clock that went backwards doesn't block lookups for long.
+	if !ps.claimCheck(t0, 10*time.Second) {
+		t.Error("not due after the clock went back")
+	}
+}

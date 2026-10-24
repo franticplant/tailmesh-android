@@ -17,7 +17,7 @@ Tailscale client through its LocalAPI:
 |---|---|---|
 | Overview | `app.status`, `perf.stats` (the app's own CPU, wakeups, memory and periodic-job counts; see [performance](performance.md)) | `multitailnet.start` / `stop` / `reconcile`, `standard.connect` / `disconnect`, `vpn.restart` |
 | Tailnets | `tailnets.list` (accepted routes and conflicts included), `peers`, `peerPaths` (direct, DERP, peer relay or idle per peer), `states`, `addressConflicts`, `subnetRoutes`, `exitNodeCandidates` | `tailnets.add`, `importRegular`, `setEnabled`, `setAcceptRoutes`, `rename`, `forget`, `setExitNode` |
-| Upstreams | `upstreams.list` (secrets redacted), `routable`, `stats`, `exitNodeStates` | `upstreams.saveSocks5`, `saveWireGuard`, `saveExitNode`, `setEnabled`, `delete` |
+| Upstreams | `upstreams.list` (secrets redacted), `routable`, `stats` (with `peerPath`: a tailnet's peer summary, an exit node's direct/DERP path, a WireGuard handshake state), `exitNodeStates` | `upstreams.saveSocks5`, `saveWireGuard`, `saveExitNode`, `setEnabled`, `delete` |
 | Routing | `routing.get`, `directLinks` (direct tailnet connections over cable or hotspot: setting, effective state, IPv6 check) | `routing.setDefaultUpstream`, `setDefaultDNSUpstream`, `setBroadCapture`, `setLanExclusion`, `setDirectLinks` |
 | Apps | `apps.list` | `apps.bind`, `unbind`, `setDNSUpstream`, `setTunnelLAN` |
 | Listeners | `listeners.socks5.list`, `listeners.inbound.list` (why one is not registered; inbound forward counts and last error) | `…save`, `…setEnabled`, `…delete` for both |

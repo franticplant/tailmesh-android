@@ -422,6 +422,20 @@ type pathState struct {
 	known      bool
 	kind       string // a PeerPath* value
 	derpRegion string
+	checkedAt  time.Time // last claimCheck that said yes
+}
+
+// claimCheck reports whether a path lookup is due (none in the last
+// interval), and if so records now as the time of the next one. Lets a 1s
+// state poll pay for a full peer list only every interval.
+func (ps *pathState) claimCheck(now time.Time, interval time.Duration) bool {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	if d := now.Sub(ps.checkedAt); !ps.checkedAt.IsZero() && d >= 0 && d < interval {
+		return false
+	}
+	ps.checkedAt = now
+	return true
 }
 
 // noteExitNodePath is called by runtime_state.go's existing per-tailnet poll
