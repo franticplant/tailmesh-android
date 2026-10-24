@@ -4,10 +4,12 @@
 package libtailscale
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store"
@@ -464,4 +466,32 @@ func RestoreRegularProfileFromMultiProxy(dataDir string, appCtx AppContext, prof
 
 func multiProxyFileStore(dataDir, upstreamID string) (ipn.StateStore, error) {
 	return store.NewFileStore(logger.Discard, filepath.Join(multiproxy.StateDirForIdentifier(dataDir, upstreamID), "tailscaled.state"))
+}
+
+// ProbeUpstreamJSON dials target (host:port) through one upstream from the
+// engine and returns what happened as JSON (multiproxy.ProbeResult): TCP
+// connect by default; with udp, one datagram (payloadHex, at most 64 bytes;
+// a zero byte if empty) and, with waitReply, one datagram back. timeoutMs is
+// capped at 15 s; 0 means 5 s.
+func (e *MultiProxyEngine) ProbeUpstreamJSON(upstreamID, target string, udp, waitReply bool, timeoutMs int32, payloadHex string) (string, error) {
+	if e == nil || e.inner == nil {
+		return "", errors.New("engine not initialized")
+	}
+	payload, err := multiproxy.ParseProbePayload(payloadHex)
+	if err != nil {
+		return "", err
+	}
+	res := e.inner.Probe(context.Background(), multiproxy.ProbeRequest{
+		Upstream:  upstreamID,
+		Target:    target,
+		UDP:       udp,
+		WaitReply: waitReply,
+		Timeout:   time.Duration(timeoutMs) * time.Millisecond,
+		Payload:   payload,
+	})
+	b, err := json.Marshal(res)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }

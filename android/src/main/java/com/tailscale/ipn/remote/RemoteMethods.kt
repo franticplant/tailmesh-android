@@ -523,6 +523,46 @@ object RemoteMethods {
           RawJson(engine().getUpstreamStatsJSON())
         })
     add(
+        Method(
+            "upstreams.probe",
+            // It sends traffic, so it takes control, like any other action.
+            true,
+            "Dial target through one upstream (a tailnet, exit node, WireGuard, SOCKS5 or " +
+                "@direct) from the engine, as an app's flow would: ok or the error and where it " +
+                "stopped, the address connected to, the local address, connect time and the " +
+                "path (tailnet peer direct/DERP, WireGuard handshake). TCP connect by default; " +
+                "udp=true sends one datagram (payload, hex, at most 64 bytes) and with " +
+                "reply=true waits for one back. Not counted in the upstream's stats.",
+            mapOf(
+                "upstream" to "upstream id, or @direct",
+                "target" to "host:port",
+                "udp" to "bool, default false",
+                "reply" to "bool: with udp, wait for a reply",
+                "timeout" to "seconds, or 500ms / 3s; default 5 s, at most 15 s",
+                "payload" to "hex bytes for udp, at most 64",
+            ),
+        ) {
+          val t = it.optStr("timeout").trim()
+          val timeoutMs =
+              when {
+                t.isEmpty() -> 0L
+                t.endsWith("ms") -> t.removeSuffix("ms").toDouble().toLong()
+                t.endsWith("s") -> (t.removeSuffix("s").toDouble() * 1000).toLong()
+                else -> (t.toDouble() * 1000).toLong()
+              }.coerceIn(0, 15_000)
+          val e = engine()
+          withContext(Dispatchers.IO) {
+            RawJson(
+                e.probeUpstreamJSON(
+                    it.str("upstream"),
+                    it.str("target"),
+                    it.optBool("udp", false),
+                    it.optBool("reply", false),
+                    timeoutMs.toInt(),
+                    it.optStr("payload")))
+          }
+        })
+    add(
         Method("upstreams.exitNodeStates", false, "Raw exit-node upstream state.") {
           RawJson(engine().getExitNodeStatesJSON())
         })

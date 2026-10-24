@@ -17,7 +17,7 @@ Tailscale client through its LocalAPI:
 |---|---|---|
 | Overview | `app.status` (`mode`: multi-tailnet, standard or off; `vpnInterface`; Multi-Tailnet tailnet counts by state; a one-line `summary`), `perf.stats` (the app's own CPU, wakeups, memory and periodic-job counts; see [performance](performance.md)) | `multitailnet.start` / `stop` / `reconcile`, `standard.connect` / `disconnect`, `vpn.restart` |
 | Tailnets | `tailnets.list` (accepted routes and conflicts included), `peers`, `peerPaths` (direct, DERP, peer relay or idle per peer), `states`, `addressConflicts`, `subnetRoutes`, `exitNodeCandidates` | `tailnets.add`, `importRegular`, `setEnabled`, `setAcceptRoutes`, `rename`, `forget`, `setExitNode` |
-| Upstreams | `upstreams.list` (secrets redacted), `routable`, `stats` (with `peerPath`: a tailnet's peer summary, an exit node's direct/DERP path, a WireGuard handshake state), `exitNodeStates` | `upstreams.saveSocks5`, `saveWireGuard`, `saveExitNode`, `setEnabled`, `delete` |
+| Upstreams | `upstreams.list` (secrets redacted), `routable`, `stats` (with `peerPath`: a tailnet's peer summary, an exit node's direct/DERP path, a WireGuard handshake state), `exitNodeStates` | `upstreams.probe` (see below), `upstreams.saveSocks5`, `saveWireGuard`, `saveExitNode`, `setEnabled`, `delete` |
 | Routing | `routing.get`, `directLinks` (direct tailnet connections over cable or hotspot: setting, effective state, IPv6 check) | `routing.setDefaultUpstream`, `setDefaultDNSUpstream`, `setBroadCapture`, `setLanExclusion`, `setDirectLinks` |
 | Apps | `apps.list` | `apps.bind`, `unbind`, `setDNSUpstream`, `setTunnelLAN` |
 | Listeners | `listeners.socks5.list`, `listeners.inbound.list` (why one is not registered; inbound forward counts and last error) | `…save`, `…setEnabled`, `…delete` for both |
@@ -26,6 +26,15 @@ Tailscale client through its LocalAPI:
 | Packet capture | `capture.status`, `capture.list` | `capture.start` (all / apps / listeners), `capture.stop`, `capture.delete` |
 | Settings | `settings.get` | `settings.setPublicDoH`, `settings.setDebugLogging`, `settings.setProxyOnly`, `settings.setSpeedMeter` |
 | Standard mode | `tailscale.localapi.get` | `tailscale.localapi.call` (prefs, profiles, exit nodes, login, logout, …) |
+
+`upstreams.probe upstream=<id or @direct> target=host:port [udp=true [reply=true] [payload=hex]]
+[timeout=3s]` dials through that upstream from the engine, exactly as an app's connection would, and
+reports `ok` or the error with the `stage` it stopped at (lookup, dial, send, reply), the
+`remoteAddr` connected to, the `localAddr` (for `@direct`, which network it left on), `connectMs`,
+and the `path` where the upstream knows it (a tailnet peer's direct/DERP path, a WireGuard handshake
+state). TCP is a connect only; UDP sends one datagram of at most 64 bytes and optionally waits for
+one back. The timeout is at most 15 s. It takes control (it sends traffic) and is not counted in the
+upstream's stats.
 
 `GET /v1/methods` returns the live catalog, with each method's parameters and whether it changes
 state. A call with an argument the method does not take is refused, with the accepted ones listed,
