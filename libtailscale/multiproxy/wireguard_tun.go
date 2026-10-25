@@ -66,6 +66,14 @@ func (t *wgNetTun) WriteNotify() {
 // newWireGuardNetTun builds a netstack whose only link is a channel endpoint,
 // and presents that endpoint as a tun.Device for wireguard-go to drive.
 func newWireGuardNetTun(localAddrs []netip.Addr, mtu int) (*wgNetTun, *stack.Stack, error) {
+	return newWireGuardNetTunOpts(localAddrs, mtu, true)
+}
+
+// newWireGuardNetTunOpts is newWireGuardNetTun with HandleLocal chosen. A
+// WireGuard listener's stack answers for every address (spoofing), so it
+// must not use HandleLocal: with spoofing every source would count as one
+// of its own addresses and every packet would be dropped as spoofed.
+func newWireGuardNetTunOpts(localAddrs []netip.Addr, mtu int, handleLocal bool) (*wgNetTun, *stack.Stack, error) {
 	if len(localAddrs) == 0 {
 		return nil, nil, errors.New("wireguard: no tunnel addresses")
 	}
@@ -73,7 +81,7 @@ func newWireGuardNetTun(localAddrs []netip.Addr, mtu int) (*wgNetTun, *stack.Sta
 	s := stack.New(stack.Options{
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, ipv6.NewProtocol},
 		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol},
-		HandleLocal:        true,
+		HandleLocal:        handleLocal,
 	})
 
 	ep := channel.New(wgTUNQueueDepth, uint32(mtu), "")

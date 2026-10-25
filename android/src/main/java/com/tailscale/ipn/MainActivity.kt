@@ -332,6 +332,9 @@ class MainActivity : ComponentActivity() {
                       onNavigateToPacketCapture = { navController.navigate("packetCapture") },
                       onNavigateToSOCKS5Listeners = { navController.navigate("socks5Listeners") },
                       onNavigateToInboundListeners = { navController.navigate("inboundListeners") },
+                      onNavigateToWireGuardListeners = {
+                        navController.navigate("wireguardListeners")
+                      },
                       onNavigateToRemoteControl = { navController.navigate("remoteControl") },
                       onNavigateToLogs = { navController.navigate("logs/APP") },
                       onBackToSettings = backTo("settings"),
@@ -444,6 +447,9 @@ class MainActivity : ComponentActivity() {
                         LogKind.entries.firstOrNull {
                           it.name == entry.arguments?.getString("kind")
                         } ?: LogKind.APP)
+              }
+              composable("wireguardListeners") {
+                com.tailscale.ipn.ui.view.WireGuardListenersView(backTo("settings"))
               }
               composable("inboundListeners") {
                 com.tailscale.ipn.ui.view.InboundListenersView(backTo("settings"))

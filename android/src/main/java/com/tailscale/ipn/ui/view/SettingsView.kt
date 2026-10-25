@@ -155,6 +155,13 @@ fun SettingsView(
 
           Lists.ItemDivider()
           Setting.Text(
+              title = stringResource(R.string.wireguard_listeners),
+              subtitle = stringResource(R.string.wireguard_listeners_subtitle),
+              onClick = settingsNav.onNavigateToWireGuardListeners,
+          )
+
+          Lists.ItemDivider()
+          Setting.Text(
               title = stringResource(R.string.remote_control),
               subtitle = stringResource(R.string.remote_control_subtitle),
               onClick = settingsNav.onNavigateToRemoteControl,
@@ -504,7 +511,7 @@ fun SettingsPreview() {
   vm.managedByOrganization.set("Tails and Scales Inc.")
   SettingsView(
       SettingsNav(
-          {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}),
+          {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}),
       vm,
   )
 }

@@ -65,6 +65,12 @@ class UpstreamPolicyApplier(
     applyPolicy(engine)
     applySOCKS5Listeners(engine)
     applyInboundListeners(engine)
+    // WireGuard listeners keep their own config in the engine's data directory.
+    try {
+      engine.restoreWireGuardListeners()
+    } catch (e: Exception) {
+      TSLog.e(TAG, "could not restore WireGuard listeners: $e")
+    }
   }
 
   /**

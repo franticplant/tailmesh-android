@@ -852,6 +852,79 @@ object RemoteMethods {
     // -------------------------------------------------------------------
     add(
         Method(
+            "listeners.wireguard.list",
+            false,
+            "WireGuard listeners (WireGuard servers on the phone): port, upstream, subnet, public " +
+                "key, whether running, last error, peers and each peer's handshake state.") {
+              RawJson(engine().getWireGuardListenersJSON())
+            })
+    add(
+        Method(
+            "listeners.wireguard.save",
+            true,
+            "Create (no id) or edit a WireGuard listener: a WireGuard server on the phone whose " +
+                "peers' traffic leaves through upstream (@auto: routed like the phone's own " +
+                "traffic, tailnet addresses to their tailnet). Kept across restarts.",
+            mapOf(
+                "id" to "existing id to edit, omit to create",
+                "port" to "UDP port to listen on",
+                "upstream" to "upstream id, @direct, or @auto",
+                "subnet" to "tunnel subnet, default 10.66.66.0/24 (the phone is .1)",
+                "dns" to "DNS server written into peers' configs, e.g. 1.1.1.1",
+                "enabled" to "bool, default true",
+            ),
+        ) {
+          RawJson(
+              engine()
+                  .saveWireGuardListenerJSON(
+                      it.optStr("id"),
+                      it.str("port").toInt(),
+                      it.str("upstream"),
+                      it.optStr("subnet"),
+                      it.optStr("dns"),
+                      it.optBool("enabled", true)))
+        })
+    add(
+        Method(
+            "listeners.wireguard.addPeer",
+            true,
+            "Add a client to a WireGuard listener and return its wg-quick config (a new key; " +
+                "the client's private key is only in this answer).",
+            mapOf(
+                "id" to "listener id",
+                "name" to "a name for the client",
+                "endpoint" to "the phone's address as the client reaches it, e.g. 10.29.103.74",
+            ),
+        ) {
+          JSONObject()
+              .put(
+                  "config",
+                  engine()
+                      .addWireGuardListenerPeer(
+                          it.str("id"), it.optStr("name"), it.optStr("endpoint")))
+        })
+    add(
+        Method(
+            "listeners.wireguard.removePeer",
+            true,
+            "Remove a client from a WireGuard listener, by name or public key.",
+            mapOf("id" to "listener id", "peer" to "peer name or public key"),
+        ) {
+          engine().removeWireGuardListenerPeer(it.str("id"), it.str("peer"))
+          ok
+        })
+    add(
+        Method(
+            "listeners.wireguard.delete",
+            true,
+            "Stop and forget a WireGuard listener.",
+            mapOf("id" to "listener id"),
+        ) {
+          engine().deleteWireGuardListener(it.str("id"))
+          ok
+        })
+    add(
+        Method(
             "listeners.socks5.list",
             false,
             "Inbound SOCKS5 listeners, whether each is live, and why not.",

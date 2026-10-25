@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/netip"
 	"path/filepath"
 	"strings"
 	"time"
@@ -511,3 +512,65 @@ func (e *MultiProxyEngine) GetIdentitiesJSON() string {
 	}
 	return e.inner.IdentitiesJSON(context.Background())
 }
+
+// SaveWireGuardListenerJSON creates (empty id) or edits a WireGuard listener:
+// a WireGuard server on the device whose peers' traffic leaves through
+// upstream ("@auto": routed like the device's own traffic). subnet defaults
+// to 10.66.66.0/24. Returns the listener as JSON (no private key).
+func (e *MultiProxyEngine) SaveWireGuardListenerJSON(id string, port int32, upstream, subnet, dns string, enabled bool) (string, error) {
+	if e == nil || e.inner == nil {
+		return "", errors.New("engine not initialized")
+	}
+	var p netip.Prefix
+	if subnet != "" {
+		var err error
+		if p, err = netip.ParsePrefix(subnet); err != nil {
+			return "", err
+		}
+	}
+	if port <= 0 || port > 65535 {
+		return "", errors.New("port must be 1-65535")
+	}
+	c, err := e.inner.SaveWireGuardListener(id, uint16(port), multiproxy.UpstreamID(upstream), p, dns, enabled)
+	if err != nil {
+		return "", err
+	}
+	return e.wireGuardListenerJSON(c.ID)
+}
+
+func (e *MultiProxyEngine) wireGuardListenerJSON(id string) (string, error) {
+	for _, l := range e.inner.WireGuardListenersSnapshot() {
+		if l.ID == id {
+			b, err := json.Marshal(l)
+			return string(b), err
+		}
+	}
+	return "", errors.New("no such listener")
+}
+
+// AddWireGuardListenerPeer adds a client and returns its wg-quick config,
+// with endpointHost (the phone's address as the client will reach it) in it.
+func (e *MultiProxyEngine) AddWireGuardListenerPeer(id, name, endpointHost string) (string, error) {
+	return e.inner.AddWireGuardListenerPeer(id, name, endpointHost)
+}
+
+// RemoveWireGuardListenerPeer removes a client by name or public key.
+func (e *MultiProxyEngine) RemoveWireGuardListenerPeer(id, peer string) error {
+	return e.inner.RemoveWireGuardListenerPeer(id, peer)
+}
+
+// DeleteWireGuardListener stops and forgets a listener.
+func (e *MultiProxyEngine) DeleteWireGuardListener(id string) error {
+	return e.inner.DeleteWireGuardListener(id)
+}
+
+// GetWireGuardListenersJSON lists the listeners with their peers and each
+// peer's handshake state.
+func (e *MultiProxyEngine) GetWireGuardListenersJSON() string {
+	b, _ := json.Marshal(e.inner.WireGuardListenersSnapshot())
+	return string(b)
+}
+
+// RestoreWireGuardListeners starts the stored, enabled listeners that are not
+// running; the app calls it whenever it applies its configuration.
+func (e *MultiProxyEngine) RestoreWireGuardListeners() { e.inner.RestoreWireGuardListeners() }

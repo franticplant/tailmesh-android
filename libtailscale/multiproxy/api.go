@@ -219,6 +219,10 @@ type Engine struct {
 	// directly rather than through the Provider/Ready interface.
 	socks5Listeners map[string]*socks5Listener
 
+	// wgListeners are the WireGuard servers on the device
+	// (wireguard_listener.go).
+	wgListeners wgListeners
+
 	// inboundListeners holds every tailnet-facing listener, keyed by
 	// InboundListenerConfig.ID. See inbound_listener.go. Like socks5Listeners,
 	// a listener exists exactly when present in this map; Add/RemoveInboundListener
@@ -1079,6 +1083,7 @@ func (e *Engine) Close() {
 	e.StopVPN()
 	e.resetDirectLinks()
 	e.closeAllSOCKS5Listeners()
+	e.closeAllWireGuardListeners()
 	e.closeAllInboundListeners()
 
 	for _, id := range ids {

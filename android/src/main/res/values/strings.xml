@@ -512,6 +512,8 @@
     <!-- Strings for tailnet-facing inbound listeners -->
     <string name="inbound_listeners">Inbound listeners</string>
     <string name="inbound_listeners_subtitle">Let a Tailnet peer reach a local service on this device</string>
+    <string name="wireguard_listeners">WireGuard listeners</string>
+    <string name="wireguard_listeners_subtitle">Run a WireGuard server on this device; its peers use your upstreams</string>
 
     <!-- Remote control -->
     <string name="remote_control">Remote control &amp; debugging</string>
