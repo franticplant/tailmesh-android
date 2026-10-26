@@ -517,7 +517,7 @@ func (e *MultiProxyEngine) GetIdentitiesJSON() string {
 // a WireGuard server on the device whose peers' traffic leaves through
 // upstream ("@auto": routed like the device's own traffic). subnet defaults
 // to 10.66.66.0/24. Returns the listener as JSON (no private key).
-func (e *MultiProxyEngine) SaveWireGuardListenerJSON(id string, port int32, upstream, subnet, dns string, enabled bool) (string, error) {
+func (e *MultiProxyEngine) SaveWireGuardListenerJSON(id string, port int32, upstream, subnet, dns, dnsMode string, enabled bool) (string, error) {
 	if e == nil || e.inner == nil {
 		return "", errors.New("engine not initialized")
 	}
@@ -531,7 +531,7 @@ func (e *MultiProxyEngine) SaveWireGuardListenerJSON(id string, port int32, upst
 	if port <= 0 || port > 65535 {
 		return "", errors.New("port must be 1-65535")
 	}
-	c, err := e.inner.SaveWireGuardListener(id, uint16(port), multiproxy.UpstreamID(upstream), p, dns, enabled)
+	c, err := e.inner.SaveWireGuardListener(id, uint16(port), multiproxy.UpstreamID(upstream), p, dns, dnsMode, enabled)
 	if err != nil {
 		return "", err
 	}

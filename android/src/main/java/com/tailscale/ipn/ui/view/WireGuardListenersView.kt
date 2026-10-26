@@ -79,6 +79,8 @@ private data class WgListener(
     val serverAddress: String,
     val publicKey: String,
     val dns: String,
+    val dnsMode: String,
+    val dnsSummary: String,
     val enabled: Boolean,
     val running: Boolean,
     val lastError: String,
@@ -104,6 +106,14 @@ private fun parseListeners(json: String): List<WgListener> {
         serverAddress = o.optString("serverAddress"),
         publicKey = o.optString("publicKey"),
         dns = o.optString("dns"),
+        dnsMode = o.optString("dnsMode", "phone"),
+        dnsSummary =
+            if (o.optString("dnsMode") == "direct") "DNS: peers' own servers, forwarded"
+            else
+                "DNS: answered by this device" +
+                    (if (o.optBoolean("dnsEncrypted")) " over DoH"
+                    else " (plain DNS: set a DoH resolver in DNS settings)") +
+                    (o.optString("peerDns").let { if (it.isNotEmpty()) "; peers use $it" else "" }),
         enabled = o.optBoolean("enabled"),
         running = o.optBoolean("running"),
         lastError = o.optString("lastError"),
@@ -247,7 +257,8 @@ fun WireGuardListenersView(
     var port by remember { mutableStateOf(existing?.port?.toString() ?: "51820") }
     var upstream by remember { mutableStateOf(existing?.upstream ?: AUTO_UPSTREAM) }
     var subnet by remember { mutableStateOf(existing?.subnet ?: "10.66.66.0/24") }
-    var dns by remember { mutableStateOf(existing?.dns ?: "1.1.1.1") }
+    var dns by remember { mutableStateOf(existing?.dns ?: "") }
+    var dnsOnPhone by remember { mutableStateOf(existing?.dnsMode != "direct") }
     var menu by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = {
@@ -289,10 +300,18 @@ fun WireGuardListenersView(
                     label = { Text("Tunnel subnet (this device is .1)") },
                     singleLine = true,
                     enabled = existing == null || existing.peers.isEmpty())
+                Row {
+                  Text(
+                      "Answer peers' DNS with this device's resolver (DoH if set; tailnet names " +
+                          "too). Off: their port-53 queries are forwarded as they are.",
+                      modifier = Modifier.weight(1f),
+                      fontSize = MaterialTheme.typography.bodySmall.fontSize)
+                  Switch(checked = dnsOnPhone, onCheckedChange = { dnsOnPhone = it })
+                }
                 OutlinedTextField(
                     value = dns,
                     onValueChange = { dns = it },
-                    label = { Text("DNS for peers (optional)") },
+                    label = { Text("DNS server in peers' configs (empty: this device)") },
                     singleLine = true)
               }
         },
@@ -311,6 +330,7 @@ fun WireGuardListenersView(
                         upstream,
                         subnet.trim(),
                         dns.trim(),
+                        if (dnsOnPhone) "phone" else "direct",
                         existing?.enabled ?: true)
                   }
                   newListener = false
@@ -471,6 +491,7 @@ fun WireGuardListenersView(
                         if (l.enabled && !l.running) MaterialTheme.colorScheme.error
                         else MaterialTheme.colorScheme.secondary,
                     fontSize = small)
+                Text(l.dnsSummary, color = MaterialTheme.colorScheme.secondary, fontSize = small)
                 Text(
                     "Public key ${l.publicKey}",
                     fontFamily = FontFamily.Monospace,
@@ -497,7 +518,8 @@ fun WireGuardListenersView(
                   onCheckedChange = { on ->
                     run {
                       engine()
-                          ?.saveWireGuardListenerJSON(l.id, l.port, l.upstream, l.subnet, l.dns, on)
+                          ?.saveWireGuardListenerJSON(
+                              l.id, l.port, l.upstream, l.subnet, l.dns, l.dnsMode, on)
                     }
                   })
             },

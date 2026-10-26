@@ -302,3 +302,17 @@ func (e *Engine) dohClientFor(id UpstreamID) *http.Client {
 func (e *Engine) exchangeDoHVia(id UpstreamID, resolverURL string, req *dns.Msg) (*dns.Msg, error) {
 	return exchangeDoHWith(e.dohClientFor(id), resolverURL, req)
 }
+
+// listenerDNSRoute is where a listener peer's lookups are forwarded: through
+// the listener's own upstream when it has one (so they leave where its
+// traffic leaves), else (@auto, @direct) the default route.
+func (e *Engine) listenerDNSRoute(upstream UpstreamID) dnsRoute {
+	if upstream == "" || upstream == AutoUpstreamID || upstream == DirectUpstreamID {
+		return dnsRoute{}
+	}
+	p, ok := e.readyProvider(upstream)
+	if !ok {
+		return dnsRoute{failed: true}
+	}
+	return dnsRoute{provider: p}
+}

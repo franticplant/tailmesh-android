@@ -870,7 +870,12 @@ object RemoteMethods {
                 "port" to "UDP port to listen on",
                 "upstream" to "upstream id, @direct, or @auto",
                 "subnet" to "tunnel subnet, default 10.66.66.0/24 (the phone is .1)",
-                "dns" to "DNS server written into peers' configs, e.g. 1.1.1.1",
+                "dns" to
+                    "DNS server written into peers' configs; empty: the listener's own address",
+                "dnsMode" to
+                    "phone (default): every DNS query from a peer, to any server, is answered by " +
+                        "the phone's resolver (DoH when the phone uses it; tailnet names too); " +
+                        "direct: port 53 is forwarded like other traffic",
                 "enabled" to "bool, default true",
             ),
         ) {
@@ -882,6 +887,7 @@ object RemoteMethods {
                       it.str("upstream"),
                       it.optStr("subnet"),
                       it.optStr("dns"),
+                      it.optStr("dnsMode"),
                       it.optBool("enabled", true)))
         })
     add(

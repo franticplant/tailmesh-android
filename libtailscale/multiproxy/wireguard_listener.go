@@ -59,12 +59,31 @@ type WireGuardListenerConfig struct {
 	Subnet     netip.Prefix            `json:"subnet"`     // the server is its first address
 	Upstream   UpstreamID              `json:"upstream"`
 	MTU        int                     `json:"mtu"`
-	DNS        string                  `json:"dns"` // put into peers' configs
-	Enabled    bool                    `json:"enabled"`
+	DNS        string                  `json:"dns"` // put into peers' configs; empty: the listener's own address
+	// DNSMode "phone" (the default, also when empty) answers every DNS
+	// query a peer sends (UDP or TCP port 53, to any address) with the
+	// phone's resolver: tailnet names included, and DoH when the phone uses
+	// it, so no plain port-53 query leaves the phone for a peer. "direct"
+	// forwards port 53 like any other traffic.
+	DNSMode string `json:"dnsMode,omitempty"`
+	Enabled bool   `json:"enabled"`
 	Peers      []WireGuardListenerPeer `json:"peers"`
 }
 
 func (c WireGuardListenerConfig) serverAddr() netip.Addr { return c.Subnet.Masked().Addr().Next() }
+
+func (c WireGuardListenerConfig) dnsOnPhone() bool { return c.DNSMode == "" || c.DNSMode == "phone" }
+
+// peerDNS is the DNS server written into a peer's config.
+func (c WireGuardListenerConfig) peerDNS() string {
+	if c.DNS != "" {
+		return c.DNS
+	}
+	if c.dnsOnPhone() {
+		return c.serverAddr().String()
+	}
+	return ""
+}
 
 type wgListener struct {
 	cfg   WireGuardListenerConfig
@@ -160,7 +179,10 @@ func (e *Engine) wgListenersSaveLocked() error {
 
 // SaveWireGuardListener creates (empty id) or edits a listener and starts or
 // stops it to match. A new listener gets a fresh server key.
-func (e *Engine) SaveWireGuardListener(id string, port uint16, upstream UpstreamID, subnet netip.Prefix, dns string, enabled bool) (WireGuardListenerConfig, error) {
+func (e *Engine) SaveWireGuardListener(id string, port uint16, upstream UpstreamID, subnet netip.Prefix, dns, dnsMode string, enabled bool) (WireGuardListenerConfig, error) {
+	if dnsMode != "" && dnsMode != "phone" && dnsMode != "direct" {
+		return WireGuardListenerConfig{}, fmt.Errorf("wireguard-listener: dnsMode %q: want phone or direct", dnsMode)
+	}
 	if port == 0 {
 		return WireGuardListenerConfig{}, errors.New("wireguard-listener: needs a port")
 	}
@@ -193,6 +215,9 @@ func (e *Engine) SaveWireGuardListener(id string, port uint16, upstream Upstream
 		return c, errors.New("wireguard-listener: remove its peers before changing the subnet")
 	}
 	c.ListenPort, c.Upstream, c.Subnet, c.DNS, c.Enabled = port, upstream, subnet.Masked(), dns, enabled
+	if dnsMode != "" {
+		c.DNSMode = dnsMode
+	}
 	e.wgListeners.configs[c.ID] = c
 	if err := e.wgListenersSaveLocked(); err != nil {
 		return c, err
@@ -242,8 +267,8 @@ func (e *Engine) AddWireGuardListenerPeer(id, name, endpointHost string) (string
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "[Interface]\n# %s, for Tailmesh WireGuard listener %s\nPrivateKey = %s\nAddress = %s/32\n", name, id, priv, addr)
-	if c.DNS != "" {
-		fmt.Fprintf(&b, "DNS = %s\n", c.DNS)
+	if d := c.peerDNS(); d != "" {
+		fmt.Fprintf(&b, "DNS = %s\n", d)
 	}
 	fmt.Fprintf(&b, "MTU = %d\n\n[Peer]\nPublicKey = %s\nAllowedIPs = 0.0.0.0/0\nEndpoint = %s\nPersistentKeepalive = 25\n",
 		c.MTU, wgPublicKey(c.PrivateKey), net.JoinHostPort(endpointHost, strconv.Itoa(int(c.ListenPort))))
@@ -322,8 +347,15 @@ type WireGuardListenerInfo struct {
 	ServerAddr string                  `json:"serverAddress"`
 	PublicKey  string                  `json:"publicKey"`
 	DNS        string                  `json:"dns,omitempty"`
-	Enabled    bool                    `json:"enabled"`
-	Running    bool                    `json:"running"`
+	// DNSMode is phone or direct; PeerDNS is what peers' configs get;
+	// PhoneResolver is what answers in phone mode (a DoH URL, or a plain
+	// server on the phone's network), and DNSEncrypted whether that is DoH.
+	DNSMode       string `json:"dnsMode"`
+	PeerDNS       string `json:"peerDns,omitempty"`
+	PhoneResolver string `json:"phoneResolver,omitempty"`
+	DNSEncrypted  bool   `json:"dnsEncrypted"`
+	Enabled       bool   `json:"enabled"`
+	Running       bool   `json:"running"`
 	LastError  string                  `json:"lastError,omitempty"`
 	Peers      []WireGuardListenerPeer `json:"peers"`
 	// Handshakes per peer, from the device.
@@ -339,7 +371,13 @@ func (e *Engine) WireGuardListenersSnapshot() []WireGuardListenerInfo {
 		info := WireGuardListenerInfo{
 			ID: id, ListenPort: c.ListenPort, Upstream: string(c.Upstream), Subnet: c.Subnet.String(),
 			ServerAddr: c.serverAddr().String(), PublicKey: wgPublicKey(c.PrivateKey), DNS: c.DNS,
-			Enabled: c.Enabled, Peers: c.Peers,
+			Enabled: c.Enabled, Peers: c.Peers, DNSMode: "direct", PeerDNS: c.peerDNS(),
+		}
+		if c.dnsOnPhone() {
+			e.mu.RLock()
+			info.DNSMode, info.PhoneResolver = "phone", e.upstreamDNS
+			e.mu.RUnlock()
+			info.DNSEncrypted = strings.HasPrefix(info.PhoneResolver, "https://")
 		}
 		if info.Peers == nil {
 			info.Peers = []WireGuardListenerPeer{}
@@ -438,6 +476,17 @@ func (e *Engine) startWGListener(c WireGuardListenerConfig) (*wgListener, error)
 
 func (e *Engine) wgListenerTCP(c WireGuardListenerConfig, r *tcp.ForwarderRequest) {
 	id := r.ID()
+	if id.LocalPort == 53 && c.dnsOnPhone() {
+		var wq waiter.Queue
+		ep, tcpErr := r.CreateEndpoint(&wq)
+		if tcpErr != nil {
+			r.Complete(true)
+			return
+		}
+		r.Complete(false)
+		go e.ServeDNSTCP(gonet.NewTCPConn(&wq, ep), FlowInfo{Protocol: "tcp", AppUID: UnknownAppUID, Listener: true, ListenerUpstream: c.Upstream})
+		return
+	}
 	p, upID, dst, ok := e.wgListenerRoute(c, id.LocalAddress.String(), id.LocalPort)
 	if !ok {
 		r.Complete(true)
@@ -486,6 +535,15 @@ func (e *Engine) wgListenerTCP(c WireGuardListenerConfig, r *tcp.ForwarderReques
 
 func (e *Engine) wgListenerUDP(c WireGuardListenerConfig, r *udp.ForwarderRequest) bool {
 	id := r.ID()
+	if id.LocalPort == 53 && c.dnsOnPhone() {
+		var wq waiter.Queue
+		ep, udpErr := r.CreateEndpoint(&wq)
+		if udpErr != nil {
+			return false
+		}
+		go e.ServeDNSUDP(gonet.NewUDPConn(&wq, ep), FlowInfo{Protocol: "udp", AppUID: UnknownAppUID, Listener: true, ListenerUpstream: c.Upstream})
+		return true
+	}
 	p, upID, dst, ok := e.wgListenerRoute(c, id.LocalAddress.String(), id.LocalPort)
 	if !ok {
 		return false

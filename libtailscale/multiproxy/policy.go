@@ -99,6 +99,12 @@ type FlowInfo struct {
 	Dst      netip.AddrPort
 	// AppUID owns the flow, or UnknownAppUID.
 	AppUID int32
+
+	// Listener marks a DNS query from a listener's peer (a WireGuard
+	// listener), which has no app to attribute it to. Its lookups follow
+	// ListenerUpstream (empty or @auto: the default DNS route) instead.
+	Listener         bool
+	ListenerUpstream UpstreamID
 }
 
 // Policy is an ordered rule list evaluated first-match-wins.

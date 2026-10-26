@@ -587,7 +587,7 @@ func (e *Engine) handleDNSMsg(r *dns.Msg, netType string, flow FlowInfo) *dns.Ms
 		// scoped to DNS first, since a refused lookup is cheap and
 		// recoverable (the app/OS resolver retries or surfaces "can't find
 		// site"), unlike dropping an already-established data connection.
-		if flow.AppUID == UnknownAppUID && e.policyUsesAppUID() {
+		if flow.AppUID == UnknownAppUID && !flow.Listener && e.policyUsesAppUID() {
 			e.obs.dp.addDNSAttributionFailClosed()
 			logDNS("", "fail-closed")
 			m.Rcode = dns.RcodeServerFailure
@@ -608,6 +608,9 @@ func (e *Engine) handleDNSMsg(r *dns.Msg, netType string, flow FlowInfo) *dns.Ms
 		// proxied app does not announce its lookups to the device resolver. See
 		// dns_policy.go.
 		route := e.dnsRouteFor(flow)
+		if flow.Listener {
+			route = e.listenerDNSRoute(flow.ListenerUpstream)
+		}
 		switch {
 		case route.blocked:
 			logDNS("", "blocked")

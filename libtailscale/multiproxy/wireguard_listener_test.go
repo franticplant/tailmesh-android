@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/miekg/dns"
 )
 
 // A peer connects to the listener with an ordinary WireGuard client and
@@ -55,7 +57,7 @@ func TestWireGuardListenerCarriesTCP(t *testing.T) {
 	}()
 
 	port := freeUDPPort(t)
-	cfg, err := e.SaveWireGuardListener("", uint16(port), DirectUpstreamID, netip.Prefix{}, "", true)
+	cfg, err := e.SaveWireGuardListener("", uint16(port), DirectUpstreamID, netip.Prefix{}, "", "", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,6 +97,57 @@ func TestWireGuardListenerCarriesTCP(t *testing.T) {
 	line, err := bufio.NewReader(c).ReadString('\n')
 	if err != nil || line != "hello through the phone\n" {
 		t.Fatalf("echo: %q %v", line, err)
+	}
+
+	// DNS: every port-53 query from a peer is answered by the phone's
+	// resolver, whatever server the peer asked.
+	fake, err := net.ListenPacket("udp", net.JoinHostPort(hostIP, "0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fake.Close()
+	go func() {
+		buf := make([]byte, 1500)
+		for {
+			n, from, err := fake.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			q := new(dns.Msg)
+			if q.Unpack(buf[:n]) != nil {
+				continue
+			}
+			m := new(dns.Msg)
+			m.SetReply(q)
+			m.Answer = append(m.Answer, &dns.A{Hdr: dns.RR_Header{Name: q.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60}, A: net.IPv4(192, 0, 2, 7)})
+			out, _ := m.Pack()
+			fake.WriteTo(out, from)
+		}
+	}()
+	e.SetUpstreamDNS(fake.LocalAddr().String())
+	for _, server := range []string{"10.66.66.1:53", "9.9.9.9:53"} {
+		dc, err := client.Dial(ctx, "udp", server)
+		if err != nil {
+			t.Fatalf("dns dial %s: %v", server, err)
+		}
+		q := new(dns.Msg)
+		q.SetQuestion("example.test.", dns.TypeA)
+		out, _ := q.Pack()
+		dc.SetDeadline(time.Now().Add(5 * time.Second))
+		dc.Write(out)
+		buf := make([]byte, 1500)
+		n, err := dc.Read(buf)
+		dc.Close()
+		if err != nil {
+			t.Fatalf("dns via %s: %v", server, err)
+		}
+		r := new(dns.Msg)
+		if err := r.Unpack(buf[:n]); err != nil || len(r.Answer) != 1 || r.Answer[0].(*dns.A).A.String() != "192.0.2.7" {
+			t.Errorf("dns via %s: %v %v", server, r, err)
+		}
+	}
+	if list := e.WireGuardListenersSnapshot(); list[0].DNSMode != "phone" || list[0].PeerDNS != "10.66.66.1" {
+		t.Errorf("dns info: %+v", list[0])
 	}
 
 	list := e.WireGuardListenersSnapshot()
