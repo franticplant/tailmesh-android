@@ -251,7 +251,7 @@ configurations {
 }
 
 dependencies {
-    ktfmtCli "com.facebook:ktfmt:0.47"
+    ktfmtCli "com.facebook:ktfmt:0.64"
 }
 
 def ktfmtTask(String name, String description, List<String> flags) {
